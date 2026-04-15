@@ -540,6 +540,7 @@ Done:
 - [x] Local MCP resource listing and reading
 - [x] MCP-backed runtime tools for local resource access
 - [x] Real MCP client support over local stdio transport, using portable child-process readers
+- [x] Real MCP client support over Streamable HTTP transport, including JSON and SSE response handling
 - [x] MCP server integration for stdio child-process servers, including Windows-safe pipe handling
 - [x] MCP-backed tool listing and execution over transport
 

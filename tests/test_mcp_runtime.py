@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import threading
 import sys
 import tempfile
 import unittest
 import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -84,6 +86,166 @@ class MCPRuntimeTests(unittest.TestCase):
         )
         return server_path
 
+    def _start_fake_streamable_http_server(self, *, mode: str = 'json'):
+        class ServerState:
+            def __init__(self) -> None:
+                self.mode = mode
+                self.session_id = 'session-http-123'
+                self.request_log: list[dict[str, str | None]] = []
+
+        state = ServerState()
+
+        class Handler(BaseHTTPRequestHandler):
+            server_version = 'FakeMCPHTTP/1.0'
+
+            def log_message(self, format, *args):  # noqa: A003, ANN001
+                return
+
+            def do_GET(self) -> None:
+                self.send_response(405)
+                self.end_headers()
+
+            def do_POST(self) -> None:
+                if self.path != '/mcp':
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                content_length = int(self.headers.get('Content-Length', '0'))
+                raw_body = self.rfile.read(content_length)
+                payload = json.loads(raw_body.decode('utf-8'))
+                method = payload.get('method')
+                state.request_log.append(
+                    {
+                        'method': str(method) if method is not None else None,
+                        'session': self.headers.get('Mcp-Session-Id'),
+                        'protocol': self.headers.get('MCP-Protocol-Version'),
+                    }
+                )
+                if method == 'initialize':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Mcp-Session-Id', state.session_id)
+                    self.end_headers()
+                    self.wfile.write(
+                        json.dumps(
+                            {
+                                'jsonrpc': '2.0',
+                                'id': payload.get('id'),
+                                'result': {
+                                    'protocolVersion': '2025-11-25',
+                                    'capabilities': {'resources': {}, 'tools': {}},
+                                    'serverInfo': {'name': 'fake-http', 'version': '1.0.0'},
+                                },
+                            }
+                        ).encode('utf-8')
+                    )
+                    return
+                expected_session = state.session_id
+                if self.headers.get('Mcp-Session-Id') != expected_session:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'missing session header')
+                    return
+                if self.headers.get('MCP-Protocol-Version') != '2025-11-25':
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b'missing protocol version header')
+                    return
+                if method == 'notifications/initialized':
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+                if method == 'resources/list':
+                    response_payload = {
+                        'jsonrpc': '2.0',
+                        'id': payload.get('id'),
+                        'result': {
+                            'resources': [
+                                {
+                                    'uri': 'mcp://http/notes',
+                                    'name': 'HTTP Notes',
+                                    'mimeType': 'text/plain',
+                                }
+                            ]
+                        },
+                    }
+                    self._write_transport_response(response_payload)
+                    return
+                if method == 'resources/read':
+                    uri = payload.get('params', {}).get('uri')
+                    response_payload = {
+                        'jsonrpc': '2.0',
+                        'id': payload.get('id'),
+                        'result': {
+                            'contents': [
+                                {
+                                    'uri': uri,
+                                    'mimeType': 'text/plain',
+                                    'text': 'remote notes via http',
+                                }
+                            ]
+                        },
+                    }
+                    self._write_transport_response(response_payload)
+                    return
+                if method == 'tools/list':
+                    response_payload = {
+                        'jsonrpc': '2.0',
+                        'id': payload.get('id'),
+                        'result': {
+                            'tools': [
+                                {
+                                    'name': 'echo',
+                                    'description': 'Echo text over HTTP',
+                                    'inputSchema': {
+                                        'type': 'object',
+                                        'properties': {'text': {'type': 'string'}},
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                    self._write_transport_response(response_payload)
+                    return
+                if method == 'tools/call':
+                    text = payload.get('params', {}).get('arguments', {}).get('text', '')
+                    response_payload = {
+                        'jsonrpc': '2.0',
+                        'id': payload.get('id'),
+                        'result': {
+                            'content': [{'type': 'text', 'text': 'echo:' + str(text)}],
+                            'isError': False,
+                        },
+                    }
+                    self._write_transport_response(response_payload)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def _write_transport_response(self, response_payload: dict[str, object]) -> None:
+                if state.mode == 'sse':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/event-stream')
+                    self.end_headers()
+                    self.wfile.write(b'id: evt-1\ndata:\n\n')
+                    self.wfile.write(
+                        (
+                            'event: message\n'
+                            f'data: {json.dumps(response_payload)}\n\n'
+                        ).encode('utf-8')
+                    )
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response_payload).encode('utf-8'))
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f'http://127.0.0.1:{server.server_port}/mcp'
+        return server, thread, url, state
+
     def test_runtime_discovers_and_reads_local_resources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -134,6 +296,79 @@ class MCPRuntimeTests(unittest.TestCase):
             rendered, metadata = runtime.call_tool('echo', arguments={'text': 'hello'})
             self.assertIn('echo:hello', rendered)
             self.assertEqual(metadata.get('server_name'), 'remote')
+
+    def test_runtime_discovers_streamable_http_server_and_remote_resources_and_tools(self) -> None:
+        server, thread, url, state = self._start_fake_streamable_http_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                workspace = Path(tmp_dir)
+                (workspace / '.claw-mcp.json').write_text(
+                    json.dumps(
+                        {
+                            'mcpServers': {
+                                'remote-http': {
+                                    'transport': 'streamable-http',
+                                    'url': url,
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                runtime = MCPRuntime.from_workspace(workspace)
+                resources = runtime.list_resources()
+                tools = runtime.list_tools()
+                rendered, metadata = runtime.call_tool('echo', arguments={'text': 'hello'})
+                self.assertEqual(len(runtime.servers), 1)
+                self.assertTrue(runtime.has_transport_servers())
+                self.assertIn('streamable-http: 1 server(s)', runtime.render_summary())
+                self.assertEqual(len(resources), 1)
+                self.assertEqual(resources[0].uri, 'mcp://http/notes')
+                self.assertIn('remote notes via http', runtime.read_resource('mcp://http/notes'))
+                self.assertEqual(len(tools), 1)
+                self.assertEqual(tools[0].name, 'echo')
+                self.assertIn('echo:hello', rendered)
+                self.assertEqual(metadata.get('server_name'), 'remote-http')
+                methods = [entry['method'] for entry in state.request_log]
+                self.assertEqual(methods.count('initialize'), 1)
+                self.assertIn('notifications/initialized', methods)
+                for entry in state.request_log[1:]:
+                    self.assertEqual(entry['session'], state.session_id)
+                    self.assertEqual(entry['protocol'], '2025-11-25')
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_runtime_supports_streamable_http_sse_responses(self) -> None:
+        server, thread, url, _state = self._start_fake_streamable_http_server(mode='sse')
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                workspace = Path(tmp_dir)
+                (workspace / '.claw-mcp.json').write_text(
+                    json.dumps(
+                        {
+                            'mcpServers': {
+                                'remote-http': {
+                                    'transport': 'http',
+                                    'url': url,
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                runtime = MCPRuntime.from_workspace(workspace)
+                tools = runtime.list_tools()
+                rendered, metadata = runtime.call_tool('echo', arguments={'text': 'sse'})
+                self.assertEqual(len(tools), 1)
+                self.assertEqual(tools[0].name, 'echo')
+                self.assertIn('echo:sse', rendered)
+                self.assertEqual(metadata.get('server_name'), 'remote-http')
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_mcp_tools_execute_against_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -292,6 +527,95 @@ class MCPRuntimeTests(unittest.TestCase):
                     )
                 for snippet in expected_snippets:
                     self.assertIn(snippet, result.stdout)
+
+    def test_mcp_cli_subprocess_smoke_works_with_streamable_http_server(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        server, thread, url, _state = self._start_fake_streamable_http_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                workspace = Path(tmp_dir)
+                (workspace / '.claw-mcp.json').write_text(
+                    json.dumps(
+                        {
+                            'mcpServers': {
+                                'remote-http': {
+                                    'transport': 'streamable-http',
+                                    'url': url,
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+
+                commands = [
+                    (
+                        [
+                            sys.executable,
+                            '-m',
+                            'src.main',
+                            'mcp-status',
+                            '--cwd',
+                            str(workspace),
+                        ],
+                        ('Configured MCP servers: 1', 'streamable-http: 1 server(s)'),
+                    ),
+                    (
+                        [
+                            sys.executable,
+                            '-m',
+                            'src.main',
+                            'mcp-tools',
+                            '--cwd',
+                            str(workspace),
+                        ],
+                        ('echo ; server=remote-http',),
+                    ),
+                    (
+                        [
+                            sys.executable,
+                            '-m',
+                            'src.main',
+                            'mcp-call-tool',
+                            'echo',
+                            '--server',
+                            'remote-http',
+                            '--arguments-json',
+                            '{"text":"hello-http"}',
+                            '--cwd',
+                            str(workspace),
+                        ],
+                        ('echo:hello-http',),
+                    ),
+                ]
+
+                for command, expected_snippets in commands:
+                    try:
+                        result = subprocess.run(
+                            command,
+                            cwd=repo_root,
+                            capture_output=True,
+                            text=True,
+                            timeout=15,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        self.fail(
+                            f'Subprocess timed out for {command!r}\n'
+                            f'stdout:\n{exc.stdout or ""}\n'
+                            f'stderr:\n{exc.stderr or ""}'
+                        )
+                    if result.returncode != 0:
+                        self.fail(
+                            f'Subprocess failed for {command!r}\n'
+                            f'stdout:\n{result.stdout}\n'
+                            f'stderr:\n{result.stderr}'
+                        )
+                    for snippet in expected_snippets:
+                        self.assertIn(snippet, result.stdout)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_agent_can_use_mcp_tools_in_model_loop(self) -> None:
         responses = [

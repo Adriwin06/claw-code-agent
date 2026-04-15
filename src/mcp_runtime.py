@@ -6,12 +6,15 @@ import queue
 import subprocess
 import threading
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
 
 MCP_PROTOCOL_VERSION = '2025-11-25'
+SUPPORTED_MCP_TRANSPORTS = ('stdio', 'streamable-http')
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,8 @@ class MCPServerProfile:
     args: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     cwd: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
     description: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -54,6 +59,11 @@ class MCPServerProfile:
 class MCPRuntime:
     resources: tuple[MCPResource, ...] = field(default_factory=tuple)
     servers: tuple[MCPServerProfile, ...] = field(default_factory=tuple)
+    _http_clients: dict[str, '_StreamableHTTPMCPClient'] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     @classmethod
     def from_workspace(
@@ -82,7 +92,7 @@ class MCPRuntime:
         return tuple(seen)
 
     def has_transport_servers(self) -> bool:
-        return any(server.transport == 'stdio' for server in self.servers)
+        return any(server.transport in SUPPORTED_MCP_TRANSPORTS for server in self.servers)
 
     def list_resources(
         self,
@@ -126,13 +136,11 @@ class MCPRuntime:
             if server is not None:
                 candidate_servers.append(server)
         for server in self.servers:
-            if server.transport != 'stdio':
-                continue
             if all(existing.name != server.name for existing in candidate_servers):
                 candidate_servers.append(server)
         for server in candidate_servers:
             try:
-                result = _request_stdio(server, 'resources/read', {'uri': uri})
+                result = self._request_server(server, 'resources/read', {'uri': uri})
             except Exception as exc:
                 last_error = exc
                 continue
@@ -180,7 +188,7 @@ class MCPRuntime:
             'name': tool.name,
             'arguments': dict(arguments or {}),
         }
-        result = _request_stdio(server, 'tools/call', payload)
+        result = self._request_server(server, 'tools/call', payload)
         rendered = _truncate(_render_tool_call_result(result), max_chars)
         metadata = {
             'server_name': tool.server_name,
@@ -220,6 +228,8 @@ class MCPRuntime:
             details = [server.name, server.transport]
             if server.command:
                 details.append(server.command)
+            if server.url:
+                details.append(server.url)
             lines.append('- Server: ' + ' ; '.join(details))
         return '\n'.join(lines)
 
@@ -314,10 +324,8 @@ class MCPRuntime:
     def _list_remote_resources(self) -> tuple[MCPResource, ...]:
         discovered: list[MCPResource] = []
         for server in self.servers:
-            if server.transport != 'stdio':
-                continue
             try:
-                result = _request_stdio(server, 'resources/list', {})
+                result = self._request_server(server, 'resources/list', {})
             except OSError:
                 continue
             for item in _extract_remote_resources(server, result):
@@ -330,15 +338,52 @@ class MCPRuntime:
             [self.get_server(server_name)] if server_name else list(self.servers)
         )
         for server in candidate_servers:
-            if server is None or server.transport != 'stdio':
+            if server is None:
                 continue
             try:
-                result = _request_stdio(server, 'tools/list', {})
+                result = self._request_server(server, 'tools/list', {})
             except OSError:
                 continue
             for item in _extract_remote_tools(server, result):
                 discovered.append(item)
         return tuple(discovered)
+
+    def _request_server(
+        self,
+        server: MCPServerProfile,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        if server.transport == 'stdio':
+            return _request_stdio(server, method, params, timeout_seconds=timeout_seconds)
+        if server.transport == 'streamable-http':
+            return self._get_http_client(server, timeout_seconds=timeout_seconds).request(
+                method,
+                params,
+            )
+        raise OSError(
+            f'Unsupported MCP transport for server {server.name}: {server.transport}'
+        )
+
+    def _get_http_client(
+        self,
+        server: MCPServerProfile,
+        *,
+        timeout_seconds: float,
+    ) -> '_StreamableHTTPMCPClient':
+        key = f'{server.name.lower()}::{server.url or ""}'
+        client = self._http_clients.get(key)
+        if client is None:
+            client = _StreamableHTTPMCPClient(
+                server,
+                timeout_seconds=timeout_seconds,
+            )
+            self._http_clients[key] = client
+            return client
+        client.timeout_seconds = timeout_seconds
+        return client
 
     def _resolve_tool(self, tool_name: str, server_name: str | None = None) -> MCPTool:
         tools = self.list_tools(server_name=server_name)
@@ -445,47 +490,65 @@ def _extract_server_profile(
     *,
     manifest_path: Path,
 ) -> MCPServerProfile | None:
-    command = payload.get('command')
-    if not isinstance(command, str) or not command.strip():
-        return None
-    args = payload.get('args', ())
-    if not isinstance(args, list):
-        args = ()
-    normalized_args = tuple(
-        item for item in args if isinstance(item, str)
-    )
-    env = payload.get('env')
-    normalized_env = {
-        key: value
-        for key, value in (env.items() if isinstance(env, dict) else [])
-        if isinstance(key, str) and isinstance(value, str)
-    }
-    cwd = payload.get('cwd')
-    resolved_cwd: str | None = None
-    if isinstance(cwd, str) and cwd.strip():
-        candidate = Path(cwd).expanduser()
-        if not candidate.is_absolute():
-            candidate = manifest_path.parent / candidate
-        resolved_cwd = str(candidate.resolve())
+    transport = _normalize_transport(payload.get('transport'))
     description = payload.get('description') if isinstance(payload.get('description'), str) else None
-    transport = payload.get('transport')
-    if not isinstance(transport, str) or not transport.strip():
-        transport = 'stdio'
-    transport = transport.strip().lower()
-    if transport != 'stdio':
-        return None
     metadata = payload.get('metadata')
-    return MCPServerProfile(
-        name=server_name,
-        source_manifest=str(manifest_path),
-        transport=transport,
-        command=command.strip(),
-        args=normalized_args,
-        env=normalized_env,
-        cwd=resolved_cwd,
-        description=description,
-        metadata=dict(metadata) if isinstance(metadata, dict) else {},
-    )
+    if transport == 'stdio':
+        command = payload.get('command')
+        if not isinstance(command, str) or not command.strip():
+            return None
+        args = payload.get('args', ())
+        if not isinstance(args, list):
+            args = ()
+        normalized_args = tuple(
+            item for item in args if isinstance(item, str)
+        )
+        env = payload.get('env')
+        normalized_env = {
+            key: value
+            for key, value in (env.items() if isinstance(env, dict) else [])
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        cwd = payload.get('cwd')
+        resolved_cwd: str | None = None
+        if isinstance(cwd, str) and cwd.strip():
+            candidate = Path(cwd).expanduser()
+            if not candidate.is_absolute():
+                candidate = manifest_path.parent / candidate
+            resolved_cwd = str(candidate.resolve())
+        return MCPServerProfile(
+            name=server_name,
+            source_manifest=str(manifest_path),
+            transport=transport,
+            command=command.strip(),
+            args=normalized_args,
+            env=normalized_env,
+            cwd=resolved_cwd,
+            description=description,
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        )
+    if transport == 'streamable-http':
+        raw_url = payload.get('url')
+        if raw_url is None:
+            raw_url = payload.get('endpoint')
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            return None
+        headers = payload.get('headers')
+        normalized_headers = {
+            key: _expand_env_vars(value)
+            for key, value in (headers.items() if isinstance(headers, dict) else [])
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        return MCPServerProfile(
+            name=server_name,
+            source_manifest=str(manifest_path),
+            transport=transport,
+            url=_expand_env_vars(raw_url.strip()),
+            headers=normalized_headers,
+            description=description,
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        )
+    return None
 
 
 def _extract_resources(
@@ -642,10 +705,16 @@ def _filter_resources(
 
 
 def _dedupe_servers(servers: list[MCPServerProfile]) -> list[MCPServerProfile]:
-    seen: set[tuple[str, str, str | None, tuple[str, ...]]] = set()
+    seen: set[tuple[str, str, str | None, tuple[str, ...], str | None]] = set()
     deduped: list[MCPServerProfile] = []
     for server in servers:
-        key = (server.name.lower(), server.transport, server.command, server.args)
+        key = (
+            server.name.lower(),
+            server.transport,
+            server.command,
+            server.args,
+            server.url,
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -851,6 +920,285 @@ class _StdioMCPConnection:
                 continue
             if payload.get('id') == request_id:
                 return payload
+
+
+class _MCPHTTPSessionExpiredError(OSError):
+    """Raised when an MCP HTTP session expires and should be reinitialized."""
+
+
+class _StreamableHTTPMCPClient:
+    def __init__(
+        self,
+        server: MCPServerProfile,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.server = server
+        self.timeout_seconds = timeout_seconds
+        self.session_id: str | None = None
+        self.negotiated_protocol_version = MCP_PROTOCOL_VERSION
+        self.initialized = False
+        self._request_id = 0
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if not self.initialized:
+            self._initialize()
+        try:
+            return self._send_request(method, params)
+        except _MCPHTTPSessionExpiredError:
+            self._reset_session()
+            self._initialize()
+            return self._send_request(method, params)
+
+    def _initialize(self) -> None:
+        self._request_id += 1
+        request_id = self._request_id
+        response, response_headers = self._post_jsonrpc(
+            {
+                'jsonrpc': '2.0',
+                'id': request_id,
+                'method': 'initialize',
+                'params': {
+                    'protocolVersion': MCP_PROTOCOL_VERSION,
+                    'capabilities': {},
+                    'clientInfo': {
+                        'name': 'claw-code-agent',
+                        'version': '0.1.0',
+                    },
+                },
+            },
+            include_session_header=False,
+        )
+        error = response.get('error')
+        if isinstance(error, dict):
+            raise OSError(
+                f'MCP initialize failed for server {self.server.name}: {error.get("message") or error}'
+            )
+        result = response.get('result')
+        if not isinstance(result, dict):
+            raise OSError(
+                f'MCP initialize failed for server {self.server.name}: missing result'
+            )
+        session_id = response_headers.get('Mcp-Session-Id') or response_headers.get(
+            'MCP-Session-Id'
+        )
+        if isinstance(session_id, str) and session_id.strip():
+            self.session_id = session_id.strip()
+        negotiated = result.get('protocolVersion')
+        if isinstance(negotiated, str) and negotiated.strip():
+            self.negotiated_protocol_version = negotiated.strip()
+        self._send_notification('notifications/initialized', {})
+        self.initialized = True
+
+    def _send_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._request_id += 1
+        request_id = self._request_id
+        response, _response_headers = self._post_jsonrpc(
+            {
+                'jsonrpc': '2.0',
+                'id': request_id,
+                'method': method,
+                'params': params,
+            },
+            include_session_header=True,
+        )
+        error = response.get('error')
+        if isinstance(error, dict):
+            raise OSError(
+                f'MCP {method} failed for server {self.server.name}: '
+                f'{error.get("message") or error}'
+            )
+        result = response.get('result')
+        if not isinstance(result, dict):
+            return {}
+        return result
+
+    def _send_notification(self, method: str, params: dict[str, Any]) -> None:
+        self._post_jsonrpc(
+            {
+                'jsonrpc': '2.0',
+                'method': method,
+                'params': params,
+            },
+            include_session_header=True,
+            expect_response=False,
+        )
+
+    def _post_jsonrpc(
+        self,
+        payload: dict[str, Any],
+        *,
+        include_session_header: bool,
+        expect_response: bool = True,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        if not self.server.url:
+            raise OSError(f'MCP server {self.server.name} has no URL configured')
+        headers = {
+            'Accept': 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+        }
+        headers.update(self.server.headers)
+        if include_session_header and self.session_id:
+            headers['Mcp-Session-Id'] = self.session_id
+        if include_session_header and self.negotiated_protocol_version:
+            headers['MCP-Protocol-Version'] = self.negotiated_protocol_version
+        request = urllib_request.Request(
+            self.server.url,
+            data=json.dumps(payload, ensure_ascii=True).encode('utf-8'),
+            headers=headers,
+            method='POST',
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=self.timeout_seconds) as response:
+                response_headers = dict(response.headers.items())
+                status_code = response.getcode()
+                content_type = (
+                    response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+                )
+                body = response.read()
+        except urllib_error.HTTPError as exc:
+            body_text = exc.read().decode('utf-8', errors='replace')
+            if exc.code == 404 and include_session_header and self.session_id:
+                raise _MCPHTTPSessionExpiredError(
+                    f'MCP HTTP session expired for server {self.server.name}'
+                ) from exc
+            raise OSError(
+                f'MCP HTTP request failed for server {self.server.name}: '
+                f'HTTP {exc.code} {exc.reason}'
+                + (f' body={body_text}' if body_text else '')
+            ) from exc
+        except urllib_error.URLError as exc:
+            raise OSError(
+                f'MCP HTTP request failed for server {self.server.name}: {exc.reason}'
+            ) from exc
+
+        if not expect_response:
+            if status_code < 200 or status_code >= 300:
+                raise OSError(
+                    f'MCP notification failed for server {self.server.name}: HTTP {status_code}'
+                )
+            return {}, response_headers
+        if content_type == 'application/json':
+            response_payload = _parse_json_response_body(body, server_name=self.server.name)
+            return response_payload, response_headers
+        if content_type == 'text/event-stream':
+            response_payload = _parse_sse_jsonrpc_response(
+                body,
+                request_id=payload.get('id'),
+                server_name=self.server.name,
+            )
+            return response_payload, response_headers
+        raise OSError(
+            f'MCP HTTP response for server {self.server.name} used unsupported content type: '
+            f'{content_type or "unknown"}'
+        )
+
+    def _reset_session(self) -> None:
+        self.session_id = None
+        self.initialized = False
+        self.negotiated_protocol_version = MCP_PROTOCOL_VERSION
+
+
+def _normalize_transport(raw_transport: Any) -> str:
+    if not isinstance(raw_transport, str) or not raw_transport.strip():
+        return 'stdio'
+    normalized = raw_transport.strip().lower().replace('_', '-')
+    if normalized in ('http', 'streamablehttp'):
+        return 'streamable-http'
+    return normalized
+
+
+def _expand_env_vars(value: str) -> str:
+    return os.path.expandvars(value)
+
+
+def _parse_json_response_body(body: bytes, *, server_name: str) -> dict[str, Any]:
+    if not body:
+        return {}
+    try:
+        payload = json.loads(body.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OSError(
+            f'MCP HTTP response from {server_name} was not valid JSON'
+        ) from exc
+    if not isinstance(payload, dict):
+        raise OSError(f'MCP HTTP response from {server_name} was not a JSON object')
+    return payload
+
+
+def _parse_sse_jsonrpc_response(
+    body: bytes,
+    *,
+    request_id: Any,
+    server_name: str,
+) -> dict[str, Any]:
+    text = body.decode('utf-8', errors='replace')
+    events = _parse_sse_events(text)
+    for event in events:
+        data = event.get('data')
+        if not data:
+            continue
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get('id') == request_id:
+            return payload
+    raise OSError(
+        f'MCP SSE response from {server_name} did not include a JSON-RPC response for id {request_id}'
+    )
+
+
+def _parse_sse_events(text: str) -> list[dict[str, str]]:
+    events: list[dict[str, str]] = []
+    event_name = ''
+    event_id = ''
+    retry = ''
+    data_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip('\r')
+        if not line:
+            if event_name or event_id or retry or data_lines:
+                events.append(
+                    {
+                        'event': event_name,
+                        'id': event_id,
+                        'retry': retry,
+                        'data': '\n'.join(data_lines),
+                    }
+                )
+            event_name = ''
+            event_id = ''
+            retry = ''
+            data_lines = []
+            continue
+        if line.startswith(':'):
+            continue
+        field, separator, value = line.partition(':')
+        if separator:
+            value = value.lstrip(' ')
+        else:
+            value = ''
+        if field == 'event':
+            event_name = value
+        elif field == 'id':
+            event_id = value
+        elif field == 'retry':
+            retry = value
+        elif field == 'data':
+            data_lines.append(value)
+    if event_name or event_id or retry or data_lines:
+        events.append(
+            {
+                'event': event_name,
+                'id': event_id,
+                'retry': retry,
+                'data': '\n'.join(data_lines),
+            }
+        )
+    return events
 
 
 def _render_resource_contents(contents: Any) -> str:
