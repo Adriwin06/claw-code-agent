@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from dataclasses import replace
 import json
-from typing import Callable
+from typing import Callable, TextIO
 
 from .background_runtime import BackgroundSessionRuntime, build_background_worker_command
 from .account_runtime import AccountRuntime
@@ -300,8 +300,11 @@ def _run_background_worker(args: argparse.Namespace) -> int:
     session_path = None
     try:
         agent = _build_agent(args)
-        result = agent.run(args.prompt)
-        _print_agent_result(result, show_transcript=args.show_transcript)
+        result = _run_agent_turn(
+            agent,
+            args.prompt,
+            show_transcript=args.show_transcript,
+        )
         exit_code = 0
         stop_reason = result.stop_reason or 'completed'
         session_id = result.session_id
@@ -463,8 +466,229 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
     return agent, stored_session
 
 
-def _print_agent_result(result, *, show_transcript: bool) -> None:
-    print(result.final_output)
+def _preview_value(value: object, *, max_chars: int = 160) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=True, sort_keys=True)
+        except (TypeError, ValueError):
+            text = str(value)
+    text = ' '.join(text.split())
+    if len(text) > max_chars:
+        text = text[: max_chars - 3] + '...'
+    return text
+
+
+class _AgentLiveRenderer:
+    def __init__(self, stream: TextIO | None = None) -> None:
+        self.stream = stream or sys.stdout
+        self.streamed_assistant_output = False
+        self._assistant_open = False
+        self._assistant_ends_with_newline = True
+        self._tool_stream_key: tuple[str | None, str | None] | None = None
+        self._tool_stream_open = False
+        self._tool_stream_ends_with_newline = True
+        self._announced_tool_plans: set[str] = set()
+
+    def handle_event(self, event: dict[str, object]) -> None:
+        event_type = event.get('type')
+        if event_type == 'message_start':
+            self._write_status('[thinking] model call started')
+            return
+        if event_type == 'content_delta':
+            self._render_assistant_delta(str(event.get('delta', '')))
+            return
+        if event_type == 'tool_call_delta':
+            self._render_tool_plan(event)
+            return
+        if event_type == 'message_stop':
+            finish_reason = event.get('finish_reason')
+            if finish_reason == 'tool_calls':
+                self._write_status('[thinking] dispatching tool call')
+            elif finish_reason == 'length':
+                self._write_status('[thinking] model output hit the length limit')
+            else:
+                self._close_open_blocks()
+            return
+        if event_type == 'tool_start':
+            self._write_status(self._render_tool_start(event))
+            return
+        if event_type == 'tool_delta':
+            self._render_tool_delta(event)
+            return
+        if event_type == 'tool_result':
+            self._write_status(self._render_tool_result(event))
+            return
+        if event_type == 'usage':
+            usage = event.get('usage')
+            if isinstance(usage, dict):
+                parts = [
+                    f"input={usage.get('input_tokens', 0)}",
+                    f"output={usage.get('output_tokens', 0)}",
+                ]
+                reasoning = usage.get('reasoning_tokens', 0)
+                if reasoning:
+                    parts.append(f'reasoning={reasoning}')
+                self._write_status('[usage] ' + ' '.join(parts))
+            return
+        if event_type == 'continuation_request':
+            self._write_status('[thinking] requesting continuation')
+            return
+        if event_type == 'tool_permission_denial':
+            reason = _preview_value(event.get('reason'), max_chars=220)
+            self._write_status(f'[tool] permission denied: {reason}')
+            return
+        if event_type == 'task_budget_exceeded':
+            reason = _preview_value(event.get('reason'), max_chars=220)
+            self._write_status(f'[budget] {reason}')
+            return
+        if event_type == 'plugin_tool_block':
+            message = _preview_value(event.get('message'), max_chars=220)
+            self._write_status(f'[plugin] blocked tool: {message}')
+            return
+        if event_type == 'hook_policy_tool_block':
+            message = _preview_value(event.get('message'), max_chars=220)
+            self._write_status(f'[policy] blocked tool: {message}')
+            return
+
+    def finish(self) -> None:
+        self._close_open_blocks()
+
+    def _render_assistant_delta(self, delta: str) -> None:
+        if not delta:
+            return
+        self._close_tool_stream()
+        if not self._assistant_open:
+            self._write('[assistant] ')
+            self._assistant_open = True
+            self._assistant_ends_with_newline = False
+        self._write(delta)
+        self.streamed_assistant_output = True
+        self._assistant_ends_with_newline = delta.endswith('\n')
+
+    def _render_tool_plan(self, event: dict[str, object]) -> None:
+        tool_call_id = event.get('tool_call_id')
+        tool_name = event.get('tool_name')
+        if not isinstance(tool_name, str) or not tool_name:
+            return
+        key = str(tool_call_id or f"index:{event.get('tool_call_index', 0)}")
+        if key in self._announced_tool_plans:
+            return
+        self._announced_tool_plans.add(key)
+        self._write_status(f'[thinking] planning tool call: {tool_name}')
+
+    def _render_tool_start(self, event: dict[str, object]) -> str:
+        tool_name = event.get('tool_name')
+        arguments = event.get('arguments')
+        if not isinstance(tool_name, str) or not tool_name:
+            return '[tool] starting'
+        if not isinstance(arguments, dict):
+            arguments = {}
+        if tool_name == 'bash':
+            command = _preview_value(arguments.get('command'))
+            return f'[command] {command or "(empty command)"}'
+        if tool_name in {'write_file', 'edit_file', 'read_file', 'notebook_edit'}:
+            path = _preview_value(arguments.get('path'))
+            return f'[file] {tool_name} {path or "(unknown path)"}'
+        if tool_name == 'mcp_call_tool':
+            server = _preview_value(arguments.get('server')) or '(auto)'
+            remote_tool = _preview_value(arguments.get('tool_name')) or '(unknown)'
+            return f'[mcp] server={server} tool={remote_tool}'
+        if tool_name.startswith('mcp_'):
+            summary = _preview_value(arguments)
+            return f'[mcp] {tool_name} {summary}'.rstrip()
+        summary = _preview_value(arguments)
+        if summary:
+            return f'[tool] {tool_name} {summary}'
+        return f'[tool] {tool_name}'
+
+    def _render_tool_delta(self, event: dict[str, object]) -> None:
+        tool_name = event.get('tool_name')
+        if not isinstance(tool_name, str) or not tool_name:
+            return
+        if tool_name != 'bash' and not tool_name.startswith('mcp_'):
+            return
+        delta = str(event.get('delta', ''))
+        if not delta:
+            return
+        stream_name = event.get('stream')
+        if not isinstance(stream_name, str) or not stream_name:
+            stream_name = 'tool'
+        key = (str(event.get('tool_call_id')), stream_name)
+        self._close_assistant()
+        if self._tool_stream_key != key:
+            self._close_tool_stream()
+            self._write(f'[tool-output:{tool_name}:{stream_name}]\n')
+            self._tool_stream_key = key
+            self._tool_stream_open = True
+            self._tool_stream_ends_with_newline = True
+        self._write(delta)
+        self._tool_stream_open = True
+        self._tool_stream_ends_with_newline = delta.endswith('\n')
+
+    def _render_tool_result(self, event: dict[str, object]) -> str:
+        tool_name = event.get('tool_name')
+        ok = bool(event.get('ok'))
+        metadata = event.get('metadata')
+        if not isinstance(tool_name, str) or not tool_name:
+            tool_name = 'tool'
+        if not isinstance(metadata, dict):
+            metadata = {}
+        action = metadata.get('action')
+        path = metadata.get('path')
+        if action == 'bash':
+            exit_code = metadata.get('exit_code')
+            return f'[command] exit_code={exit_code} ok={ok}'
+        if isinstance(path, str) and path:
+            return f'[file] updated {path}'
+        if action == 'mcp_call_tool' or tool_name.startswith('mcp_'):
+            server = _preview_value(metadata.get('server_name')) or '(auto)'
+            remote_tool = _preview_value(metadata.get('tool_name')) or tool_name
+            return f'[mcp] server={server} tool={remote_tool} ok={ok}'
+        cwd_update = metadata.get('cwd_update')
+        if isinstance(cwd_update, str) and cwd_update:
+            return f'[cwd] {cwd_update}'
+        return f'[tool] {tool_name} ok={ok}'
+
+    def _write_status(self, line: str) -> None:
+        if not line:
+            return
+        self._close_open_blocks()
+        self._write(line + '\n')
+
+    def _close_open_blocks(self) -> None:
+        self._close_assistant()
+        self._close_tool_stream()
+
+    def _close_assistant(self) -> None:
+        if self._assistant_open and not self._assistant_ends_with_newline:
+            self._write('\n')
+        self._assistant_open = False
+        self._assistant_ends_with_newline = True
+
+    def _close_tool_stream(self) -> None:
+        if self._tool_stream_open and not self._tool_stream_ends_with_newline:
+            self._write('\n')
+        self._tool_stream_key = None
+        self._tool_stream_open = False
+        self._tool_stream_ends_with_newline = True
+
+    def _write(self, text: str) -> None:
+        self.stream.write(text)
+        self.stream.flush()
+
+
+def _print_agent_result(
+    result,
+    *,
+    show_transcript: bool,
+    suppress_final_output: bool = False,
+) -> None:
+    if not suppress_final_output:
+        print(result.final_output)
     print('\n# Usage')
     print(f'total_tokens={result.usage.total_tokens}')
     print(f'input_tokens={result.usage.input_tokens}')
@@ -487,6 +711,47 @@ def _print_agent_result(result, *, show_transcript: bool) -> None:
             print(message.get('content', ''))
 
 
+def _run_agent_turn(
+    agent: LocalCodingAgent,
+    prompt: str,
+    *,
+    show_transcript: bool,
+    stored_session: StoredAgentSession | None = None,
+    stream_output: TextIO | None = None,
+    result_printer: Callable[..., None] = _print_agent_result,
+):
+    renderer = (
+        _AgentLiveRenderer(stream_output)
+        if agent.runtime_config.stream_model_responses
+        else None
+    )
+    event_handler = renderer.handle_event if renderer is not None else None
+    if stored_session is not None:
+        result = agent.resume(
+            prompt,
+            stored_session,
+            event_handler=event_handler,
+        )
+    else:
+        result = agent.run(
+            prompt,
+            event_handler=event_handler,
+        )
+    if renderer is not None:
+        renderer.finish()
+    if result_printer is _print_agent_result:
+        result_printer(
+            result,
+            show_transcript=show_transcript,
+            suppress_final_output=bool(
+                renderer is not None and renderer.streamed_assistant_output
+            ),
+        )
+    else:
+        result_printer(result, show_transcript=show_transcript)
+    return result
+
+
 def _run_agent_chat_loop(
     agent: LocalCodingAgent,
     *,
@@ -495,6 +760,7 @@ def _run_agent_chat_loop(
     show_transcript: bool,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
+    stream_output: TextIO | None = None,
     result_printer: Callable[..., None] = _print_agent_result,
 ) -> int:
     active_session_id = resume_session_id
@@ -531,10 +797,22 @@ def _run_agent_chat_loop(
                 active_session_id,
                 directory=agent.runtime_config.session_directory,
             )
-            result = agent.resume(prompt, stored_session)
+            result = _run_agent_turn(
+                agent,
+                prompt,
+                show_transcript=show_transcript,
+                stored_session=stored_session,
+                stream_output=stream_output,
+                result_printer=result_printer,
+            )
         else:
-            result = agent.run(prompt)
-        result_printer(result, show_transcript=show_transcript)
+            result = _run_agent_turn(
+                agent,
+                prompt,
+                show_transcript=show_transcript,
+                stream_output=stream_output,
+                result_printer=result_printer,
+            )
         active_session_id = result.session_id
 
 
@@ -1409,8 +1687,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.handled else 1
     if args.command == 'agent':
         agent = _build_agent(args)
-        result = agent.run(args.prompt)
-        _print_agent_result(result, show_transcript=args.show_transcript)
+        _run_agent_turn(
+            agent,
+            args.prompt,
+            show_transcript=args.show_transcript,
+        )
         return 0
     if args.command == 'agent-bg':
         return _launch_background_agent(args)
@@ -1487,8 +1768,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == 'agent-resume':
         agent, stored_session = _build_resumed_agent(args)
-        result = agent.resume(args.prompt, stored_session)
-        _print_agent_result(result, show_transcript=args.show_transcript)
+        _run_agent_turn(
+            agent,
+            args.prompt,
+            show_transcript=args.show_transcript,
+            stored_session=stored_session,
+        )
         return 0
     if args.command == 'agent-prompt':
         agent = _build_agent(args)

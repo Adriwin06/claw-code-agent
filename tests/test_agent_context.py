@@ -252,3 +252,45 @@ class AgentContextTests(unittest.TestCase):
         self.assertIn('Current branch: main', git_status)
         self.assertIn('Status:', git_status)
         self.assertIn('tracked.txt', git_status)
+
+    def test_git_status_timeout_does_not_crash_context_snapshot(self) -> None:
+        clear_context_caches()
+
+        def _fake_run(command, cwd=None, capture_output=None, text=None, timeout=None, check=None):  # noqa: ANN001
+            if command == ['git', 'rev-parse', '--is-inside-work-tree']:
+                return subprocess.CompletedProcess(command, 0, stdout='true\n', stderr='')
+            if command == ['git', 'branch', '--show-current']:
+                return subprocess.CompletedProcess(command, 0, stdout='main\n', stderr='')
+            if command == ['git', '--no-optional-locks', 'status', '--short']:
+                raise subprocess.TimeoutExpired(command, timeout)
+            if command == ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']:
+                return subprocess.CompletedProcess(command, 1, stdout='', stderr='')
+            if command == ['git', 'show-ref', '--verify', 'refs/heads/main']:
+                return subprocess.CompletedProcess(command, 0, stdout='ref\n', stderr='')
+            if command == ['git', '--no-optional-locks', 'log', '--oneline', '-n', '5']:
+                return subprocess.CompletedProcess(command, 0, stdout='abc123 Initial\n', stderr='')
+            if command == ['git', 'config', 'user.name']:
+                return subprocess.CompletedProcess(command, 0, stdout='Tester\n', stderr='')
+            if command == ['git', 'rev-parse', '--git-dir']:
+                return subprocess.CompletedProcess(command, 0, stdout='.git\n', stderr='')
+            if command == ['git', 'rev-parse', '--git-common-dir']:
+                return subprocess.CompletedProcess(command, 0, stdout='.git\n', stderr='')
+            if (
+                isinstance(command, list)
+                and len(command) >= 5
+                and command[0] == 'git'
+                and command[1] == '-C'
+                and command[-2:] == ['rev-parse', '--git-common-dir']
+            ):
+                return subprocess.CompletedProcess(command, 0, stdout='.git\n', stderr='')
+            raise AssertionError(f'unexpected command: {command}')
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch('src.agent_context.subprocess.run', side_effect=_fake_run):
+                snapshot = build_context_snapshot(AgentRuntimeConfig(cwd=workspace))
+
+        git_status = snapshot.system_context.get('gitStatus', '')
+        self.assertIn('Current branch: main', git_status)
+        self.assertIn('Status:', git_status)
+        self.assertIn('unavailable', git_status)

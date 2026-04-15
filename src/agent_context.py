@@ -284,15 +284,21 @@ def _get_git_status_cached(cwd: str) -> str | None:
 
     branch = _run_command(['git', 'branch', '--show-current'], root)
     main_branch = _detect_default_branch(root)
-    status = _run_command(['git', '--no-optional-locks', 'status', '--short'], root) or ''
-    log = _run_command(['git', '--no-optional-locks', 'log', '--oneline', '-n', '5'], root) or '(none)'
+    status = _run_command(['git', '--no-optional-locks', 'status', '--short'], root)
+    log = _run_command(['git', '--no-optional-locks', 'log', '--oneline', '-n', '5'], root)
     user_name = _run_command(['git', 'config', 'user.name'], root)
 
-    if len(status) > MAX_STATUS_CHARS:
+    if status is not None and len(status) > MAX_STATUS_CHARS:
         status = (
             status[:MAX_STATUS_CHARS]
             + '\n... (truncated because it exceeds 2k characters. Use bash for full git status.)'
         )
+    status_display = (
+        '(unavailable; git status command failed or timed out)'
+        if status is None
+        else (status or '(clean)')
+    )
+    log_display = log or '(none)'
 
     parts = [
         'This is the git status at the start of the conversation. It is a snapshot and does not update automatically during the run.',
@@ -303,8 +309,8 @@ def _get_git_status_cached(cwd: str) -> str | None:
         parts.append(f'Git user: {user_name}')
     parts.extend(
         [
-            f'Status:\n{status or "(clean)"}',
-            f'Recent commits:\n{log}',
+            f'Status:\n{status_display}',
+            f'Recent commits:\n{log_display}',
         ]
     )
     return '\n\n'.join(parts)
@@ -404,7 +410,7 @@ def _detect_default_branch(cwd: Path) -> str | None:
                 timeout=2.0,
                 check=False,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             return None
         if completed.returncode == 0:
             return candidate
@@ -424,7 +430,7 @@ def _is_git_repo(cwd: Path) -> bool:
             timeout=2.0,
             check=False,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return completed.returncode == 0 and completed.stdout.strip() == 'true'
 
@@ -447,12 +453,11 @@ def _run_command(command: list[str], cwd: Path) -> str | None:
             timeout=2.0,
             check=False,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if completed.returncode != 0:
         return None
-    output = completed.stdout.strip()
-    return output or None
+    return completed.stdout.strip()
 
 
 def _get_os_version() -> str:

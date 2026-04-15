@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from .account_runtime import AccountRuntime
@@ -88,6 +88,34 @@ class PromptPreflightResult:
     model_calls_increment: int = 0
     stop_reason: str | None = None
     reason: str | None = None
+
+
+RuntimeEventHandler = Callable[[dict[str, object]], None]
+
+
+class _RuntimeEventRecorder:
+    def __init__(self, handler: RuntimeEventHandler | None = None) -> None:
+        self._events: list[dict[str, object]] = []
+        self._handler = handler
+
+    def append(self, event: dict[str, object] | StreamEvent) -> None:
+        if isinstance(event, StreamEvent):
+            payload = event.to_dict()
+        else:
+            payload = dict(event)
+        self._events.append(payload)
+        if self._handler is not None:
+            self._handler(payload)
+
+    def extend(self, events: Iterable[dict[str, object] | StreamEvent]) -> None:
+        for event in events:
+            self.append(event)
+
+    def __iter__(self):
+        return iter(self._events)
+
+    def __len__(self) -> int:
+        return len(self._events)
 
 
 @dataclass
@@ -337,7 +365,12 @@ class LocalCodingAgent:
             ),
         )
 
-    def run(self, prompt: str) -> AgentRunResult:
+    def run(
+        self,
+        prompt: str,
+        *,
+        event_handler: RuntimeEventHandler | None = None,
+    ) -> AgentRunResult:
         self.managed_agent_id = None
         self.resume_source_session_id = None
         if self.plugin_runtime is not None:
@@ -350,12 +383,19 @@ class LocalCodingAgent:
             session_id=session_id,
             scratchpad_directory=scratchpad_directory,
             existing_file_history=(),
+            event_handler=event_handler,
         )
         self._accumulate_usage(result)
         self._finalize_managed_agent(result)
         return result
 
-    def resume(self, prompt: str, stored_session: StoredAgentSession) -> AgentRunResult:
+    def resume(
+        self,
+        prompt: str,
+        stored_session: StoredAgentSession,
+        *,
+        event_handler: RuntimeEventHandler | None = None,
+    ) -> AgentRunResult:
         self.managed_agent_id = None
         self.resume_source_session_id = stored_session.session_id
         session = AgentSessionState.from_persisted(
@@ -387,6 +427,7 @@ class LocalCodingAgent:
             session_id=stored_session.session_id,
             scratchpad_directory=scratchpad_directory,
             existing_file_history=stored_session.file_history,
+            event_handler=event_handler,
         )
         self._accumulate_usage(result)
         self._finalize_managed_agent(result)
@@ -400,6 +441,7 @@ class LocalCodingAgent:
         session_id: str,
         scratchpad_directory: Path | None,
         existing_file_history: tuple[dict[str, object], ...],
+        event_handler: RuntimeEventHandler | None,
     ) -> AgentRunResult:
         slash_result = preprocess_slash_command(self, prompt)
         if slash_result.handled and not slash_result.should_query:
@@ -472,7 +514,7 @@ class LocalCodingAgent:
         total_usage = starting_usage
         total_cost_usd = starting_cost_usd
         file_history = list(existing_file_history)
-        stream_events: list[dict[str, object]] = []
+        stream_events = _RuntimeEventRecorder(event_handler)
         assistant_response_segments: list[str] = []
         delegated_tasks = sum(
             1 for entry in file_history if entry.get('action') in ('delegate_agent', 'Agent')
@@ -586,7 +628,7 @@ class LocalCodingAgent:
                 self.last_run_result = result
                 return result
             try:
-                turn, turn_events = self._query_model(session, tool_specs)
+                turn = self._query_model(session, tool_specs, stream_events)
             except OpenAICompatError as exc:
                 if self._is_prompt_too_long_error(exc) and self._reactive_compact_session(
                     session,
@@ -594,7 +636,7 @@ class LocalCodingAgent:
                     turn_index=turn_index,
                 ):
                     try:
-                        turn, turn_events = self._query_model(session, tool_specs)
+                        turn = self._query_model(session, tool_specs, stream_events)
                     except OpenAICompatError as retry_exc:
                         exc = retry_exc
                     else:
@@ -605,7 +647,6 @@ class LocalCodingAgent:
                             }
                             for _ in [0]
                         )
-                        stream_events.extend(event.to_dict() for event in turn_events)
                         model_calls += 1
                         total_usage = total_usage + turn.usage
                         total_cost_usd = self.model_config.pricing.estimate_cost_usd(total_usage)
@@ -706,7 +747,6 @@ class LocalCodingAgent:
                 self.last_run_result = result
                 return result
 
-            stream_events.extend(event.to_dict() for event in turn_events)
             model_calls += 1
             total_usage = total_usage + turn.usage
             total_cost_usd = self.model_config.pricing.estimate_cost_usd(total_usage)
@@ -844,6 +884,7 @@ class LocalCodingAgent:
                         'tool_name': tool_call.name,
                         'tool_call_id': tool_call.id,
                         'message_id': session.messages[tool_message_index].message_id,
+                        'arguments': dict(tool_call.arguments),
                     }
                 )
                 if self.plugin_runtime is not None:
@@ -1131,7 +1172,8 @@ class LocalCodingAgent:
         self,
         session: AgentSessionState,
         tool_specs: list[dict[str, object]],
-    ) -> tuple[AssistantTurn, tuple[StreamEvent, ...]]:
+        stream_events: _RuntimeEventRecorder | None = None,
+    ) -> AssistantTurn:
         if not self.runtime_config.stream_model_responses:
             turn = self.client.complete(
                 session.to_openai_messages(),
@@ -1159,20 +1201,20 @@ class LocalCodingAgent:
                 stop_reason=turn.finish_reason,
                 usage=turn.usage,
             )
-            return turn, ()
+            return turn
 
         assistant_index = session.start_assistant(
             message_id=f'assistant_{len(session.messages)}'
         )
         usage = UsageStats()
         finish_reason: str | None = None
-        events: list[StreamEvent] = []
         for event in self.client.stream(
             session.to_openai_messages(),
             tool_specs,
             output_schema=self.runtime_config.output_schema,
         ):
-            events.append(event)
+            if stream_events is not None:
+                stream_events.append(event)
             if event.type == 'content_delta':
                 session.append_assistant_delta(assistant_index, event.delta)
             elif event.type == 'tool_call_delta':
@@ -1201,7 +1243,7 @@ class LocalCodingAgent:
             raw_message=assistant_message.to_openai_message(),
             usage=usage,
         )
-        return turn, tuple(events)
+        return turn
 
     def _tool_calls_from_message(
         self,

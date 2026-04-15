@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
@@ -7,7 +8,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from src.main import _build_runtime_config, _build_agent, _run_agent_chat_loop, build_parser
+from src.main import (
+    _AgentLiveRenderer,
+    _build_runtime_config,
+    _build_agent,
+    _run_agent_chat_loop,
+    build_parser,
+)
 
 
 class FakeHTTPResponse:
@@ -129,6 +136,67 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(recorded_results, ['First chat reply.', 'Second chat reply.'])
         self.assertIn('# Agent Chat', recorded_lines)
         self.assertIn('chat_ended=user_exit', recorded_lines)
+
+    def test_live_renderer_formats_assistant_tool_and_mcp_events(self) -> None:
+        buffer = io.StringIO()
+        renderer = _AgentLiveRenderer(buffer)
+
+        renderer.handle_event({'type': 'message_start'})
+        renderer.handle_event({'type': 'content_delta', 'delta': 'Hello '})
+        renderer.handle_event({'type': 'content_delta', 'delta': 'world'})
+        renderer.handle_event({'type': 'message_stop', 'finish_reason': 'tool_calls'})
+        renderer.handle_event(
+            {
+                'type': 'tool_start',
+                'tool_name': 'bash',
+                'arguments': {'command': 'pwd'},
+            }
+        )
+        renderer.handle_event(
+            {
+                'type': 'tool_delta',
+                'tool_name': 'bash',
+                'tool_call_id': 'call_1',
+                'stream': 'stdout',
+                'delta': '/workspace\n',
+            }
+        )
+        renderer.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'bash',
+                'ok': True,
+                'metadata': {'action': 'bash', 'exit_code': 0},
+            }
+        )
+        renderer.handle_event(
+            {
+                'type': 'tool_start',
+                'tool_name': 'mcp_call_tool',
+                'arguments': {'server': 'sagemath', 'tool_name': 'factor'},
+            }
+        )
+        renderer.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'mcp_call_tool',
+                'ok': True,
+                'metadata': {
+                    'action': 'mcp_call_tool',
+                    'server_name': 'sagemath',
+                    'tool_name': 'factor',
+                },
+            }
+        )
+        renderer.finish()
+
+        rendered = buffer.getvalue()
+        self.assertIn('[thinking] model call started', rendered)
+        self.assertIn('[assistant] Hello world', rendered)
+        self.assertIn('[command] pwd', rendered)
+        self.assertIn('[tool-output:bash:stdout]', rendered)
+        self.assertIn('/workspace', rendered)
+        self.assertIn('[mcp] server=sagemath tool=factor', rendered)
 
     def test_parser_accepts_remote_runtime_commands(self) -> None:
         parser = build_parser()

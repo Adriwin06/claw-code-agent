@@ -1193,6 +1193,79 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(tool_messages[0].get('metadata', {}).get('streamed'), True)
         self.assertIn('stream_preview', tool_messages[0].get('metadata', {}))
 
+    def test_agent_emits_live_callback_events_during_streaming_run(self) -> None:
+        responses = [
+            [
+                {'choices': [{'delta': {'content': 'Creating '}, 'finish_reason': None}]},
+                {
+                    'choices': [
+                        {
+                            'delta': {
+                                'tool_calls': [
+                                    {
+                                        'index': 0,
+                                        'id': 'call_1',
+                                        'function': {
+                                            'name': 'write_file',
+                                            'arguments': '{"path":"out.txt","content":"hello"}',
+                                        },
+                                    }
+                                ]
+                            },
+                            'finish_reason': None,
+                        }
+                    ]
+                },
+                {
+                    'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}],
+                    'usage': {'prompt_tokens': 6, 'completion_tokens': 4},
+                },
+            ],
+            [
+                {'choices': [{'delta': {'content': 'Done.'}, 'finish_reason': None}]},
+                {
+                    'choices': [{'delta': {}, 'finish_reason': 'stop'}],
+                    'usage': {'prompt_tokens': 5, 'completion_tokens': 2},
+                },
+            ],
+        ]
+        captured_events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch(
+                'src.openai_compat.request.urlopen',
+                side_effect=make_streaming_urlopen_side_effect(responses),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        stream_model_responses=True,
+                        permissions=AgentPermissions(allow_file_write=True),
+                    ),
+                )
+                result = agent.run(
+                    'Create out.txt',
+                    event_handler=captured_events.append,
+                )
+
+        self.assertEqual(result.final_output, 'Done.')
+        self.assertTrue(
+            any(event.get('type') == 'content_delta' for event in captured_events)
+        )
+        tool_start = next(
+            event for event in captured_events if event.get('type') == 'tool_start'
+        )
+        self.assertEqual(tool_start.get('tool_name'), 'write_file')
+        self.assertEqual(tool_start.get('arguments', {}).get('path'), 'out.txt')
+        tool_result = next(
+            event for event in captured_events if event.get('type') == 'tool_result'
+        )
+        self.assertEqual(tool_result.get('metadata', {}).get('path'), 'out.txt')
+
     def test_agent_records_tombstone_mutation_history_when_snipping(self) -> None:
         responses = [
             {
