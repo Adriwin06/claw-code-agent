@@ -26,6 +26,7 @@
 
 | | Feature | Details |
 |---|---------|---------|
+| 🆕 | **Textual TUI** | New `agent-tui` command with live transcript, session sidebar, and prompt composer |
 | 🆕 | **Interactive Chat Mode** | New `agent-chat` command — multi-turn REPL with `/exit` to quit |
 | 🆕 | **Streaming Output** | Token-by-token streaming with `--stream` flag |
 | 🆕 | **Plugin Runtime** | Full manifest-based plugin system — hooks, tool aliases, virtual tools, tool blocking |
@@ -83,6 +84,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | Feature | Description |
 |---------|-------------|
 | 🤖 **Agent Loop** | Full agentic coding loop with tool calling and iterative reasoning |
+| 🖥️ **Terminal UI** | Textual-powered `agent-tui` with live status, session metrics, and chat-style prompting |
 | 💬 **Interactive Chat** | Multi-turn REPL via `agent-chat` with session continuity |
 | 🧰 **Core Tools** | File read / write / edit, glob search, grep search, shell execution |
 | 🔌 **Plugin Runtime** | Manifest-based plugins with hooks, aliases, virtual tools, and tool blocking |
@@ -112,7 +114,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | 🔐 **Permission System** | Granular control: `--allow-write`, `--allow-shell`, `--unsafe` |
 | 🏗️ **OpenAI-Compatible** | Works with vLLM, Ollama, LiteLLM Proxy, OpenRouter — any OpenAI-compatible API |
 | 🐉 **Qwen3-Coder** | First-class support for `Qwen3-Coder-30B-A3B-Instruct` via vLLM |
-| 📦 **Zero Dependencies** | Pure Python standard library — nothing to install |
+| 📦 **Lean Core** | Core runtime stays stdlib-first, with Textual added only for the optional TUI |
 
 ---
 
@@ -333,7 +335,7 @@ OPENAI_API_KEY=ollama
 OPENAI_MODEL=gemma4:e4b
 SAGEMATH_IMAGE=sagemath/sagemath:latest
 SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
-AGENT_COMMAND=agent-chat
+AGENT_COMMAND=agent-tui
 AGENT_ALLOW_WRITE=false
 AGENT_ALLOW_SHELL=false
 AGENT_STREAM=true
@@ -360,6 +362,7 @@ Notes:
 - the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that activates the SageMath MCP server when `SAGEMATH_MCP_URL` is set
 - inside Docker Compose, `claw-agent` talks to SageMath over the internal service URL `http://sagemath:8000/mcp`
 - from the host machine, the default example value uses the published port `http://127.0.0.1:18000/mcp`
+- set `AGENT_COMMAND=agent-chat` if you want the plain REPL instead of the Textual UI
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
 
@@ -468,6 +471,9 @@ python3 -m src.main agent \
 # Interactive chat mode
 python3 -m src.main agent-chat --cwd .
 
+# Textual terminal UI
+python3 -m src.main agent-tui --cwd .
+
 # Streaming output
 python3 -m src.main agent \
   "Explain the current architecture." \
@@ -483,6 +489,7 @@ python3 -m src.main agent \
 | Command | Description |
 |---------|-------------|
 | `agent <prompt>` | Run the agent with a prompt |
+| `agent-tui [prompt]` | Start the Textual terminal UI |
 | `agent-chat [prompt]` | Start interactive multi-turn chat mode |
 | `agent-bg <prompt>` | Run the agent in a local background session |
 | `agent-ps` | List local background sessions |

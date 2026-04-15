@@ -17,6 +17,8 @@ WORKDIR /workspace
 COPY . /workspace
 COPY docker/entrypoint.sh /usr/local/bin/claw-agent-entrypoint
 
+RUN python -m pip install --no-cache-dir "textual>=0.58,<1.0"
+
 RUN chmod +x /usr/local/bin/claw-agent-entrypoint
 
 ENTRYPOINT ["/usr/local/bin/claw-agent-entrypoint"]

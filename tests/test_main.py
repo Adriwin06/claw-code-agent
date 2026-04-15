@@ -281,6 +281,13 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(args.command, 'token-budget')
         self.assertEqual(args.cwd, '.')
 
+    def test_parser_accepts_agent_tui_command(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['agent-tui', '--cwd', '.', '--resume-session-id', 'session-123'])
+        self.assertEqual(args.command, 'agent-tui')
+        self.assertEqual(args.cwd, '.')
+        self.assertEqual(args.resume_session_id, 'session-123')
+
     def test_parser_accepts_team_runtime_commands(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['team-create', 'reviewers', '--member', 'alice', '--cwd', '.'])

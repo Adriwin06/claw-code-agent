@@ -16,7 +16,7 @@ AGENT_COMMAND="${AGENT_COMMAND:-agent-chat}"
 AGENT_CWD="${AGENT_CWD:-/workspace}"
 
 case "$AGENT_COMMAND" in
-  agent|agent-bg|agent-chat|agent-prompt|agent-context|agent-context-raw|token-budget)
+  agent|agent-bg|agent-chat|agent-tui|agent-prompt|agent-context|agent-context-raw|token-budget)
     ;;
   *)
     echo "Unsupported AGENT_COMMAND: $AGENT_COMMAND" >&2
@@ -39,7 +39,7 @@ if [[ -n "${OPENAI_MODEL:-}" ]]; then
   cmd+=(--model "$OPENAI_MODEL")
 fi
 
-if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" ]]; then
+if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" || "$AGENT_COMMAND" == "agent-tui" ]]; then
   if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
     cmd+=(--base-url "$OPENAI_BASE_URL")
   fi

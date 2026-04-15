@@ -42,6 +42,7 @@ from .remote_trigger_runtime import RemoteTriggerRuntime
 from .search_runtime import SearchRuntime
 from .team_runtime import TeamRuntime
 from .task_runtime import TaskRuntime
+from .textual_ui import run_agent_tui
 from .workflow_runtime import WorkflowRuntime
 from .worktree_runtime import WorktreeRuntime
 from .runtime import PortRuntime
@@ -1138,6 +1139,12 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(chat_parser, include_backend=True)
 
+    tui_parser = subparsers.add_parser('agent-tui', help='run the Textual terminal UI for the local-model agent')
+    tui_parser.add_argument('prompt', nargs='?')
+    tui_parser.add_argument('--resume-session-id')
+    tui_parser.add_argument('--max-turns', type=int, default=12)
+    _add_agent_common_args(tui_parser, include_backend=True)
+
     resume_parser = subparsers.add_parser('agent-resume', help='resume a saved Python local-model agent session')
     _add_agent_resume_args(resume_parser)
 
@@ -1766,6 +1773,17 @@ def main(argv: list[str] | None = None) -> int:
             resume_session_id=args.resume_session_id,
             show_transcript=args.show_transcript,
         )
+    if args.command == 'agent-tui':
+        agent = _build_agent(args)
+        try:
+            return run_agent_tui(
+                agent,
+                initial_prompt=args.prompt,
+                resume_session_id=args.resume_session_id,
+            )
+        except RuntimeError as exc:
+            print(exc)
+            return 1
     if args.command == 'agent-resume':
         agent, stored_session = _build_resumed_agent(args)
         _run_agent_turn(
