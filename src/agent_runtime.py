@@ -685,9 +685,22 @@ class LocalCodingAgent:
 
                         if not turn.tool_calls:
                             assistant_response_segments.append(turn.content)
-                            if self._should_continue_response(turn):
+                            truncated_response = self._is_truncated_response(turn)
+                            if self._should_continue_response(
+                                turn,
+                                prompt=effective_prompt,
+                                tool_calls_so_far=tool_calls,
+                                current_response=''.join(assistant_response_segments),
+                                continuation_count=len(assistant_response_segments),
+                            ):
+                                if not truncated_response and assistant_response_segments:
+                                    assistant_response_segments[-1] = (
+                                        assistant_response_segments[-1].rstrip() + '\n\n'
+                                    )
                                 session.append_user(
-                                    self._build_continuation_prompt(),
+                                    self._build_continuation_prompt(
+                                        truncated=truncated_response,
+                                    ),
                                     metadata={
                                         'kind': 'continuation_request',
                                         'continuation_index': len(assistant_response_segments),
@@ -785,9 +798,22 @@ class LocalCodingAgent:
 
             if not turn.tool_calls:
                 assistant_response_segments.append(turn.content)
-                if self._should_continue_response(turn):
+                truncated_response = self._is_truncated_response(turn)
+                if self._should_continue_response(
+                    turn,
+                    prompt=effective_prompt,
+                    tool_calls_so_far=tool_calls,
+                    current_response=''.join(assistant_response_segments),
+                    continuation_count=len(assistant_response_segments),
+                ):
+                    if not truncated_response and assistant_response_segments:
+                        assistant_response_segments[-1] = (
+                            assistant_response_segments[-1].rstrip() + '\n\n'
+                        )
                     session.append_user(
-                        self._build_continuation_prompt(),
+                        self._build_continuation_prompt(
+                            truncated=truncated_response,
+                        ),
                         metadata={
                             'kind': 'continuation_request',
                             'continuation_index': len(assistant_response_segments),
@@ -1278,14 +1304,74 @@ class LocalCodingAgent:
             )
         return tuple(parsed)
 
-    def _should_continue_response(self, turn: AssistantTurn) -> bool:
+    def _should_continue_response(
+        self,
+        turn: AssistantTurn,
+        *,
+        prompt: str = '',
+        tool_calls_so_far: int = 0,
+        current_response: str = '',
+        continuation_count: int = 0,
+    ) -> bool:
+        if self._is_truncated_response(turn):
+            return True
+        if turn.finish_reason != 'stop':
+            return False
+        if tool_calls_so_far <= 0 or continuation_count != 1:
+            return False
+        prompt_text = prompt.lower()
+        if not any(
+            keyword in prompt_text
+            for keyword in (
+                'analy',
+                'review',
+                'audit',
+                'architect',
+                'improv',
+                'investigat',
+                'debug',
+                'refactor',
+            )
+        ):
+            return False
+        response_text = (current_response or turn.content or '').strip()
+        if len(response_text) >= 900:
+            return False
+        lowered_response = response_text.lower()
+        if any(
+            marker in lowered_response
+            for marker in (
+                'summary of recommended action',
+                'next steps',
+                'recommendations',
+                'recommended action',
+                'here are',
+                'to improve',
+            )
+        ):
+            return False
+        if any(marker in response_text for marker in ('\n1.', '\n2.', '\n- ', '\n## ')):
+            return False
+        if response_text.endswith('?'):
+            return False
+        return True
+
+    def _is_truncated_response(self, turn: AssistantTurn) -> bool:
         return turn.finish_reason in {'length', 'max_tokens'}
 
-    def _build_continuation_prompt(self) -> str:
+    def _build_continuation_prompt(self, *, truncated: bool) -> str:
+        if truncated:
+            return (
+                '<system-reminder>\n'
+                'Your previous answer was truncated because the model stopped early. '
+                'Continue exactly where you left off. Do not repeat completed text.\n'
+                '</system-reminder>'
+            )
         return (
             '<system-reminder>\n'
-            'Your previous answer was truncated because the model stopped early. '
-            'Continue exactly where you left off. Do not repeat completed text.\n'
+            'Your previous answer appears to stop at an intermediate summary. '
+            'Continue working on the user\'s request until you either provide a complete answer '
+            'or determine that you need to use another tool. Do not stop after a brief partial analysis.\n'
             '</system-reminder>'
         )
 

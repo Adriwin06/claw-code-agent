@@ -242,6 +242,69 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(len(result.transcript), 5)
         self.assertGreaterEqual(len(result.file_history), 0)
 
+    def test_agent_auto_continues_short_analysis_after_tool_use(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I will inspect the file first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Based on hello.txt, the structure is simple.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Improvements: add clearer interfaces, split responsibilities, and document the transport layer.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze the architecture and recommend improvements.')
+
+        self.assertIn('Based on hello.txt, the structure is simple.', result.final_output)
+        self.assertIn('Improvements: add clearer interfaces', result.final_output)
+        self.assertEqual(result.tool_calls, 1)
+
     def test_write_tool_is_blocked_without_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = AgentRuntimeConfig(cwd=Path(tmp_dir))
