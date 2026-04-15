@@ -315,6 +315,41 @@ Notes:
 
 > 📚 **References:** [Ollama OpenAI Compatibility](https://docs.ollama.com/api/openai-compatibility) · [Ollama Tool Calling](https://docs.ollama.com/capabilities/tool-calling)
 
+### Optional: Run Through Docker With A `.env` File
+
+If you prefer not to pass model/backend flags every time, this repo includes a Docker entrypoint that reads container settings from a root-level [`.env.example`](.env.example) template and your local `.env`.
+
+Create your local `.env` from the example and edit it:
+
+```bash
+cp .env.example .env
+```
+
+Example values:
+
+```env
+OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+OPENAI_API_KEY=ollama
+OPENAI_MODEL=gemma4:e4b
+AGENT_COMMAND=agent-chat
+AGENT_ALLOW_WRITE=false
+AGENT_ALLOW_SHELL=false
+AGENT_STREAM=true
+```
+
+Then start the agent:
+
+```bash
+docker compose run --rm claw-agent
+```
+
+Notes:
+
+- the default `.env` targets a local Ollama server running on the host machine
+- `host.docker.internal` is prewired in `docker-compose.yml` so the container can reach host Ollama
+- set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
+- the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
+
 ### Optional: Use LiteLLM Proxy
 
 `claw-code-agent` can also work through LiteLLM Proxy because the runtime targets an OpenAI-compatible chat completions API. The routed model still needs to support tool calling for full agent behavior.

@@ -21,6 +21,7 @@ archive/
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Local benchmark outputs
 benchmark_artifacts/
