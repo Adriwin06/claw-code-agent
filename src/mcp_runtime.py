@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -533,6 +534,9 @@ def _extract_server_profile(
             raw_url = payload.get('endpoint')
         if not isinstance(raw_url, str) or not raw_url.strip():
             return None
+        expanded_url = _expand_env_vars(raw_url.strip())
+        if _has_unresolved_env_var(expanded_url):
+            return None
         headers = payload.get('headers')
         normalized_headers = {
             key: _expand_env_vars(value)
@@ -543,7 +547,7 @@ def _extract_server_profile(
             name=server_name,
             source_manifest=str(manifest_path),
             transport=transport,
-            url=_expand_env_vars(raw_url.strip()),
+            url=expanded_url,
             headers=normalized_headers,
             description=description,
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
@@ -1110,6 +1114,14 @@ def _normalize_transport(raw_transport: Any) -> str:
 
 def _expand_env_vars(value: str) -> str:
     return os.path.expandvars(value)
+
+
+def _has_unresolved_env_var(value: str) -> bool:
+    return bool(
+        re.search(r'\$\{[^}]+\}', value)
+        or re.search(r'(?<!\$)\$[A-Za-z_][A-Za-z0-9_]*', value)
+        or re.search(r'%[A-Za-z_][A-Za-z0-9_]*%', value)
+    )
 
 
 def _parse_json_response_body(body: bytes, *, server_name: str) -> dict[str, Any]:

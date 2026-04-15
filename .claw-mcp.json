@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "sagemath": {
+      "transport": "streamable-http",
+      "url": "${SAGEMATH_MCP_URL}",
+      "description": "Dockerized SageMath MCP server for symbolic mathematics."
+    }
+  }
+}

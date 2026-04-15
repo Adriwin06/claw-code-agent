@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import sys
 import tempfile
@@ -365,6 +366,38 @@ class MCPRuntimeTests(unittest.TestCase):
                 self.assertEqual(tools[0].name, 'echo')
                 self.assertIn('echo:sse', rendered)
                 self.assertEqual(metadata.get('server_name'), 'remote-http')
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_server_url_can_expand_from_environment(self) -> None:
+        server, thread, url, _state = self._start_fake_streamable_http_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                workspace = Path(tmp_dir)
+                manifest_path = workspace / '.claw-mcp.json'
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            'mcpServers': {
+                                'remote-http': {
+                                    'transport': 'streamable-http',
+                                    'url': '${MCP_TEST_URL}',
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                with patch.dict(os.environ, {'MCP_TEST_URL': url}, clear=False):
+                    runtime = MCPRuntime.from_workspace(workspace)
+                    self.assertEqual(len(runtime.servers), 1)
+                    self.assertEqual(runtime.servers[0].url, url)
+                    self.assertEqual(len(runtime.list_tools()), 1)
+                with patch.dict(os.environ, {}, clear=True):
+                    runtime = MCPRuntime.from_workspace(workspace)
+                    self.assertEqual(len(runtime.servers), 0)
         finally:
             server.shutdown()
             server.server_close()

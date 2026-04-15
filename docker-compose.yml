@@ -1,14 +1,44 @@
 services:
+  sagemath:
+    image: ${SAGEMATH_IMAGE:-sagemath/sagemath:latest}
+    working_dir: /workspace
+    command: ["sage", "-python", "docker/sagemath/mcp_server.py"]
+    volumes:
+      - .:/workspace
+    ports:
+      - "18000:8000"
+    environment:
+      SAGEMATH_MCP_HOST: 0.0.0.0
+      SAGEMATH_MCP_PORT: 8000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sage",
+          "-python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
   claw-agent:
     build:
       context: .
       dockerfile: docker/Dockerfile
     env_file:
       - .env
+    environment:
+      SAGEMATH_MCP_URL: ${SAGEMATH_MCP_URL:-http://sagemath:8000/mcp}
     working_dir: /workspace
     stdin_open: true
     tty: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      sagemath:
+        condition: service_healthy
     volumes:
       - .:/workspace

@@ -331,22 +331,35 @@ Example values:
 OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 OPENAI_API_KEY=ollama
 OPENAI_MODEL=gemma4:e4b
+SAGEMATH_IMAGE=sagemath/sagemath:latest
+SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
 AGENT_COMMAND=agent-chat
 AGENT_ALLOW_WRITE=false
 AGENT_ALLOW_SHELL=false
 AGENT_STREAM=true
 ```
 
-Then start the agent:
+Then start SageMath and the agent:
 
 ```bash
+docker compose up -d sagemath
 docker compose run --rm claw-agent
+```
+
+You can verify that the Dockerized SageMath MCP server is visible from the agent runtime:
+
+```bash
+python3 -m src.main mcp-status --cwd .
+python3 -m src.main mcp-tools --cwd .
 ```
 
 Notes:
 
 - the default `.env` targets a local Ollama server running on the host machine
 - `host.docker.internal` is prewired in `docker-compose.yml` so the container can reach host Ollama
+- the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that activates the SageMath MCP server when `SAGEMATH_MCP_URL` is set
+- inside Docker Compose, `claw-agent` talks to SageMath over the internal service URL `http://sagemath:8000/mcp`
+- from the host machine, the default example value uses the published port `http://127.0.0.1:18000/mcp`
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
 
