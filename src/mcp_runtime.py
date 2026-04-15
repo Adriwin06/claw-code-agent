@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import selectors
+import queue
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 MCP_PROTOCOL_VERSION = '2025-11-25'
@@ -668,8 +669,9 @@ class _StdioMCPConnection:
         self.server = server
         self.timeout_seconds = timeout_seconds
         self.process: subprocess.Popen[str] | None = None
-        self.selector: selectors.BaseSelector | None = None
         self.stderr_lines: list[str] = []
+        self.stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+        self.reader_threads: list[threading.Thread] = []
         self._request_id = 0
 
     def __enter__(self) -> '_StdioMCPConnection':
@@ -689,11 +691,10 @@ class _StdioMCPConnection:
                 cwd=self.server.cwd or None,
                 env=env,
             )
-            self.selector = selectors.DefaultSelector()
             assert self.process.stdout is not None
             assert self.process.stderr is not None
-            self.selector.register(self.process.stdout, selectors.EVENT_READ, data='stdout')
-            self.selector.register(self.process.stderr, selectors.EVENT_READ, data='stderr')
+            self._start_reader('stdout', self.process.stdout)
+            self._start_reader('stderr', self.process.stderr)
             self._initialize()
             return self
         except Exception:
@@ -705,12 +706,6 @@ class _StdioMCPConnection:
 
     def close(self) -> None:
         process = self.process
-        if self.selector is not None:
-            try:
-                self.selector.close()
-            except Exception:
-                pass
-            self.selector = None
         if process is None:
             return
         try:
@@ -732,7 +727,31 @@ class _StdioMCPConnection:
                     stream.close()
                 except Exception:
                     pass
+        for thread in self.reader_threads:
+            thread.join(timeout=0.2)
+        self.reader_threads = []
         self.process = None
+
+    def _start_reader(self, stream_name: str, stream: TextIO) -> None:
+        # Threads keep stdio reads portable across Unix and Windows pipes.
+        thread = threading.Thread(
+            target=self._pump_stream,
+            args=(stream_name, stream),
+            daemon=True,
+            name=f'mcp-{self.server.name}-{stream_name}',
+        )
+        thread.start()
+        self.reader_threads.append(thread)
+
+    def _pump_stream(self, stream_name: str, stream: TextIO) -> None:
+        try:
+            while True:
+                line = stream.readline()
+                if not line:
+                    break
+                self.stream_queue.put((stream_name, line.rstrip('\r\n')))
+        finally:
+            self.stream_queue.put((stream_name, None))
 
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self._request_id += 1
@@ -805,27 +824,33 @@ class _StdioMCPConnection:
                     f'Timed out waiting for MCP response from {self.server.name}'
                     + (f' stderr={stderr}' if stderr else '')
                 )
-            if self.selector is None:
-                raise OSError(f'MCP selector is not available for {self.server.name}')
-            events = self.selector.select(timeout=remaining)
-            if not events:
+            try:
+                stream_name, line = self.stream_queue.get(timeout=remaining)
+            except queue.Empty:
                 continue
-            for key, _mask in events:
-                stream_name = key.data
-                line = key.fileobj.readline()
-                if not line:
-                    continue
-                if stream_name == 'stderr':
-                    self.stderr_lines.append(line.rstrip())
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get('id') == request_id:
-                    return payload
+            if line is None:
+                if (
+                    stream_name == 'stdout'
+                    and self.process is not None
+                    and self.process.poll() is not None
+                ):
+                    stderr = '\n'.join(self.stderr_lines[-5:])
+                    raise OSError(
+                        f'MCP server {self.server.name} exited before responding'
+                        + (f' stderr={stderr}' if stderr else '')
+                    )
+                continue
+            if stream_name == 'stderr':
+                self.stderr_lines.append(line)
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if payload.get('id') == request_id:
+                return payload
 
 
 def _render_resource_contents(contents: Any) -> str:

@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -209,6 +210,88 @@ class MCPRuntimeTests(unittest.TestCase):
         self.assertTrue(call_result.ok)
         self.assertIn('echo:tool-run', call_result.content)
         self.assertEqual(call_result.metadata.get('action'), 'mcp_call_tool')
+
+    def test_mcp_cli_subprocess_smoke_works_with_stdio_server(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            server_path = self._write_fake_stdio_server(workspace)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote': {
+                                'command': sys.executable,
+                                'args': ['-u', str(server_path)],
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            commands = [
+                (
+                    [
+                        sys.executable,
+                        '-m',
+                        'src.main',
+                        'mcp-status',
+                        '--cwd',
+                        str(workspace),
+                    ],
+                    ('Configured MCP servers: 1', 'stdio: 1 server(s)'),
+                ),
+                (
+                    [
+                        sys.executable,
+                        '-m',
+                        'src.main',
+                        'mcp-tools',
+                        '--cwd',
+                        str(workspace),
+                    ],
+                    ('echo ; server=remote',),
+                ),
+                (
+                    [
+                        sys.executable,
+                        '-m',
+                        'src.main',
+                        'mcp-call-tool',
+                        'echo',
+                        '--arguments-json',
+                        '{"text":"hello"}',
+                        '--cwd',
+                        str(workspace),
+                    ],
+                    ('echo:hello',),
+                ),
+            ]
+
+            for command, expected_snippets in commands:
+                try:
+                    result = subprocess.run(
+                        command,
+                        cwd=repo_root,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    self.fail(
+                        f'Subprocess timed out for {command!r}\n'
+                        f'stdout:\n{exc.stdout or ""}\n'
+                        f'stderr:\n{exc.stderr or ""}'
+                    )
+                if result.returncode != 0:
+                    self.fail(
+                        f'Subprocess failed for {command!r}\n'
+                        f'stdout:\n{result.stdout}\n'
+                        f'stderr:\n{result.stderr}'
+                    )
+                for snippet in expected_snippets:
+                    self.assertIn(snippet, result.stdout)
 
     def test_agent_can_use_mcp_tools_in_model_loop(self) -> None:
         responses = [

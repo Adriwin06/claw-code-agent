@@ -43,7 +43,7 @@
 | 🆕 | **Remote Runtime** | Manifest-backed local remote profiles, connect/disconnect state, and remote CLI/slash flows |
 | 🆕 | **Hook & Policy Runtime** | Local `.claw-policy.json` / hook manifests with trust reporting, safe env, tool blocking, and budget overrides |
 | 🆕 | **Task & Plan Runtime** | Persistent local tasks and plans with plan-to-task sync and dependency-aware task execution |
-| 🆕 | **MCP Transport** | Real stdio MCP transport for `initialize`, resource listing/reading, and tool listing/calling |
+| 🆕 | **MCP Transport** | Real stdio MCP transport for `initialize`, resource listing/reading, and tool listing/calling, with portable child-process handling |
 | 🆕 | **Search Runtime** | Provider-backed `web_search` with local manifests, activation state, and `/search` flows |
 | 🆕 | **Config & Account Runtime** | Local config/settings mutation plus manifest-backed account profiles and login/logout state |
 | 🆕 | **Ask-User Runtime** | Queued or interactive local ask-user flow with history, slash commands, and agent tool support |
@@ -91,7 +91,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | 💬 **Slash Commands** | Local commands for context, config, account, search, MCP, remote, tasks, plan, hooks, and model control |
 | 🌐 **Remote Runtime** | Manifest-backed remote profiles with local `remote-mode`, `ssh-mode`, `teleport-mode`, and connect/disconnect state |
 | 🧭 **Task & Plan Runtime** | Persistent tasks and plans with sync, next-task selection, and blocked/unblocked state |
-| 🛰️ **MCP Runtime** | Local MCP manifests plus real stdio MCP transport for resources and tools |
+| 🛰️ **MCP Runtime** | Local MCP manifests plus real stdio MCP transport for resources and tools, including transport-backed child-process servers |
 | 🔎 **Search Runtime** | Provider-backed `web_search` plus provider activation and status reporting |
 | ⚙️ **Config & Account Runtime** | Local config mutation, settings inspection, account profiles, and login/logout state |
 | 🙋 **Ask-User Runtime** | Queued answer or interactive user-question flow with history tracking |
@@ -159,7 +159,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 - [x] Local ask-user runtime: queued answers, history, and ask-user CLI/slash flows
 - [x] Local team runtime: persisted teams, team messages, and team CLI/slash flows
 - [x] Local search runtime with provider discovery, activation, and provider-backed `web_search`
-- [x] Local MCP runtime: manifest resources, stdio transport, MCP resources, and MCP tool calls
+- [x] Local MCP runtime: manifest resources, portable stdio transport, MCP resources, and MCP tool calls
 - [x] Local task and plan runtimes with plan sync and dependency-aware task execution
 - [x] Notebook edit tool in the real Python tool registry
 - [x] Local workflow runtime with workflow list/get/run tools and CLI/slash flows
@@ -177,7 +177,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 
 ### 🔲 In Progress
 
-- [ ] Full MCP parity beyond the current stdio transport and local manifest/resource/tool support
+- [ ] Full MCP service parity beyond the current working stdio transport and local manifest/resource/tool support
 - [ ] Full slash-command parity with npm runtime
 - [ ] Full interactive REPL / TUI behavior
 - [ ] Full tokenizer/chat-message framing parity beyond the current tokenizer-aware accounting
