@@ -5,7 +5,7 @@
 <h1 align="center">Claw Code Agent</h1>
 
 <p align="center">
-  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, zero dependencies.</em>
+  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, stdlib-first core.</em>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
   <a href="https://github.com/HarnessLab/claw-code-agent"><img src="https://img.shields.io/badge/repo-HarnessLab%2Fclaw--code--agent-181717?logo=github" alt="GitHub"></a>
   <a href="https://docs.vllm.ai/"><img src="https://img.shields.io/badge/backend-vLLM-FF6F00?logo=lightning&logoColor=white" alt="vLLM"></a>
   <a href="https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"><img src="https://img.shields.io/badge/model-Qwen3--Coder-FFD21E?logo=huggingface&logoColor=black" alt="Qwen3-Coder"></a>
-  <img src="https://img.shields.io/badge/dependencies-zero-brightgreen" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/core-stdlib--first-brightgreen" alt="Stdlib-first Core">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha">
   <img src="https://img.shields.io/badge/license-open--source-green" alt="License">
 </p>
@@ -71,7 +71,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 
 > **Goal:** Not to ship the original npm source, but to reimplement the full agent flow in Python — prompt assembly, context building, slash commands, tool calling, session persistence, and local model execution.
 >
-> **Zero external dependencies** — just Python's standard library.
+> **Stdlib-first core** — the base runtime uses the Python standard library, and `Textual` is only needed for the optional `agent-tui` interface.
 
 <p align="center">
   <img src="images/demo_2.gif" alt="Claw Code Agent demo" width="900" />
@@ -84,7 +84,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | Feature | Description |
 |---------|-------------|
 | 🤖 **Agent Loop** | Full agentic coding loop with tool calling and iterative reasoning |
-| 🖥️ **Terminal UI** | Textual-powered `agent-tui` with live status, session metrics, and chat-style prompting |
+| 🖥️ **Terminal UI** | Optional Textual-powered `agent-tui` with session navigation, prompt reuse, and rerun controls |
 | 💬 **Interactive Chat** | Multi-turn REPL via `agent-chat` with session continuity |
 | 🧰 **Core Tools** | File read / write / edit, glob search, grep search, shell execution |
 | 🔌 **Plugin Runtime** | Manifest-based plugins with hooks, aliases, virtual tools, and tool blocking |
@@ -344,11 +344,17 @@ AGENT_ALLOW_SHELL=false
 AGENT_STREAM=true
 ```
 
-Then start SageMath and the agent:
+Then start the agent:
+
+```bash
+docker compose run --rm claw-agent
+```
+
+If you want the optional SageMath MCP sidecar, start it separately first:
 
 ```bash
 docker compose up -d sagemath
-docker compose run --rm claw-agent
+docker compose run --rm --no-deps -e SAGEMATH_MCP_URL=http://sagemath:8000/mcp claw-agent
 ```
 
 To launch against another host folder, set `HOST_WORKSPACE_DIR` before starting the agent:
@@ -383,14 +389,16 @@ Notes:
 - set `AGENT_CWD` to choose the starting folder inside that mounted workspace
 - the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that activates the SageMath MCP server when `SAGEMATH_MCP_URL` is set
 - the repo includes a root-level [`.claw-search.json`](.claw-search.json) manifest that activates the `web_search` tool when `SEARXNG_BASE_URL` is set
-- inside Docker Compose, `claw-agent` talks to SageMath over the internal service URL `http://sagemath:8000/mcp`
-- from the host machine, the default example value uses the published port `http://127.0.0.1:18000/mcp`
+- when you start SageMath in Compose, `claw-agent` can talk to it over the internal service URL `http://sagemath:8000/mcp`
+- from the host machine, the published port is `http://127.0.0.1:18000/mcp`
 - for Dockerized agent runs that need a search provider on the host machine, prefer `SEARXNG_BASE_URL=http://host.docker.internal:8080`
 - set `AGENT_READ_ONLY=true` to force read-only mode; when it is true, the write/shell/unsafe flags are ignored
 - set `AGENT_ALLOW_WRITE`, `AGENT_ALLOW_SHELL`, and `AGENT_UNSAFE` as needed when `AGENT_READ_ONLY=false`
 - set `AGENT_COMMAND=agent-chat` if you want the plain REPL instead of the Textual UI
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
+- on Windows, [`launch-workspace.bat`](launch-workspace.bat) starts the agent without rebuilding the image every run; set `CLAW_REBUILD=1` only when you need a fresh image
+- set `CLAW_START_SAGEMATH=1` if you want the Windows launcher to start the SageMath sidecar before opening the agent
 
 ### Optional: Use LiteLLM Proxy
 
@@ -479,6 +487,9 @@ Notes:
 ### 3. Run the Agent
 
 ```bash
+# Sanity-check the workspace, backend, and optional TUI dependency
+python3 -m src.main doctor --cwd .
+
 # Read-only question
 python3 -m src.main agent \
   "Read src/agent_runtime.py and summarize how the loop works." \
@@ -497,7 +508,7 @@ python3 -m src.main agent \
 # Interactive chat mode
 python3 -m src.main agent-chat --cwd .
 
-# Textual terminal UI
+# Textual terminal UI (requires: pip install -e .[tui])
 python3 -m src.main agent-tui --cwd .
 
 # Streaming output
@@ -515,6 +526,7 @@ python3 -m src.main agent \
 | Command | Description |
 |---------|-------------|
 | `agent <prompt>` | Run the agent with a prompt |
+| `doctor` | Check workspace, backend, and optional TUI readiness before starting |
 | `agent-tui [prompt]` | Start the Textual terminal UI |
 | `agent-chat [prompt]` | Start interactive multi-turn chat mode |
 | `agent-bg <prompt>` | Run the agent in a local background session |
@@ -536,9 +548,16 @@ python3 -m src.main agent \
 | `search-status` / `search-providers` / `search-activate` / `search` | Inspect and use the local search runtime |
 | `mcp-status` / `mcp-resources` / `mcp-resource` / `mcp-tools` / `mcp-call-tool` | Inspect and use the local MCP runtime |
 | `remote-status` / `remote-profiles` / `remote-disconnect` | Inspect local remote runtime state |
-| `remote-mode` / `ssh-mode` / `teleport-mode` / `direct-connect-mode` / `deep-link-mode` | Activate local remote runtime modes |
 | `config-status` / `config-effective` / `config-source` / `config-get` / `config-set` | Inspect and mutate local config/settings |
 | `account-status` / `account-profiles` / `account-login` / `account-logout` | Inspect and mutate local account state |
+
+### Developer Utilities
+
+| Command | Description |
+|---------|-------------|
+| `dev <subcommand>` | Access mirrored and porting-focused utilities without cluttering the default CLI |
+| `dev commands` / `dev tools` / `dev route` / `dev bootstrap` / `dev turn-loop` | Inspect the archived parity surface and mirrored runtime shims |
+| `dev remote-mode` / `dev ssh-mode` / `dev teleport-mode` / `dev direct-connect-mode` / `dev deep-link-mode` | Exercise the simulated remote-mode branches |
 
 ### CLI Flags
 

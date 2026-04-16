@@ -30,16 +30,11 @@ services:
       dockerfile: docker/Dockerfile
     env_file:
       - .env
-    environment:
-      SAGEMATH_MCP_URL: ${SAGEMATH_MCP_URL:-http://sagemath:8000/mcp}
     working_dir: /workspace
     stdin_open: true
     tty: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      sagemath:
-        condition: service_healthy
     volumes:
       - type: bind
         source: ${HOST_WORKSPACE_DIR:-.}

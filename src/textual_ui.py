@@ -1233,6 +1233,57 @@ def _friendly_stop_reason(stop_reason: str | None) -> str:
     return stop_reason
 
 
+def render_details_panel(
+    state: AgentTuiState,
+    turn: ConversationTurn | None,
+    activity_items: Sequence[ActivityItem],
+    *,
+    auto_follow: bool,
+) -> str:
+    lines = [
+        'Run',
+        '',
+        f'status={state.status}',
+        f'phase={state.phase}',
+        f'model={state.model}',
+        f'permissions={state.permissions}',
+        f'session_id={state.session_id or "none"}',
+        f'auto_follow={auto_follow}',
+        f'prompts={state.prompt_count}',
+        f'tokens={state.total_tokens}',
+        f'cost_usd={state.total_cost_usd:.6f}',
+    ]
+    if turn is not None:
+        lines.extend(
+            [
+                '',
+                'Selected Turn',
+                '',
+                f'prompt={turn.prompt_preview(max_chars=120)}',
+                f'assistant={turn.assistant_preview(max_chars=120)}',
+                f'tools={turn.tool_count}',
+                f'stop_reason={_friendly_stop_reason(turn.stop_reason)}',
+            ]
+        )
+    if activity_items:
+        latest = activity_items[-1]
+        lines.extend(['', f'last_activity={latest.label}'])
+    lines.extend(
+        [
+            '',
+            'Next Actions',
+            '',
+            'Enter: submit prompt',
+            'Ctrl+U: reuse selected prompt',
+            'Ctrl+T: rerun selected turn',
+            'Ctrl+N: new conversation',
+            'Ctrl+F: toggle follow',
+            '/new /prev /next /retry /reuse',
+        ]
+    )
+    return '\n'.join(lines)
+
+
 def run_agent_tui(
     agent: LocalCodingAgent,
     *,
@@ -1618,6 +1669,16 @@ def run_agent_tui(
             min-width: 28;
         }
 
+        #actions-toolbar {
+            height: auto;
+            margin-bottom: 1;
+        }
+
+        #actions-toolbar Button {
+            width: 1fr;
+            min-width: 10;
+        }
+
         #history-list {
             height: 1fr;
             border: round #3b4b5c;
@@ -1739,6 +1800,8 @@ def run_agent_tui(
             ('ctrl+pageup', 'previous_conversation', 'Prev'),
             ('ctrl+pagedown', 'next_conversation', 'Next'),
             ('ctrl+j', 'focus_prompt', 'Prompt'),
+            ('ctrl+u', 'reuse_selected_prompt', 'Reuse'),
+            ('ctrl+t', 'retry_selected_turn', 'Retry'),
             ('ctrl+r', 'refresh_panels', 'Refresh'),
             ('ctrl+f', 'toggle_auto_follow', 'Follow'),
             ('ctrl+h', 'focus_history', 'History'),
@@ -1800,12 +1863,15 @@ def run_agent_tui(
                     with VerticalScroll(id='conversation-scroll'):
                         yield ConversationFeed()
                 with Vertical(id='right-rail'):
+                    with Horizontal(id='actions-toolbar'):
+                        yield Button('Reuse', id='reuse-prompt-button')
+                        yield Button('Retry', id='retry-turn-button')
                     yield Static(id='details')
             with Horizontal(id='command-picker'):
                 yield OptionList(id='command-options')
                 yield Static(id='command-description')
             yield Input(
-                placeholder='Type a prompt or slash command and press Enter',
+                placeholder='Type a task, /retry, /reuse, /new, or another slash command',
                 id='prompt',
             )
             yield Footer()
@@ -1844,6 +1910,12 @@ def run_agent_tui(
                 return
             if lowered_prompt in {'/next', '/forward'}:
                 self.action_next_conversation()
+                return
+            if lowered_prompt in {'/retry', '/rerun'}:
+                self.action_retry_selected_turn()
+                return
+            if lowered_prompt in {'/reuse', '/edit-selected'}:
+                self.action_reuse_selected_prompt()
                 return
             self._submit_prompt(prompt)
 
@@ -1931,6 +2003,14 @@ def run_agent_tui(
             if event.button.id == 'new-conversation-button':
                 self.action_new_conversation()
                 event.stop()
+                return
+            if event.button.id == 'reuse-prompt-button':
+                self.action_reuse_selected_prompt()
+                event.stop()
+                return
+            if event.button.id == 'retry-turn-button':
+                self.action_retry_selected_turn()
+                event.stop()
 
         def action_focus_prompt(self) -> None:
             self.query_one('#prompt', Input).focus()
@@ -1966,6 +2046,25 @@ def run_agent_tui(
 
         def action_focus_history(self) -> None:
             self.query_one('#history-list', OptionList).focus()
+
+        def action_reuse_selected_prompt(self) -> None:
+            if self._state.busy:
+                return
+            turn = self._selected_turn()
+            if turn is None:
+                return
+            prompt = self.query_one('#prompt', Input)
+            prompt.value = turn.user_prompt
+            self._refresh_command_picker(prompt.value)
+            prompt.focus()
+
+        def action_retry_selected_turn(self) -> None:
+            if self._state.busy:
+                return
+            turn = self._selected_turn()
+            if turn is None:
+                return
+            self._submit_prompt(turn.user_prompt)
 
         def on_collapsible_toggled(self, event) -> None:
             collapsible = getattr(event, 'collapsible', None)
@@ -2260,34 +2359,19 @@ def run_agent_tui(
 
         def _refresh_details_panel(self) -> None:
             turn = self._selected_turn()
-            lines = [
-                'Details',
-                '',
-                f'status={self._state.status}',
-                f'phase={self._state.phase}',
-                f'model={self._state.model}',
-                f'permissions={self._state.permissions}',
-                f'session_id={self._state.session_id or "none"}',
-                f'auto_follow={self._auto_follow}',
-                f'prompts={self._state.prompt_count}',
-                f'tokens={self._state.total_tokens}',
-                f'cost_usd={self._state.total_cost_usd:.6f}',
-            ]
-            if turn is not None:
-                lines.extend(
-                    [
-                        '',
-                        'Selected Turn',
-                        '',
-                        f'prompt={turn.prompt_preview(max_chars=120)}',
-                        f'assistant={turn.assistant_preview(max_chars=120)}',
-                        f'tools={turn.tool_count}',
-                    ]
+            reuse_button = self.query_one('#reuse-prompt-button', Button)
+            retry_button = self.query_one('#retry-turn-button', Button)
+            can_use_turn = turn is not None and not self._state.busy
+            reuse_button.disabled = not can_use_turn
+            retry_button.disabled = not can_use_turn
+            self.query_one('#details', Static).update(
+                render_details_panel(
+                    self._state,
+                    turn,
+                    self._activity_items,
+                    auto_follow=self._auto_follow,
                 )
-            if self._activity_items:
-                latest = self._activity_items[-1]
-                lines.extend(['', f'last_activity={latest.label}'])
-            self.query_one('#details', Static).update('\n'.join(lines))
+            )
 
         def _scroll_conversation_to_end(self) -> None:
             container = self.query_one('#conversation-scroll', VerticalScroll)

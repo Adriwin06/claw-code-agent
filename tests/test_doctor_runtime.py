@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from urllib import error as urllib_error
+
+from src.agent_types import AgentRuntimeConfig, ModelConfig
+from src.doctor_runtime import run_doctor
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode('utf-8')
+
+    def __enter__(self) -> 'FakeHTTPResponse':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+class DoctorRuntimeTests(unittest.TestCase):
+    def test_run_doctor_reports_backend_and_model_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.git').mkdir()
+            runtime_config = AgentRuntimeConfig(
+                cwd=workspace,
+                session_directory=workspace / '.port_sessions' / 'agent',
+                scratchpad_root=workspace / '.port_sessions' / 'scratchpad',
+            )
+            model_config = ModelConfig(
+                model='demo-model',
+                base_url='http://127.0.0.1:8000/v1',
+                api_key='local-token',
+                timeout_seconds=1.0,
+            )
+            with patch(
+                'src.doctor_runtime.urllib_request.urlopen',
+                return_value=FakeHTTPResponse({'data': [{'id': 'demo-model'}]}),
+            ), patch(
+                'src.doctor_runtime.importlib.util.find_spec',
+                return_value=object(),
+            ), patch(
+                'src.doctor_runtime.shutil.which',
+                return_value='C:/Program Files/Git/bin/git.exe',
+            ):
+                report = run_doctor(
+                    model_config=model_config,
+                    runtime_config=runtime_config,
+                )
+
+        self.assertFalse(report.has_failures)
+        rendered = report.as_text()
+        self.assertIn('[ok] workspace:', rendered)
+        self.assertIn('[ok] session-storage:', rendered)
+        self.assertIn('[ok] backend:', rendered)
+        self.assertIn('[ok] model:', rendered)
+        self.assertIn('ready=yes', rendered)
+
+    def test_run_doctor_marks_backend_unreachable_as_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            runtime_config = AgentRuntimeConfig(cwd=workspace)
+            model_config = ModelConfig(
+                model='demo-model',
+                base_url='http://127.0.0.1:8000/v1',
+                api_key='local-token',
+                timeout_seconds=1.0,
+            )
+            with patch(
+                'src.doctor_runtime.urllib_request.urlopen',
+                side_effect=urllib_error.URLError('connection refused'),
+            ):
+                report = run_doctor(
+                    model_config=model_config,
+                    runtime_config=runtime_config,
+                    check_tui=False,
+                )
+
+        self.assertTrue(report.has_failures)
+        self.assertIn('[fail] backend:', report.as_text())
+
+
+if __name__ == '__main__':
+    unittest.main()

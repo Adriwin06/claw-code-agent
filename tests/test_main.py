@@ -204,6 +204,27 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(args.command, 'remote-profiles')
         self.assertEqual(args.cwd, '.')
 
+    def test_parser_accepts_doctor_command(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['doctor', '--cwd', '.', '--skip-backend'])
+        self.assertEqual(args.command, 'doctor')
+        self.assertEqual(args.cwd, '.')
+        self.assertTrue(args.skip_backend)
+
+    def test_parser_accepts_dev_namespace_for_internal_commands(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['dev', 'commands', '--limit', '5'])
+        self.assertEqual(args.command, 'dev')
+        self.assertEqual(args.dev_command, 'commands')
+        self.assertEqual(args.limit, 5)
+
+    def test_default_help_hides_internal_mirrored_commands_and_shows_dev_namespace(self) -> None:
+        help_text = build_parser().format_help()
+        self.assertIn('doctor', help_text)
+        self.assertIn('dev', help_text)
+        self.assertNotIn('exec-command', help_text)
+        self.assertNotIn('turn-loop', help_text)
+
     def test_parser_accepts_account_runtime_commands(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['account-profiles', '--cwd', '.'])

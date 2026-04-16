@@ -9,6 +9,7 @@ from pathlib import Path
 from src.agent_runtime import LocalCodingAgent
 from src.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig, UsageStats
 from src.textual_ui import (
+    ActivityItem,
     AgentTuiEventBridge,
     AgentTuiState,
     ConversationEntry,
@@ -19,6 +20,7 @@ from src.textual_ui import (
     build_conversation_history_items,
     extract_slash_command_query,
     filter_slash_command_suggestions,
+    render_details_panel,
     render_slash_command_suggestion_detail,
     restore_conversation_turns,
     should_route_key_to_prompt,
@@ -127,6 +129,39 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('status=Idle', rendered)
         self.assertIn('phase=Idle', rendered)
         self.assertIn('streaming=False', rendered)
+
+    def test_render_details_panel_highlights_actions_and_selected_turn(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write, shell',
+            status='Ready',
+            phase='Ready',
+            session_id='session-1',
+            prompt_count=2,
+            total_tokens=42,
+            total_cost_usd=0.125,
+        )
+        turn = ConversationTurn(
+            turn_id='turn-1',
+            user_prompt='Inspect the repo',
+            assistant_response='Done.',
+            tool_count=2,
+            stop_reason='stop',
+        )
+        rendered = render_details_panel(
+            state,
+            turn,
+            (ActivityItem(key='latest', label='Tool finished'),),
+            auto_follow=True,
+        )
+
+        self.assertIn('Run', rendered)
+        self.assertIn('Selected Turn', rendered)
+        self.assertIn('stop_reason=completed', rendered)
+        self.assertIn('last_activity=Tool finished', rendered)
+        self.assertIn('Ctrl+U: reuse selected prompt', rendered)
+        self.assertIn('Ctrl+T: rerun selected turn', rendered)
 
     def test_restore_conversation_turns_skips_internal_messages_and_tracks_tools(self) -> None:
         turns = restore_conversation_turns(

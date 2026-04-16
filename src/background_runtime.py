@@ -15,6 +15,7 @@ from uuid import uuid4
 
 DEFAULT_BACKGROUND_DIR = Path('.port_sessions') / 'background'
 _DETACHED_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
+_WINDOWS_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,9 @@ class BackgroundSessionRuntime:
     def refresh_record(self, record: BackgroundSessionRecord) -> BackgroundSessionRecord:
         if record.status != 'running':
             return record
-        if _is_process_running(record.pid):
+        process = _DETACHED_PROCESSES.get(record.pid)
+        exit_code = process.poll() if process is not None else None
+        if exit_code is None and _is_process_running(record.pid):
             return record
         updated = BackgroundSessionRecord(
             background_id=record.background_id,
@@ -175,15 +178,18 @@ class BackgroundSessionRuntime:
             started_at=record.started_at,
             command=record.command,
             finished_at=record.finished_at or _utc_now(),
-            exit_code=record.exit_code,
+            exit_code=record.exit_code if record.exit_code is not None else exit_code,
             stop_reason=record.stop_reason,
             session_id=record.session_id,
             session_path=record.session_path,
         )
         self.save_record(updated)
         process = _DETACHED_PROCESSES.pop(record.pid, None)
-        if process is not None and process.returncode is None:
-            process.returncode = updated.exit_code
+        if process is not None:
+            if process.returncode is None:
+                process.returncode = updated.exit_code
+            process.stdout = None
+            process.stderr = None
         return updated
 
     def mark_finished(
@@ -226,26 +232,27 @@ class BackgroundSessionRuntime:
         record = self.load_record(background_id)
         if record.status != 'running':
             return record
-        try:
-            os.killpg(record.pid, signal.SIGTERM)
-        except OSError:
-            try:
-                os.kill(record.pid, signal.SIGTERM)
-            except OSError:
-                pass
+        process = _DETACHED_PROCESSES.get(record.pid)
+        _terminate_process(record.pid, process=process)
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
-            try:
-                waited_pid, _ = os.waitpid(record.pid, os.WNOHANG)
-                if waited_pid == record.pid:
+            if process is not None:
+                if process.poll() is not None:
                     break
-            except ChildProcessError:
-                break
-            except OSError:
+            elif not _is_process_running(record.pid):
                 break
             if not _is_process_running(record.pid):
                 break
             time.sleep(0.05)
+        exit_code = _killed_exit_code()
+        if process is not None:
+            try:
+                wait_timeout = max(deadline - time.monotonic(), 0.0)
+                if wait_timeout > 0:
+                    process.wait(timeout=wait_timeout)
+            except subprocess.TimeoutExpired:
+                pass
+            exit_code = process.returncode if process.returncode is not None else exit_code
         updated = BackgroundSessionRecord(
             background_id=record.background_id,
             pid=record.pid,
@@ -259,15 +266,18 @@ class BackgroundSessionRuntime:
             started_at=record.started_at,
             command=record.command,
             finished_at=_utc_now(),
-            exit_code=-signal.SIGTERM,
+            exit_code=exit_code,
             stop_reason='killed',
             session_id=record.session_id,
             session_path=record.session_path,
         )
         self.save_record(updated)
         process = _DETACHED_PROCESSES.pop(record.pid, None)
-        if process is not None and process.returncode is None:
-            process.returncode = updated.exit_code
+        if process is not None:
+            if process.returncode is None:
+                process.returncode = updated.exit_code
+            process.stdout = None
+            process.stderr = None
         return updated
 
     def read_logs(self, background_id: str, *, tail: int | None = None) -> str:
@@ -350,14 +360,69 @@ def build_background_worker_command(
     ]
 
 
+def _terminate_process(
+    pid: int,
+    *,
+    process: subprocess.Popen[Any] | None = None,
+) -> None:
+    if pid <= 0:
+        return
+    if os.name == 'nt':
+        result = _run_windows_process_command(
+            ['taskkill', '/PID', str(pid), '/T', '/F']
+        )
+        if result.returncode == 0:
+            return
+        if process is not None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (AttributeError, OSError):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def _is_process_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    process = _DETACHED_PROCESSES.get(pid)
+    if process is not None:
+        return process.poll() is None
+    if os.name == 'nt':
+        result = _run_windows_process_command(
+            ['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV', '/NH']
+        )
+        if result.returncode != 0:
+            return False
+        return f'"{pid}"' in result.stdout
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
+
+
+def _run_windows_process_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    kwargs: dict[str, Any] = {
+        'capture_output': True,
+        'text': True,
+        'check': False,
+    }
+    if os.name == 'nt' and _WINDOWS_NO_WINDOW:
+        kwargs['creationflags'] = _WINDOWS_NO_WINDOW
+    return subprocess.run(command, **kwargs)
+
+
+def _killed_exit_code() -> int:
+    if os.name == 'nt':
+        return 1
+    return -signal.SIGTERM
 
 
 def _utc_now() -> str:

@@ -24,6 +24,7 @@ from .bootstrap_graph import build_bootstrap_graph
 from .command_graph import build_command_graph
 from .commands import execute_command, get_command, get_commands, render_command_index
 from .config_runtime import ConfigRuntime
+from .doctor_runtime import run_doctor
 from .lsp_runtime import LSPRuntime
 from .mcp_runtime import MCPRuntime
 from .parity_audit import run_parity_audit
@@ -264,6 +265,135 @@ def _add_agent_resume_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--response-schema-name')
     parser.add_argument('--response-schema-strict', action='store_true')
     parser.add_argument('--scratchpad-root')
+
+
+def _add_internal_surface_parsers(subparsers, *, hidden: bool) -> None:
+    def _help(text: str) -> str:
+        return argparse.SUPPRESS if hidden else text
+
+    subparsers.add_parser('summary', help=_help('render a Markdown summary of the porting workspace'))
+    subparsers.add_parser('manifest', help=_help('print the current workspace manifest'))
+    subparsers.add_parser(
+        'parity-audit',
+        help=_help('compare the Python workspace against the local ignored TypeScript archive when available'),
+    )
+    subparsers.add_parser('setup-report', help=_help('render the startup and prefetch setup report'))
+    subparsers.add_parser('command-graph', help=_help('show command graph segmentation'))
+    subparsers.add_parser('tool-pool', help=_help('show the assembled tool pool with default settings'))
+    subparsers.add_parser(
+        'bootstrap-graph',
+        help=_help('show the mirrored bootstrap and runtime graph stages'),
+    )
+
+    list_parser = subparsers.add_parser(
+        'subsystems',
+        help=_help('list the current Python modules in the workspace'),
+    )
+    list_parser.add_argument('--limit', type=int, default=32)
+
+    commands_parser = subparsers.add_parser(
+        'commands',
+        help=_help('list mirrored command entries from the archived snapshot'),
+    )
+    commands_parser.add_argument('--limit', type=int, default=20)
+    commands_parser.add_argument('--query')
+    commands_parser.add_argument('--no-plugin-commands', action='store_true')
+    commands_parser.add_argument('--no-skill-commands', action='store_true')
+
+    tools_parser = subparsers.add_parser(
+        'tools',
+        help=_help('list mirrored tool entries from the archived snapshot'),
+    )
+    tools_parser.add_argument('--limit', type=int, default=20)
+    tools_parser.add_argument('--query')
+    tools_parser.add_argument('--simple-mode', action='store_true')
+    tools_parser.add_argument('--no-mcp', action='store_true')
+    tools_parser.add_argument('--deny-tool', action='append', default=[])
+    tools_parser.add_argument('--deny-prefix', action='append', default=[])
+
+    route_parser = subparsers.add_parser(
+        'route',
+        help=_help('route a prompt across mirrored command and tool inventories'),
+    )
+    route_parser.add_argument('prompt')
+    route_parser.add_argument('--limit', type=int, default=5)
+
+    bootstrap_parser = subparsers.add_parser(
+        'bootstrap',
+        help=_help('build a runtime-style session report from the mirrored inventories'),
+    )
+    bootstrap_parser.add_argument('prompt')
+    bootstrap_parser.add_argument('--limit', type=int, default=5)
+
+    loop_parser = subparsers.add_parser(
+        'turn-loop',
+        help=_help('run a small stateful turn loop for the mirrored runtime'),
+    )
+    loop_parser.add_argument('prompt')
+    loop_parser.add_argument('--limit', type=int, default=5)
+    loop_parser.add_argument('--max-turns', type=int, default=3)
+    loop_parser.add_argument('--structured-output', action='store_true')
+
+    flush_parser = subparsers.add_parser(
+        'flush-transcript',
+        help=_help('persist and flush a temporary session transcript'),
+    )
+    flush_parser.add_argument('prompt')
+
+    load_session_parser = subparsers.add_parser(
+        'load-session',
+        help=_help('load a previously persisted session'),
+    )
+    load_session_parser.add_argument('session_id')
+
+    for name, help_text in (
+        ('remote-mode', 'simulate remote-control runtime branching'),
+        ('ssh-mode', 'simulate SSH runtime branching'),
+        ('teleport-mode', 'simulate teleport runtime branching'),
+        ('direct-connect-mode', 'simulate direct-connect runtime branching'),
+        ('deep-link-mode', 'simulate deep-link runtime branching'),
+    ):
+        parser = subparsers.add_parser(name, help=_help(help_text))
+        parser.add_argument('target')
+        parser.add_argument('--cwd', default='.')
+
+    show_command = subparsers.add_parser(
+        'show-command',
+        help=_help('show one mirrored command entry by exact name'),
+    )
+    show_command.add_argument('name')
+
+    show_tool = subparsers.add_parser(
+        'show-tool',
+        help=_help('show one mirrored tool entry by exact name'),
+    )
+    show_tool.add_argument('name')
+
+    exec_command_parser = subparsers.add_parser(
+        'exec-command',
+        help=_help('execute a mirrored command shim by exact name'),
+    )
+    exec_command_parser.add_argument('name')
+    exec_command_parser.add_argument('prompt')
+
+    exec_tool_parser = subparsers.add_parser(
+        'exec-tool',
+        help=_help('execute a mirrored tool shim by exact name'),
+    )
+    exec_tool_parser.add_argument('name')
+    exec_tool_parser.add_argument('payload')
+
+
+def _hide_suppressed_subparser_actions(subparsers) -> None:
+    visible_actions = [
+        action
+        for action in getattr(subparsers, '_choices_actions', [])
+        if action.help != argparse.SUPPRESS
+    ]
+    subparsers._choices_actions = visible_actions
+    visible_names = [action.dest for action in visible_actions if isinstance(action.dest, str)]
+    if visible_names:
+        subparsers.metavar = '{' + ','.join(visible_names) + '}'
 
 
 def _launch_background_agent(args: argparse.Namespace) -> int:
@@ -818,68 +948,26 @@ def _run_agent_chat_loop(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Python porting workspace for the Claude Code rewrite effort')
+    parser = argparse.ArgumentParser(description='Local coding agent with runtime and developer utilities')
     subparsers = parser.add_subparsers(dest='command', required=True)
-    subparsers.add_parser('summary', help='render a Markdown summary of the Python porting workspace')
-    subparsers.add_parser('manifest', help='print the current Python workspace manifest')
-    subparsers.add_parser('parity-audit', help='compare the Python workspace against the local ignored TypeScript archive when available')
-    subparsers.add_parser('setup-report', help='render the startup/prefetch setup report')
-    subparsers.add_parser('command-graph', help='show command graph segmentation')
-    subparsers.add_parser('tool-pool', help='show assembled tool pool with default settings')
-    subparsers.add_parser('bootstrap-graph', help='show the mirrored bootstrap/runtime graph stages')
+    _add_internal_surface_parsers(subparsers, hidden=True)
 
-    list_parser = subparsers.add_parser('subsystems', help='list the current Python modules in the workspace')
-    list_parser.add_argument('--limit', type=int, default=32)
+    doctor_parser = subparsers.add_parser(
+        'doctor',
+        help='check workspace, backend, and optional UI readiness',
+    )
+    doctor_parser.add_argument('--model', default=os.environ.get('OPENAI_MODEL', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'))
+    doctor_parser.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1'))
+    doctor_parser.add_argument('--api-key', default=os.environ.get('OPENAI_API_KEY', 'local-token'))
+    doctor_parser.add_argument('--timeout-seconds', type=float, default=15.0)
+    doctor_parser.add_argument('--cwd', default='.')
+    doctor_parser.add_argument('--skip-backend', action='store_true')
+    doctor_parser.add_argument('--skip-tui', action='store_true')
 
-    commands_parser = subparsers.add_parser('commands', help='list mirrored command entries from the archived snapshot')
-    commands_parser.add_argument('--limit', type=int, default=20)
-    commands_parser.add_argument('--query')
-    commands_parser.add_argument('--no-plugin-commands', action='store_true')
-    commands_parser.add_argument('--no-skill-commands', action='store_true')
-
-    tools_parser = subparsers.add_parser('tools', help='list mirrored tool entries from the archived snapshot')
-    tools_parser.add_argument('--limit', type=int, default=20)
-    tools_parser.add_argument('--query')
-    tools_parser.add_argument('--simple-mode', action='store_true')
-    tools_parser.add_argument('--no-mcp', action='store_true')
-    tools_parser.add_argument('--deny-tool', action='append', default=[])
-    tools_parser.add_argument('--deny-prefix', action='append', default=[])
-
-    route_parser = subparsers.add_parser('route', help='route a prompt across mirrored command/tool inventories')
-    route_parser.add_argument('prompt')
-    route_parser.add_argument('--limit', type=int, default=5)
-
-    bootstrap_parser = subparsers.add_parser('bootstrap', help='build a runtime-style session report from the mirrored inventories')
-    bootstrap_parser.add_argument('prompt')
-    bootstrap_parser.add_argument('--limit', type=int, default=5)
-
-    loop_parser = subparsers.add_parser('turn-loop', help='run a small stateful turn loop for the mirrored runtime')
-    loop_parser.add_argument('prompt')
-    loop_parser.add_argument('--limit', type=int, default=5)
-    loop_parser.add_argument('--max-turns', type=int, default=3)
-    loop_parser.add_argument('--structured-output', action='store_true')
-
-    flush_parser = subparsers.add_parser('flush-transcript', help='persist and flush a temporary session transcript')
-    flush_parser.add_argument('prompt')
-
-    load_session_parser = subparsers.add_parser('load-session', help='load a previously persisted session')
-    load_session_parser.add_argument('session_id')
-
-    remote_parser = subparsers.add_parser('remote-mode', help='simulate remote-control runtime branching')
-    remote_parser.add_argument('target')
-    remote_parser.add_argument('--cwd', default='.')
-    ssh_parser = subparsers.add_parser('ssh-mode', help='simulate SSH runtime branching')
-    ssh_parser.add_argument('target')
-    ssh_parser.add_argument('--cwd', default='.')
-    teleport_parser = subparsers.add_parser('teleport-mode', help='simulate teleport runtime branching')
-    teleport_parser.add_argument('target')
-    teleport_parser.add_argument('--cwd', default='.')
-    direct_parser = subparsers.add_parser('direct-connect-mode', help='simulate direct-connect runtime branching')
-    direct_parser.add_argument('target')
-    direct_parser.add_argument('--cwd', default='.')
-    deep_link_parser = subparsers.add_parser('deep-link-mode', help='simulate deep-link runtime branching')
-    deep_link_parser.add_argument('target')
-    deep_link_parser.add_argument('--cwd', default='.')
+    dev_parser = subparsers.add_parser('dev', help='developer and porting utilities')
+    dev_subparsers = dev_parser.add_subparsers(dest='dev_command')
+    dev_subparsers.required = True
+    _add_internal_surface_parsers(dev_subparsers, hidden=False)
     remote_status_parser = subparsers.add_parser('remote-status', help='show local remote runtime status')
     remote_status_parser.add_argument('--cwd', default='.')
     remote_profiles_parser = subparsers.add_parser('remote-profiles', help='list configured local remote profiles')
@@ -1053,19 +1141,6 @@ def build_parser() -> argparse.ArgumentParser:
     team_messages_parser.add_argument('--team-name')
     team_messages_parser.add_argument('--cwd', default='.')
 
-    show_command = subparsers.add_parser('show-command', help='show one mirrored command entry by exact name')
-    show_command.add_argument('name')
-    show_tool = subparsers.add_parser('show-tool', help='show one mirrored tool entry by exact name')
-    show_tool.add_argument('name')
-
-    exec_command_parser = subparsers.add_parser('exec-command', help='execute a mirrored command shim by exact name')
-    exec_command_parser.add_argument('name')
-    exec_command_parser.add_argument('prompt')
-
-    exec_tool_parser = subparsers.add_parser('exec-tool', help='execute a mirrored tool shim by exact name')
-    exec_tool_parser.add_argument('name')
-    exec_tool_parser.add_argument('payload')
-
     agent_parser = subparsers.add_parser('agent', help='run the real Python local-model agent')
     agent_parser.add_argument('prompt')
     agent_parser.add_argument('--max-turns', type=int, default=12)
@@ -1159,13 +1234,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     token_budget_parser = subparsers.add_parser('token-budget', help='render the current token budget and prompt-length limits')
     _add_agent_common_args(token_budget_parser, include_backend=False)
+    _hide_suppressed_subparser_actions(subparsers)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == 'dev':
+        args.command = args.dev_command
     manifest = build_port_manifest()
+
+    if args.command == 'doctor':
+        report = run_doctor(
+            model_config=ModelConfig(
+                model=args.model,
+                base_url=args.base_url,
+                api_key=args.api_key,
+                timeout_seconds=args.timeout_seconds,
+            ),
+            runtime_config=AgentRuntimeConfig(cwd=Path(args.cwd).resolve()),
+            check_backend=not args.skip_backend,
+            check_tui=not args.skip_tui,
+        )
+        print(report.as_text())
+        return 1 if report.has_failures else 0
 
     if args.command == 'summary':
         print(QueryEnginePort(manifest).render_summary())

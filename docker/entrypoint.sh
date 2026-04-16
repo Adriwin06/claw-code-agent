@@ -17,7 +17,7 @@ AGENT_CWD="${AGENT_CWD:-/workspace}"
 AGENT_READ_ONLY="${AGENT_READ_ONLY:-false}"
 
 case "$AGENT_COMMAND" in
-  agent|agent-bg|agent-chat|agent-tui|agent-prompt|agent-context|agent-context-raw|token-budget)
+  agent|agent-bg|agent-chat|agent-tui|agent-prompt|agent-context|agent-context-raw|token-budget|doctor)
     ;;
   *)
     echo "Unsupported AGENT_COMMAND: $AGENT_COMMAND" >&2
@@ -40,18 +40,27 @@ if [[ -n "${OPENAI_MODEL:-}" ]]; then
   cmd+=(--model "$OPENAI_MODEL")
 fi
 
-if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" || "$AGENT_COMMAND" == "agent-tui" ]]; then
+if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" || "$AGENT_COMMAND" == "agent-tui" || "$AGENT_COMMAND" == "doctor" ]]; then
   if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
     cmd+=(--base-url "$OPENAI_BASE_URL")
   fi
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     cmd+=(--api-key "$OPENAI_API_KEY")
   fi
-  if [[ -n "${AGENT_TEMPERATURE:-}" ]]; then
+  if [[ "$AGENT_COMMAND" != "doctor" && -n "${AGENT_TEMPERATURE:-}" ]]; then
     cmd+=(--temperature "$AGENT_TEMPERATURE")
   fi
   if [[ -n "${AGENT_TIMEOUT_SECONDS:-}" ]]; then
     cmd+=(--timeout-seconds "$AGENT_TIMEOUT_SECONDS")
+  fi
+fi
+
+if [[ "$AGENT_COMMAND" == "doctor" ]]; then
+  if bool_true "${AGENT_SKIP_BACKEND:-false}"; then
+    cmd+=(--skip-backend)
+  fi
+  if bool_true "${AGENT_SKIP_TUI:-false}"; then
+    cmd+=(--skip-tui)
   fi
 fi
 

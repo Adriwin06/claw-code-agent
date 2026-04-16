@@ -1,1 +1,5 @@
-docker compose run --build --rm -e AGENT_COMMAND=agent-tui claw-agent
+@echo off
+setlocal
+
+call "%~dp0launch-workspace.bat"
+exit /b %errorlevel%
