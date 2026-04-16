@@ -239,8 +239,17 @@ def get_mcp_guidance_section(prompt_context: PromptContext) -> str:
         'Local MCP manifests may expose additional resources and transport-backed tools through the runtime.',
         'Use MCP resource tools when the task depends on manifest-backed external context or curated workspace resources.',
         'Use MCP transport tools when a configured MCP server exposes real callable tools that should stay outside the local Python tool registry.',
+        'Server names from MCP manifests are exact. When a tool call specifies server=..., use the configured server name exactly as shown in the MCP runtime summary.',
         'Treat MCP resource and tool summaries as discoverability hints and prefer reading a specific resource URI or calling a specific MCP tool before relying on its contents.',
     ]
+    if 'sagemath' in mcp_runtime.lower():
+        items.extend(
+            [
+                'When using the sagemath MCP server, evaluate_expression does not accept separate variable bindings such as x=123 as a standalone argument.',
+                'For SageMath numeric evaluation at a specific point, substitute inside the expression itself, for example ((sin(x) * e^(x/2)) / (sqrt(x) + cos(x))).subs(x=1573890), and pass numeric=true.',
+                'If a SageMath expression still contains a free variable like x, expect a symbolic result or a numeric-evaluation error instead of a final number.',
+            ]
+        )
     return '\n'.join(['# MCP', *prepend_bullets(items)])
 
 

@@ -14,6 +14,7 @@ bool_true() {
 
 AGENT_COMMAND="${AGENT_COMMAND:-agent-chat}"
 AGENT_CWD="${AGENT_CWD:-/workspace}"
+AGENT_READ_ONLY="${AGENT_READ_ONLY:-false}"
 
 case "$AGENT_COMMAND" in
   agent|agent-bg|agent-chat|agent-tui|agent-prompt|agent-context|agent-context-raw|token-budget)
@@ -69,14 +70,16 @@ fi
 if bool_true "${AGENT_DISABLE_CLAUDE_MD:-false}"; then
   cmd+=(--disable-claude-md)
 fi
-if bool_true "${AGENT_ALLOW_WRITE:-false}"; then
-  cmd+=(--allow-write)
-fi
-if bool_true "${AGENT_ALLOW_SHELL:-false}"; then
-  cmd+=(--allow-shell)
-fi
-if bool_true "${AGENT_UNSAFE:-false}"; then
-  cmd+=(--unsafe)
+if ! bool_true "${AGENT_READ_ONLY}"; then
+  if bool_true "${AGENT_ALLOW_WRITE:-false}"; then
+    cmd+=(--allow-write)
+  fi
+  if bool_true "${AGENT_ALLOW_SHELL:-false}"; then
+    cmd+=(--allow-shell)
+  fi
+  if bool_true "${AGENT_UNSAFE:-false}"; then
+    cmd+=(--unsafe)
+  fi
 fi
 if bool_true "${AGENT_STREAM:-false}"; then
   cmd+=(--stream)

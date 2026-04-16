@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.agent_prompting import build_prompt_context, build_system_prompt_parts, render_system_prompt
 from src.plan_runtime import PlanRuntime
@@ -124,6 +125,32 @@ class AgentPromptingTests(unittest.TestCase):
 
         prompt = render_system_prompt(parts)
         self.assertIn('# MCP', prompt)
+
+    def test_prompt_builder_includes_sagemath_usage_guidance_when_server_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.claw-mcp.json').write_text(
+                (
+                    '{"mcpServers":{"sagemath":{"transport":"streamable-http",'
+                    '"url":"${SAGEMATH_MCP_URL}"}}}'
+                ),
+                encoding='utf-8',
+            )
+            runtime_config = AgentRuntimeConfig(cwd=workspace)
+            model_config = ModelConfig(model='Qwen/Qwen3-Coder-30B-A3B-Instruct')
+            with patch.dict('os.environ', {'SAGEMATH_MCP_URL': 'http://127.0.0.1:18000/mcp'}, clear=False):
+                prompt_context = build_prompt_context(runtime_config, model_config)
+                parts = build_system_prompt_parts(
+                    prompt_context=prompt_context,
+                    runtime_config=runtime_config,
+                    tools=default_tool_registry(),
+                )
+
+        prompt = render_system_prompt(parts)
+        self.assertIn('Server names from MCP manifests are exact.', prompt)
+        self.assertIn('evaluate_expression does not accept separate variable bindings', prompt)
+        self.assertIn('numeric=true', prompt)
+        self.assertIn('.subs(x=1573890)', prompt)
 
     def test_prompt_builder_mentions_search_when_runtime_is_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

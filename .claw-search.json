@@ -1,0 +1,10 @@
+{
+  "providers": [
+    {
+      "name": "searxng",
+      "provider": "searxng",
+      "baseUrl": "${SEARXNG_BASE_URL}",
+      "description": "Optional workspace web search provider for the web_search tool."
+    }
+  ]
+}

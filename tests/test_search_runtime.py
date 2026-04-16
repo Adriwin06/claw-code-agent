@@ -56,6 +56,33 @@ class SearchRuntimeTests(unittest.TestCase):
         self.assertEqual(provider.name, 'searxng')
         self.assertEqual(provider.base_url, 'http://127.0.0.1:8888')
 
+    def test_search_runtime_expands_manifest_base_url_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.claw-search.json').write_text(
+                '{"providers":[{"name":"workspace-search","provider":"searxng","baseUrl":"${SEARCH_BASE_URL}"}]}',
+                encoding='utf-8',
+            )
+            with patch.dict('os.environ', {'SEARCH_BASE_URL': 'http://127.0.0.1:9999'}, clear=False):
+                runtime = SearchRuntime.from_workspace(workspace)
+
+        provider = runtime.current_provider()
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider.name, 'workspace-search')
+        self.assertEqual(provider.base_url, 'http://127.0.0.1:9999')
+
+    def test_search_runtime_skips_manifest_provider_with_unresolved_env_base_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.claw-search.json').write_text(
+                '{"providers":[{"name":"workspace-search","provider":"searxng","baseUrl":"${SEARCH_BASE_URL}"}]}',
+                encoding='utf-8',
+            )
+            with patch.dict('os.environ', {}, clear=True):
+                runtime = SearchRuntime.from_workspace(workspace)
+
+        self.assertEqual(runtime.providers, ())
+
     def test_search_runtime_parses_searxng_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)

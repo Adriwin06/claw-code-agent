@@ -336,6 +336,9 @@ OPENAI_MODEL=gemma4:e4b
 SAGEMATH_IMAGE=sagemath/sagemath:latest
 SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
 AGENT_COMMAND=agent-tui
+HOST_WORKSPACE_DIR=.
+AGENT_CWD=/workspace
+AGENT_READ_ONLY=true
 AGENT_ALLOW_WRITE=false
 AGENT_ALLOW_SHELL=false
 AGENT_STREAM=true
@@ -348,6 +351,15 @@ docker compose up -d sagemath
 docker compose run --rm claw-agent
 ```
 
+To launch against another host folder, set `HOST_WORKSPACE_DIR` before starting the agent:
+
+```bash
+HOST_WORKSPACE_DIR=C:/Users/me/projects/demo \
+AGENT_CWD=/workspace \
+AGENT_READ_ONLY=true \
+docker compose run --rm claw-agent
+```
+
 You can verify that the Dockerized SageMath MCP server is visible from the agent runtime:
 
 ```bash
@@ -355,13 +367,27 @@ python3 -m src.main mcp-status --cwd .
 python3 -m src.main mcp-tools --cwd .
 ```
 
+Optional web search setup:
+
+```bash
+export SEARXNG_BASE_URL=http://127.0.0.1:8080
+python3 -m src.main search-status --cwd .
+python3 -m src.main search "latest python release" --cwd .
+```
+
 Notes:
 
 - the default `.env` targets a local Ollama server running on the host machine
 - `host.docker.internal` is prewired in `docker-compose.yml` so the container can reach host Ollama
+- set `HOST_WORKSPACE_DIR` to mount a different host folder into the container
+- set `AGENT_CWD` to choose the starting folder inside that mounted workspace
 - the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that activates the SageMath MCP server when `SAGEMATH_MCP_URL` is set
+- the repo includes a root-level [`.claw-search.json`](.claw-search.json) manifest that activates the `web_search` tool when `SEARXNG_BASE_URL` is set
 - inside Docker Compose, `claw-agent` talks to SageMath over the internal service URL `http://sagemath:8000/mcp`
 - from the host machine, the default example value uses the published port `http://127.0.0.1:18000/mcp`
+- for Dockerized agent runs that need a search provider on the host machine, prefer `SEARXNG_BASE_URL=http://host.docker.internal:8080`
+- set `AGENT_READ_ONLY=true` to force read-only mode; when it is true, the write/shell/unsafe flags are ignored
+- set `AGENT_ALLOW_WRITE`, `AGENT_ALLOW_SHELL`, and `AGENT_UNSAFE` as needed when `AGENT_READ_ONLY=false`
 - set `AGENT_COMMAND=agent-chat` if you want the plain REPL instead of the Textual UI
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream

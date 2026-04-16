@@ -41,4 +41,6 @@ services:
       sagemath:
         condition: service_healthy
     volumes:
-      - .:/workspace
+      - type: bind
+        source: ${HOST_WORKSPACE_DIR:-.}
+        target: /workspace
