@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -104,6 +105,30 @@ class AgentContextTests(unittest.TestCase):
 
         self.assertIn('mcpRuntime', snapshot.user_context)
         self.assertIn('Local MCP resources: 1', snapshot.user_context['mcpRuntime'])
+
+    def test_user_context_loads_mcp_runtime_summary_for_server_only_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir) / 'repo'
+            workspace.mkdir(parents=True)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote-http': {
+                                'transport': 'streamable-http',
+                                'url': '${MCP_TEST_URL}',
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with patch.dict('os.environ', {'MCP_TEST_URL': 'http://127.0.0.1:18000/mcp'}, clear=False):
+                snapshot = build_context_snapshot(AgentRuntimeConfig(cwd=workspace))
+
+        self.assertIn('mcpRuntime', snapshot.user_context)
+        self.assertIn('Configured MCP servers: 1', snapshot.user_context['mcpRuntime'])
 
     def test_user_context_loads_search_runtime_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

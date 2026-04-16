@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,16 +11,71 @@ from src.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig
 from src.textual_ui import (
     AgentTuiEventBridge,
     AgentTuiState,
+    ConversationEntry,
+    ConversationTurn,
+    build_working_section_id,
+    build_working_section_instance_id,
     build_slash_command_suggestions,
     build_conversation_history_items,
     extract_slash_command_query,
     filter_slash_command_suggestions,
     render_slash_command_suggestion_detail,
     restore_conversation_turns,
+    should_route_key_to_prompt,
 )
 
 
+try:
+    TEXTUAL_AVAILABLE = importlib.util.find_spec('textual.app') is not None
+except ModuleNotFoundError:
+    TEXTUAL_AVAILABLE = False
+
+
 class TextualUiTests(unittest.TestCase):
+    def test_build_working_section_id_uses_textual_safe_identifier(self) -> None:
+        identifier = build_working_section_id('conversation-1', 'turn-1')
+
+        self.assertEqual(identifier, 'working-conversation-1-turn-1')
+        self.assertNotIn(':', identifier)
+
+    def test_build_working_section_instance_id_adds_section_suffix_only_when_needed(self) -> None:
+        single_section = build_working_section_instance_id(
+            'conversation-1',
+            'turn-1',
+            section_index=1,
+            section_count=1,
+        )
+        multi_section = build_working_section_instance_id(
+            'conversation-1',
+            'turn-1',
+            section_index=2,
+            section_count=2,
+        )
+
+        self.assertEqual(single_section, 'working-conversation-1-turn-1')
+        self.assertEqual(multi_section, 'working-conversation-1-turn-1-section-2')
+        self.assertNotIn(':', multi_section)
+
+    def test_should_route_key_to_prompt_only_for_printable_chars_when_prompt_unfocused(self) -> None:
+        self.assertTrue(
+            should_route_key_to_prompt(character='a', prompt_focused=False, busy=False)
+        )
+        self.assertTrue(
+            should_route_key_to_prompt(character='/', prompt_focused=False, busy=False)
+        )
+        self.assertFalse(
+            should_route_key_to_prompt(character=None, prompt_focused=False, busy=False)
+        )
+        self.assertFalse(
+            should_route_key_to_prompt(character='\n', prompt_focused=False, busy=False)
+        )
+        self.assertFalse(
+            should_route_key_to_prompt(character='a', prompt_focused=True, busy=False)
+        )
+        self.assertFalse(
+            should_route_key_to_prompt(character='a', prompt_focused=False, busy=True)
+        )
+
     def test_extract_slash_command_query_only_matches_active_command_token(self) -> None:
         self.assertEqual(extract_slash_command_query('/con'), 'con')
         self.assertEqual(extract_slash_command_query('   /config'), 'config')
@@ -230,6 +287,199 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(bridge.turns[0].assistant_response, 'Restored answer')
         self.assertEqual(bridge.turns[0].entries[0].kind, 'assistant')
         self.assertEqual(bridge.activity_items[0].label, 'Conversation restored')
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_prompt_accepts_typing_when_idle(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(agent)
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                prompt = app.query_one('#prompt')
+                self.assertFalse(prompt.disabled)
+                await pilot.press('a', 'b')
+                self.assertEqual(prompt.value, 'ab')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_chat_layout_keeps_markdown_inside_turn_card_and_scrolls(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(agent)
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                for command in ('/help', '/config', '/mcp', '/skills'):
+                    await pilot.click('#prompt')
+                    await pilot.press(*list(command), 'enter')
+                    await pilot.pause(0.2)
+
+                turn_cards = list(app.query('.turn-card'))
+                self.assertGreaterEqual(len(turn_cards), 4)
+
+                first_card = turn_cards[0]
+                assistant = app.query_one('.turn-assistant')
+                self.assertLessEqual(assistant.region.bottom, first_card.region.bottom)
+
+                scroll = app.query_one('#conversation-scroll')
+                self.assertGreater(getattr(scroll, 'max_scroll_y', 0), 0)
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_can_create_and_navigate_conversations(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(agent)
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                await pilot.click('#new-conversation-button')
+                await pilot.pause(0.2)
+
+                self.assertEqual(app._active_conversation_id, 'conversation-2')
+                self.assertEqual(len(app._conversations), 2)
+
+                app.action_previous_conversation()
+                await pilot.pause(0.2)
+                self.assertEqual(app._active_conversation_id, 'conversation-1')
+
+                app.action_next_conversation()
+                await pilot.pause(0.2)
+                self.assertEqual(app._active_conversation_id, 'conversation-2')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_renders_split_working_sections_with_unique_ids(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(agent)
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                app._conversations[0].turns = (
+                    ConversationTurn(
+                        turn_id='turn-1',
+                        user_prompt='Reproduce duplicate working sections',
+                        assistant_response='Done.',
+                        assistant_status='Ready',
+                        phase_label='Completed',
+                        tool_count=1,
+                        entries=[
+                            ConversationEntry(
+                                entry_id='turn-1-entry-1',
+                                kind='thinking',
+                                title='Thinking',
+                                content='Planning the tool call.',
+                            ),
+                            ConversationEntry(
+                                entry_id='turn-1-entry-2',
+                                kind='assistant',
+                                title='Assistant',
+                                content='Done.',
+                                status='ok',
+                            ),
+                            ConversationEntry(
+                                entry_id='turn-1-entry-3',
+                                kind='tool_result',
+                                title='Tool Result',
+                                content='[tool] bash ok=True',
+                                status='ok',
+                            ),
+                        ],
+                    ),
+                )
+                app._switch_to_conversation('conversation-1')
+                await pilot.pause(0.2)
+
+                working_sections = list(app.query('.turn-working'))
+                working_ids = {widget.id for widget in working_sections}
+
+                self.assertEqual(len(working_sections), 2)
+                self.assertEqual(
+                    working_ids,
+                    {
+                        'working-conversation-1-turn-1-section-1',
+                        'working-conversation-1-turn-1-section-2',
+                    },
+                )
+
+        asyncio.run(exercise())
 
 
 if __name__ == '__main__':

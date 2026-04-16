@@ -117,6 +117,36 @@ def render_slash_command_suggestion_detail(suggestion: SlashCommandSuggestion) -
     return '\n'.join(lines)
 
 
+def should_route_key_to_prompt(
+    *,
+    character: str | None,
+    prompt_focused: bool,
+    busy: bool,
+) -> bool:
+    if busy or prompt_focused:
+        return False
+    if not isinstance(character, str) or len(character) != 1:
+        return False
+    return character.isprintable()
+
+
+def build_working_section_id(conversation_id: str, turn_id: str) -> str:
+    return f'working-{conversation_id}-{turn_id}'
+
+
+def build_working_section_instance_id(
+    conversation_id: str,
+    turn_id: str,
+    *,
+    section_index: int,
+    section_count: int,
+) -> str:
+    base_id = build_working_section_id(conversation_id, turn_id)
+    if section_count <= 1:
+        return base_id
+    return f'{base_id}-section-{section_index}'
+
+
 @dataclass
 class ConversationTurn:
     turn_id: str
@@ -146,6 +176,24 @@ class ConversationHistoryItem:
     prompt_preview: str
     assistant_preview: str
     status: str
+
+
+@dataclass
+class ConversationThread:
+    conversation_id: str
+    title: str
+    turns: tuple[ConversationTurn, ...] = ()
+    session_id: str | None = None
+    expanded: bool = True
+
+
+@dataclass(frozen=True)
+class SidebarItem:
+    option_id: str
+    label: str
+    kind: str
+    conversation_id: str
+    turn_id: str | None = None
 
 
 @dataclass
@@ -406,6 +454,8 @@ class AgentTuiEventBridge:
     def restore_history(
         self,
         turns: Sequence[ConversationTurn],
+        *,
+        announce_activity: bool = True,
     ) -> None:
         self._turns = [
             ConversationTurn(
@@ -434,7 +484,7 @@ class AgentTuiEventBridge:
         ]
         self._active_turn_id = self._turns[-1].turn_id if self._turns else None
         self.state.conversation_turns = len(self._turns)
-        if turns:
+        if turns and announce_activity:
             self._upsert_activity(
                 'history',
                 label='Conversation restored',
@@ -442,7 +492,8 @@ class AgentTuiEventBridge:
                 status='info',
             )
         self._publish_turns()
-        self._publish_activity()
+        if announce_activity:
+            self._publish_activity()
         self._publish_state()
 
     def begin_prompt(self, prompt: str, *, session_id: str | None = None) -> None:
@@ -1189,7 +1240,6 @@ def run_agent_tui(
     resume_session_id: str | None = None,
 ) -> int:
     try:
-        from rich.markdown import Markdown as RichMarkdown
         from textual import events, work
         from textual.app import App, ComposeResult
         from textual.containers import Horizontal, Vertical
@@ -1197,7 +1247,16 @@ def run_agent_tui(
             from textual.containers import VerticalScroll
         except ImportError:
             from textual.containers import ScrollableContainer as VerticalScroll
-        from textual.widgets import Collapsible, Footer, Header, Input, OptionList, Static
+        from textual.widgets import (
+            Button,
+            Collapsible,
+            Footer,
+            Header,
+            Input,
+            Markdown as TextualMarkdown,
+            OptionList,
+            Static,
+        )
         from textual.widgets.option_list import Option
     except ImportError as exc:  # pragma: no cover - exercised at runtime
         raise RuntimeError(
@@ -1210,6 +1269,7 @@ def run_agent_tui(
             self,
             turn: ConversationTurn,
             *,
+            conversation_id: str,
             turn_index: int,
             selected: bool,
             active: bool,
@@ -1217,10 +1277,12 @@ def run_agent_tui(
             phase: str,
             phase_detail: str,
             spinner_index: int,
+            collapsed_sections: dict[str, bool],
         ) -> None:
             classes = 'turn-card selected' if selected else 'turn-card'
             super().__init__(classes=classes)
             self._turn = turn
+            self._conversation_id = conversation_id
             self._turn_index = turn_index
             self._selected = selected
             self._active = active
@@ -1228,8 +1290,11 @@ def run_agent_tui(
             self._phase = phase
             self._phase_detail = phase_detail
             self._spinner_index = spinner_index
+            self._collapsed_sections = dict(collapsed_sections)
 
         def compose(self) -> ComposeResult:
+            working_section_count = self._working_section_count()
+            working_section_index = 0
             yield self._static_widget(
                 f'Turn {self._turn_index}',
                 classes='turn-title',
@@ -1243,8 +1308,11 @@ def run_agent_tui(
             for entry in self._turn.entries:
                 if entry.kind == 'assistant':
                     if work_entries:
+                        working_section_index += 1
                         yield from self._compose_working_section(
                             work_entries,
+                            section_index=working_section_index,
+                            section_count=working_section_count,
                             include_live_state=False,
                         )
                         work_entries = []
@@ -1256,8 +1324,11 @@ def run_agent_tui(
                     continue
                 work_entries.append(entry)
             if work_entries or (self._active and self._busy):
+                working_section_index += 1
                 yield from self._compose_working_section(
                     work_entries,
+                    section_index=working_section_index,
+                    section_count=working_section_count,
                     include_live_state=self._active and self._busy,
                 )
             if not rendered_assistant and not self._busy:
@@ -1274,19 +1345,42 @@ def run_agent_tui(
             self,
             entries: Sequence[ConversationEntry],
             *,
+            section_index: int,
+            section_count: int,
             include_live_state: bool,
         ):
             if not entries and not include_live_state:
                 return
             with self._collapsible_widget(
+                widget_id=self._working_section_id(
+                    section_index=section_index,
+                    section_count=section_count,
+                ),
                 title=self._working_title(entries, include_live_state=include_live_state),
-                collapsed=not include_live_state,
+                collapsed=self._working_collapsed(
+                    section_index=section_index,
+                    section_count=section_count,
+                ),
                 classes='turn-working',
             ):
                 yield self._markdown_widget(
                     self._working_markdown(entries, include_live_state=include_live_state),
                     classes='turn-working-body',
                 )
+
+        def _working_section_count(self) -> int:
+            count = 0
+            work_entries: list[ConversationEntry] = []
+            for entry in self._turn.entries:
+                if entry.kind == 'assistant':
+                    if work_entries:
+                        count += 1
+                        work_entries = []
+                    continue
+                work_entries.append(entry)
+            if work_entries or (self._active and self._busy):
+                count += 1
+            return count
 
         def _working_title(
             self,
@@ -1349,6 +1443,28 @@ def run_agent_tui(
                 return 'Status'
             return entry.title
 
+        def _working_section_id(self, *, section_index: int, section_count: int) -> str:
+            return build_working_section_instance_id(
+                self._conversation_id,
+                self._turn.turn_id,
+                section_index=section_index,
+                section_count=section_count,
+            )
+
+        def _working_collapsed(self, *, section_index: int, section_count: int) -> bool:
+            section_id = self._working_section_id(
+                section_index=section_index,
+                section_count=section_count,
+            )
+            collapsed = self._collapsed_sections.get(section_id)
+            if isinstance(collapsed, bool):
+                return collapsed
+            base_id = build_working_section_id(self._conversation_id, self._turn.turn_id)
+            base_collapsed = self._collapsed_sections.get(base_id)
+            if isinstance(base_collapsed, bool):
+                return base_collapsed
+            return not (self._active and self._busy)
+
         def _static_widget(self, content: str, *, classes: str | None = None) -> Static:
             widget = Static(content)
             if classes:
@@ -1356,8 +1472,8 @@ def run_agent_tui(
                     widget.add_class(class_name)
             return widget
 
-        def _markdown_widget(self, content: str, *, classes: str | None = None) -> Static:
-            widget = Static(RichMarkdown(content))
+        def _markdown_widget(self, content: str, *, classes: str | None = None) -> TextualMarkdown:
+            widget = TextualMarkdown(content)
             if classes:
                 for class_name in classes.split():
                     widget.add_class(class_name)
@@ -1366,11 +1482,14 @@ def run_agent_tui(
         def _collapsible_widget(
             self,
             *,
+            widget_id: str | None = None,
             title: str,
             collapsed: bool,
             classes: str | None = None,
         ) -> Collapsible:
             widget = Collapsible(title=title, collapsed=collapsed)
+            if widget_id is not None:
+                widget.id = widget_id
             if classes:
                 for class_name in classes.split():
                     widget.add_class(class_name)
@@ -1391,29 +1510,35 @@ def run_agent_tui(
     class ConversationFeed(Vertical):
         def __init__(self) -> None:
             super().__init__(id='conversation-feed')
+            self._conversation_id: str = 'conversation-0'
             self._turns: tuple[ConversationTurn, ...] = ()
             self._selected_turn_id: str | None = None
             self._state_phase: str = 'Idle'
             self._state_phase_detail: str = ''
             self._state_busy: bool = False
             self._spinner_index: int = 0
+            self._collapsed_sections: dict[str, bool] = {}
 
         def set_data(
             self,
             *,
+            conversation_id: str,
             turns: tuple[ConversationTurn, ...],
             selected_turn_id: str | None,
             phase: str,
             phase_detail: str,
             busy: bool,
             spinner_index: int,
+            collapsed_sections: dict[str, bool],
         ) -> None:
+            self._conversation_id = conversation_id
             self._turns = turns
             self._selected_turn_id = selected_turn_id
             self._state_phase = phase
             self._state_phase_detail = phase_detail
             self._state_busy = busy
             self._spinner_index = spinner_index
+            self._collapsed_sections = dict(collapsed_sections)
             self.refresh(recompose=True, layout=True)
 
         def compose(self) -> ComposeResult:
@@ -1426,6 +1551,7 @@ def run_agent_tui(
             for index, turn in enumerate(self._turns, start=1):
                 yield TurnCard(
                     turn,
+                    conversation_id=self._conversation_id,
                     turn_index=index,
                     selected=(turn.turn_id == self._selected_turn_id),
                     active=(turn.turn_id == last_turn_id),
@@ -1433,6 +1559,7 @@ def run_agent_tui(
                     phase=self._state_phase,
                     phase_detail=self._state_phase_detail,
                     spinner_index=self._spinner_index,
+                    collapsed_sections=self._collapsed_sections,
                 )
 
     class AgentTuiApp(App[None]):
@@ -1462,6 +1589,24 @@ def run_agent_tui(
             min-width: 24;
         }
 
+        #history-toolbar {
+            height: auto;
+            margin-bottom: 1;
+        }
+
+        #history-title {
+            width: 1fr;
+            color: #8b949e;
+            text-style: bold;
+            padding: 0 1;
+            content-align: left middle;
+        }
+
+        #new-conversation-button {
+            width: 9;
+            min-width: 8;
+        }
+
         #center-column {
             width: 1fr;
             min-width: 60;
@@ -1483,9 +1628,13 @@ def run_agent_tui(
             height: 1fr;
             border: round #2d3742;
             background: #081019;
+            overflow-y: auto;
         }
 
         #conversation-feed {
+            width: 1fr;
+            height: auto;
+            min-height: 100%;
             padding: 1 1 2 1;
         }
 
@@ -1495,6 +1644,8 @@ def run_agent_tui(
         }
 
         .turn-card {
+            width: 1fr;
+            height: auto;
             border: round #3b4b5c;
             margin-bottom: 1;
             padding: 0 1 1 1;
@@ -1511,33 +1662,45 @@ def run_agent_tui(
         }
 
         .turn-user {
+            width: 1fr;
+            height: auto;
             border: round #2f81f7;
             padding: 0 1;
             margin-bottom: 1;
         }
 
         .turn-assistant {
+            width: 1fr;
+            height: auto;
             border: round #3fb950;
             padding: 0 1;
             margin-bottom: 1;
         }
 
         .turn-empty {
+            width: 1fr;
+            height: auto;
             color: #8b949e;
             padding: 0 1;
             margin-bottom: 1;
         }
 
         .turn-footer {
+            width: 1fr;
+            height: auto;
             color: #8b949e;
             margin-top: 1;
         }
 
         .turn-working {
+            width: 1fr;
+            height: auto;
             margin-bottom: 1;
         }
 
         .turn-working-body {
+            width: 1fr;
+            height: auto;
             padding: 0 1;
         }
 
@@ -1571,7 +1734,10 @@ def run_agent_tui(
         }
         """
         BINDINGS = [
-            ('q', 'quit', 'Quit'),
+            ('ctrl+q', 'quit', 'Quit'),
+            ('ctrl+n', 'new_conversation', 'New'),
+            ('ctrl+pageup', 'previous_conversation', 'Prev'),
+            ('ctrl+pagedown', 'next_conversation', 'Next'),
             ('ctrl+j', 'focus_prompt', 'Prompt'),
             ('ctrl+r', 'refresh_panels', 'Refresh'),
             ('ctrl+f', 'toggle_auto_follow', 'Follow'),
@@ -1592,12 +1758,22 @@ def run_agent_tui(
             self._state = AgentTuiState.from_agent(runtime_agent)
             self._command_suggestions = build_slash_command_suggestions()
             self._visible_command_suggestions: list[SlashCommandSuggestion] = []
+            self._conversation_counter = 1
+            self._conversations: list[ConversationThread] = [
+                ConversationThread(
+                    conversation_id='conversation-1',
+                    title=('Resumed conversation' if resumed_session_id else 'Conversation 1'),
+                )
+            ]
+            self._active_conversation_id = 'conversation-1'
+            self._sidebar_items: tuple[SidebarItem, ...] = ()
             self._conversation_turns: tuple[ConversationTurn, ...] = ()
             self._history_items: tuple[ConversationHistoryItem, ...] = ()
             self._activity_items: tuple[ActivityItem, ...] = ()
             self._selected_turn_id: str | None = None
             self._auto_follow = True
             self._spinner_index = 0
+            self._collapsed_sections: dict[str, bool] = {}
             self._restored_session: StoredAgentSession | None = None
             if resumed_session_id:
                 try:
@@ -1609,19 +1785,16 @@ def run_agent_tui(
                     self._restored_session = None
                 else:
                     hydrate_state_from_stored_session(self._state, self._restored_session)
-            self._bridge = AgentTuiEventBridge(
-                self._state,
-                emit_data=lambda _text: None,
-                on_state_change=self._handle_state_change,
-                on_turns_change=self._handle_turns_change,
-                on_history_change=self._handle_history_change,
-                on_activity_change=self._handle_activity_change,
-            )
+                    self._conversations[0].session_id = resumed_session_id
+            self._bridge = self._make_bridge(self._state)
 
         def compose(self) -> ComposeResult:
             yield Header()
             with Horizontal(id='body'):
                 with Vertical(id='left-rail'):
+                    with Horizontal(id='history-toolbar'):
+                        yield Static('Conversations', id='history-title')
+                        yield Button('New', id='new-conversation-button')
                     yield OptionList(id='history-list')
                 with Vertical(id='center-column'):
                     with VerticalScroll(id='conversation-scroll'):
@@ -1644,7 +1817,7 @@ def run_agent_tui(
                 restored_turns = restore_conversation_turns(self._restored_session.messages)
                 self._bridge.restore_history(restored_turns)
             self._refresh_all_panels()
-            self.action_focus_prompt()
+            self.call_after_refresh(self.action_focus_prompt)
             if self._first_prompt:
                 self._submit_prompt(self._first_prompt)
 
@@ -1662,10 +1835,22 @@ def run_agent_tui(
             if prompt in {'/exit', '/quit'}:
                 self.exit()
                 return
+            lowered_prompt = prompt.lower()
+            if lowered_prompt in {'/new', '/new-chat', '/new-conversation'}:
+                self.action_new_conversation()
+                return
+            if lowered_prompt in {'/back', '/prev', '/previous'}:
+                self.action_previous_conversation()
+                return
+            if lowered_prompt in {'/next', '/forward'}:
+                self.action_next_conversation()
+                return
             self._submit_prompt(prompt)
 
         def on_key(self, event: events.Key) -> None:
             prompt = self.query_one('#prompt', Input)
+            if self._route_key_to_prompt(event, prompt):
+                return
             if self.focused is not prompt or not self._command_picker_visible:
                 return
             if event.key == 'down':
@@ -1693,6 +1878,20 @@ def run_agent_tui(
                 event.prevent_default()
                 self._apply_highlighted_command()
 
+        def _route_key_to_prompt(self, event: events.Key, prompt: Input) -> bool:
+            if not should_route_key_to_prompt(
+                character=getattr(event, 'character', None),
+                prompt_focused=self.focused is prompt,
+                busy=self._state.busy or prompt.disabled,
+            ):
+                return False
+            prompt.focus()
+            prompt.value = f'{prompt.value}{event.character}'
+            self._refresh_command_picker(prompt.value)
+            event.stop()
+            event.prevent_default()
+            return True
+
         def on_option_list_option_highlighted(
             self,
             event: OptionList.OptionHighlighted,
@@ -1704,10 +1903,6 @@ def run_agent_tui(
                         render_slash_command_suggestion_detail(suggestion)
                     )
                 return
-            if event.option_list.id == 'history-list':
-                self._selected_turn_id = event.option_id
-                self._refresh_conversation_view()
-                self._refresh_details_panel()
 
         def on_option_list_option_selected(
             self,
@@ -1718,13 +1913,47 @@ def run_agent_tui(
                 event.stop()
                 return
             if event.option_list.id == 'history-list':
-                self._selected_turn_id = event.option_id
-                self._refresh_conversation_view()
-                self._refresh_details_panel()
+                item = self._sidebar_item_for_option_id(event.option_id)
+                if item is None:
+                    return
+                if item.kind == 'conversation':
+                    self._set_conversation_expanded(item.conversation_id, True)
+                    self._switch_to_conversation(item.conversation_id)
+                    self._refresh_history_list()
+                elif item.kind == 'turn':
+                    self._switch_to_conversation(item.conversation_id)
+                    self._selected_turn_id = item.turn_id
+                    self._refresh_conversation_view()
+                    self._refresh_details_panel()
+                event.stop()
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == 'new-conversation-button':
+                self.action_new_conversation()
                 event.stop()
 
         def action_focus_prompt(self) -> None:
             self.query_one('#prompt', Input).focus()
+
+        def action_new_conversation(self) -> None:
+            if self._state.busy:
+                return
+            self._conversation_counter += 1
+            conversation_id = f'conversation-{self._conversation_counter}'
+            self._conversations.append(
+                ConversationThread(
+                    conversation_id=conversation_id,
+                    title=f'Conversation {self._conversation_counter}',
+                )
+            )
+            self._switch_to_conversation(conversation_id)
+            self.call_after_refresh(self.action_focus_prompt)
+
+        def action_previous_conversation(self) -> None:
+            self._switch_conversation_by_offset(-1)
+
+        def action_next_conversation(self) -> None:
+            self._switch_conversation_by_offset(1)
 
         def action_refresh_panels(self) -> None:
             self._refresh_all_panels()
@@ -1738,12 +1967,125 @@ def run_agent_tui(
         def action_focus_history(self) -> None:
             self.query_one('#history-list', OptionList).focus()
 
+        def on_collapsible_toggled(self, event) -> None:
+            collapsible = getattr(event, 'collapsible', None)
+            if collapsible is None:
+                collapsible = getattr(event, 'control', None)
+            widget_id = getattr(collapsible, 'id', None) if collapsible is not None else None
+            if not isinstance(widget_id, str) or not widget_id.startswith('working-'):
+                return
+            collapsed = getattr(collapsible, 'collapsed', None)
+            if isinstance(collapsed, bool):
+                self._collapsed_sections[widget_id] = collapsed
+
         @property
         def _command_picker_visible(self) -> bool:
             return bool(self.query_one('#command-picker', Horizontal).display)
 
         def _set_command_picker_visible(self, visible: bool) -> None:
             self.query_one('#command-picker', Horizontal).display = visible
+
+        def _make_bridge(self, state: AgentTuiState) -> AgentTuiEventBridge:
+            return AgentTuiEventBridge(
+                state,
+                emit_data=lambda _text: None,
+                on_state_change=self._handle_state_change,
+                on_turns_change=self._handle_turns_change,
+                on_history_change=self._handle_history_change,
+                on_activity_change=self._handle_activity_change,
+            )
+
+        def _active_conversation(self) -> ConversationThread:
+            for conversation in self._conversations:
+                if conversation.conversation_id == self._active_conversation_id:
+                    return conversation
+            return self._conversations[0]
+
+        def _conversation_index(self, conversation_id: str) -> int:
+            for index, conversation in enumerate(self._conversations):
+                if conversation.conversation_id == conversation_id:
+                    return index
+            return 0
+
+        def _switch_conversation_by_offset(self, offset: int) -> None:
+            if self._state.busy or not self._conversations:
+                return
+            current_index = self._conversation_index(self._active_conversation_id)
+            target_index = max(0, min(len(self._conversations) - 1, current_index + offset))
+            if target_index == current_index:
+                return
+            target_conversation = self._conversations[target_index]
+            self._set_conversation_expanded(target_conversation.conversation_id, True)
+            self._switch_to_conversation(target_conversation.conversation_id)
+            self._refresh_history_list()
+            self.call_after_refresh(self.action_focus_prompt)
+
+        def _set_conversation_expanded(self, conversation_id: str, expanded: bool) -> None:
+            for conversation in self._conversations:
+                if conversation.conversation_id == conversation_id:
+                    conversation.expanded = expanded
+                    return
+
+        def _sync_active_conversation(self) -> None:
+            conversation = self._active_conversation()
+            conversation.turns = tuple(self._conversation_turns)
+            conversation.session_id = self._active_session_id
+            if conversation.turns:
+                conversation.title = conversation.turns[0].prompt_preview(max_chars=28)
+
+        def _switch_to_conversation(self, conversation_id: str) -> None:
+            if self._state.busy:
+                return
+            for conversation in self._conversations:
+                if conversation.conversation_id == conversation_id:
+                    self._active_conversation_id = conversation_id
+                    self._active_session_id = conversation.session_id
+                    self._state = AgentTuiState.from_agent(self._agent)
+                    if conversation.session_id:
+                        self._state.session_id = conversation.session_id
+                    self._bridge = self._make_bridge(self._state)
+                    self._selected_turn_id = (
+                        conversation.turns[-1].turn_id if conversation.turns else None
+                    )
+                    self._bridge.restore_history(conversation.turns, announce_activity=False)
+                    self._refresh_all_panels()
+                    return
+
+        def _rebuild_sidebar_items(self) -> tuple[SidebarItem, ...]:
+            items: list[SidebarItem] = []
+            for index, conversation in enumerate(self._conversations, start=1):
+                active_marker = '●' if conversation.conversation_id == self._active_conversation_id else '○'
+                prefix = '▼' if conversation.expanded else '▶'
+                title = conversation.title or f'Conversation {index}'
+                items.append(
+                    SidebarItem(
+                        option_id=f'conversation:{conversation.conversation_id}',
+                        label=f'{active_marker} {prefix} {title}',
+                        kind='conversation',
+                        conversation_id=conversation.conversation_id,
+                    )
+                )
+                if not conversation.expanded:
+                    continue
+                for turn_index, turn in enumerate(conversation.turns, start=1):
+                    items.append(
+                        SidebarItem(
+                            option_id=f'turn:{conversation.conversation_id}:{turn.turn_id}',
+                            label=f'  {turn_index:02d}. {turn.prompt_preview(max_chars=28)}',
+                            kind='turn',
+                            conversation_id=conversation.conversation_id,
+                            turn_id=turn.turn_id,
+                        )
+                    )
+            return tuple(items)
+
+        def _sidebar_item_for_option_id(self, option_id: str | None) -> SidebarItem | None:
+            if option_id is None:
+                return None
+            for item in self._sidebar_items:
+                if item.option_id == option_id:
+                    return item
+            return None
 
         def _refresh_all_panels(self) -> None:
             self._refresh_conversation_view()
@@ -1753,6 +2095,7 @@ def run_agent_tui(
         def _handle_state_change(self, state: AgentTuiState) -> None:
             workspace_name = Path(state.workspace).name or state.workspace
             self.sub_title = f'{workspace_name} | {state.status}'
+            self._active_conversation().session_id = state.session_id
             prompt = self.query_one('#prompt', Input)
             prompt.disabled = state.busy
             if not state.busy:
@@ -1766,11 +2109,13 @@ def run_agent_tui(
 
         def _handle_turns_change(self, turns: tuple[ConversationTurn, ...]) -> None:
             self._conversation_turns = turns
+            self._sync_active_conversation()
             if turns and self._selected_turn_id is None:
                 self._selected_turn_id = turns[-1].turn_id
             if self._selected_turn_id not in {turn.turn_id for turn in turns}:
                 self._selected_turn_id = turns[-1].turn_id if turns else None
             self._refresh_conversation_view()
+            self._refresh_history_list()
             self._refresh_details_panel()
             if self._auto_follow:
                 self._scroll_conversation_to_end()
@@ -1780,6 +2125,7 @@ def run_agent_tui(
             items: tuple[ConversationHistoryItem, ...],
         ) -> None:
             self._history_items = items
+            self._sync_active_conversation()
             self._refresh_history_list()
 
         def _handle_activity_change(self, items: tuple[ActivityItem, ...]) -> None:
@@ -1869,27 +2215,45 @@ def run_agent_tui(
             return self._conversation_turns[-1]
 
         def _refresh_conversation_view(self) -> None:
+            scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
+            previous_scroll_y = getattr(scroll_container, 'scroll_y', 0.0)
             conversation = self.query_one('#conversation-feed', ConversationFeed)
             conversation.set_data(
+                conversation_id=self._active_conversation_id,
                 turns=self._conversation_turns,
                 selected_turn_id=self._selected_turn_id,
                 phase=self._state.phase,
                 phase_detail=self._state.phase_detail,
                 busy=self._state.busy,
                 spinner_index=self._spinner_index,
+                collapsed_sections=self._collapsed_sections,
             )
+            scroll_container.refresh(layout=True)
+            if self._auto_follow and self._state.busy:
+                self._scroll_conversation_to_end()
+                return
+            try:
+                scroll_container.scroll_to(y=previous_scroll_y, animate=False)
+            except Exception:
+                return
 
         def _refresh_history_list(self) -> None:
             option_list = self.query_one('#history-list', OptionList)
             option_list.clear_options()
-            if not self._history_items:
+            self._sidebar_items = self._rebuild_sidebar_items()
+            if not self._sidebar_items:
                 return
             option_list.add_options(
-                Option(item.label, id=item.turn_id) for item in self._history_items
+                Option(item.label, id=item.option_id) for item in self._sidebar_items
             )
             selected_index = 0
-            for index, item in enumerate(self._history_items):
-                if item.turn_id == self._selected_turn_id:
+            active_turn_option_id = (
+                f'turn:{self._active_conversation_id}:{self._selected_turn_id}'
+                if self._selected_turn_id is not None
+                else f'conversation:{self._active_conversation_id}'
+            )
+            for index, item in enumerate(self._sidebar_items):
+                if item.option_id == active_turn_option_id:
                     selected_index = index
                     break
             option_list.highlighted = selected_index

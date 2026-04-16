@@ -2021,6 +2021,8 @@ def _mcp_list_tools(arguments: dict[str, Any], context: ToolExecutionContext) ->
         raise ToolExecutionError('query must be a string')
     if server is not None and not isinstance(server, str):
         raise ToolExecutionError('server must be a string')
+    if server is not None and runtime.get_server(server) is None:
+        raise ToolExecutionError(f'Unknown MCP server: {server}')
     max_tools = _coerce_int(arguments, 'max_tools', 50)
     tools = runtime.list_tools(query=query, server_name=server, limit=max_tools)
     if not tools:

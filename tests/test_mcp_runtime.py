@@ -479,6 +479,39 @@ class MCPRuntimeTests(unittest.TestCase):
         self.assertIn('echo:tool-run', call_result.content)
         self.assertEqual(call_result.metadata.get('action'), 'mcp_call_tool')
 
+    def test_mcp_list_tools_reports_unknown_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            server_path = self._write_fake_stdio_server(workspace)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote': {
+                                'command': sys.executable,
+                                'args': ['-u', str(server_path)],
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            runtime = MCPRuntime.from_workspace(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                mcp_runtime=runtime,
+            )
+            list_result = execute_tool(
+                default_tool_registry(),
+                'mcp_list_tools',
+                {'server': 'missing'},
+                context,
+            )
+
+        self.assertFalse(list_result.ok)
+        self.assertIn('Unknown MCP server: missing', list_result.content)
+        self.assertIn('Unknown MCP server: missing', runtime.render_tool_index(server_name='missing'))
+
     def test_mcp_cli_subprocess_smoke_works_with_stdio_server(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:

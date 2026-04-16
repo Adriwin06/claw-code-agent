@@ -232,7 +232,7 @@ def _get_user_context_cached(
             else 'Workspace trust mode: untrusted'
         )
     mcp_runtime = MCPRuntime.from_workspace(Path(cwd), additional_working_directories)
-    if mcp_runtime.resources:
+    if mcp_runtime.resources or mcp_runtime.servers:
         context['mcpRuntime'] = mcp_runtime.render_summary()
     remote_runtime = RemoteRuntime.from_workspace(Path(cwd), additional_working_directories)
     if remote_runtime.has_remote_config():

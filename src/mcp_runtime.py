@@ -286,6 +286,8 @@ class MCPRuntime:
         server_name: str | None = None,
         limit: int = 50,
     ) -> str:
+        if server_name and self.get_server(server_name) is None:
+            return f'# MCP Tools\n\nUnknown MCP server: {server_name}'
         tools = self.list_tools(query=query, server_name=server_name, limit=limit)
         if not tools:
             return '# MCP Tools\n\nNo matching MCP tools discovered.'
