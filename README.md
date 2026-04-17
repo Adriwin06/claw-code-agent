@@ -206,7 +206,12 @@ claw-code/
 ├── images/
 │   └── logo.png
 ├── src/                          # Python implementation
-│   ├── main.py                   # CLI entry point & argument parsing
+│   ├── main.py                   # Thin CLI entrypoint facade and compatibility exports
+│   ├── cli/                      # CLI parser, dispatch, and runtime helper modules
+│   │   ├── agent_cli_config.py   # Agent argument wiring and model/runtime config builders
+│   │   ├── parser_build.py       # Full argparse tree construction
+│   │   ├── command_dispatch.py   # Top-level command routing and runtime invocation
+│   │   └── agent_runtime_ops.py  # Agent run loops, background workers, and live rendering
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
 │   ├── agent_prompting.py        # System prompt assembly
