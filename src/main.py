@@ -64,6 +64,11 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     if include_backend:
         parser.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1'))
         parser.add_argument('--api-key', default=os.environ.get('OPENAI_API_KEY', 'local-token'))
+        parser.add_argument(
+            '--llm-backend',
+            default=os.environ.get('CLAW_LLM_BACKEND', 'openai_compat'),
+            help='LLM transport backend (openai_compat or litellm)',
+        )
         parser.add_argument('--temperature', type=float, default=0.0)
         parser.add_argument('--timeout-seconds', type=float, default=120.0)
         parser.add_argument('--input-cost-per-million', type=float, default=0.0)
@@ -137,6 +142,11 @@ def _build_model_config(args: argparse.Namespace) -> ModelConfig:
         model=args.model,
         base_url=getattr(args, 'base_url', os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1')),
         api_key=getattr(args, 'api_key', os.environ.get('OPENAI_API_KEY', 'local-token')),
+        llm_backend=getattr(
+            args,
+            'llm_backend',
+            os.environ.get('CLAW_LLM_BACKEND', 'openai_compat'),
+        ),
         temperature=getattr(args, 'temperature', 0.0),
         timeout_seconds=getattr(args, 'timeout_seconds', 120.0),
         pricing=ModelPricing(
@@ -166,9 +176,11 @@ def _load_output_schema_config(args: argparse.Namespace) -> OutputSchemaConfig |
 
 
 def _build_agent(args: argparse.Namespace) -> LocalCodingAgent:
+    model_config = _build_model_config(args)
     return LocalCodingAgent(
-        model_config=_build_model_config(args),
+        model_config=model_config,
         runtime_config=_build_runtime_config(args),
+        llm_backend=model_config.llm_backend,
         custom_system_prompt=args.system_prompt,
         append_system_prompt=args.append_system_prompt,
         override_system_prompt=args.override_system_prompt,
@@ -187,6 +199,7 @@ def _append_agent_forwarded_args(
         command.extend(['--model', str(args.model)])
         command.extend(['--base-url', str(args.base_url)])
         command.extend(['--api-key', str(args.api_key)])
+        command.extend(['--llm-backend', str(args.llm_backend)])
         command.extend(['--temperature', str(args.temperature)])
         command.extend(['--timeout-seconds', str(args.timeout_seconds)])
         command.extend(['--input-cost-per-million', str(args.input_cost_per_million)])
@@ -241,6 +254,7 @@ def _add_agent_resume_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--model')
     parser.add_argument('--base-url')
     parser.add_argument('--api-key')
+    parser.add_argument('--llm-backend')
     parser.add_argument('--temperature', type=float)
     parser.add_argument('--timeout-seconds', type=float)
     parser.add_argument('--input-cost-per-million', type=float)
@@ -462,6 +476,8 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
         model_config = replace(model_config, base_url=args.base_url)
     if args.api_key:
         model_config = replace(model_config, api_key=args.api_key)
+    if args.llm_backend:
+        model_config = replace(model_config, llm_backend=args.llm_backend)
     if args.temperature is not None:
         model_config = replace(model_config, temperature=args.temperature)
     if args.timeout_seconds is not None:
@@ -593,6 +609,7 @@ def _build_resumed_agent(args: argparse.Namespace) -> tuple[LocalCodingAgent, St
     agent = LocalCodingAgent(
         model_config=model_config,
         runtime_config=runtime_config,
+        llm_backend=model_config.llm_backend,
     )
     return agent, stored_session
 

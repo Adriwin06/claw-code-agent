@@ -122,6 +122,7 @@ def serialize_model_config(model_config: ModelConfig) -> JSONDict:
         'api_key': model_config.api_key,
         'temperature': model_config.temperature,
         'timeout_seconds': model_config.timeout_seconds,
+        'llm_backend': model_config.llm_backend,
         'pricing': {
             'input_cost_per_million_tokens_usd': model_config.pricing.input_cost_per_million_tokens_usd,
             'output_cost_per_million_tokens_usd': model_config.pricing.output_cost_per_million_tokens_usd,
@@ -138,6 +139,7 @@ def deserialize_model_config(payload: JSONDict) -> ModelConfig:
         api_key=str(payload.get('api_key', 'local-token')),
         temperature=float(payload.get('temperature', 0.0)),
         timeout_seconds=float(payload.get('timeout_seconds', 120.0)),
+        llm_backend=str(payload.get('llm_backend', 'openai_compat')),
         pricing=_deserialize_pricing(payload.get('pricing')),
     )
 

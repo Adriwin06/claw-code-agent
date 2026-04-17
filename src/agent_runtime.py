@@ -45,7 +45,8 @@ from .agent_types import (
     ToolExecutionResult,
     UsageStats,
 )
-from .openai_compat import OpenAICompatClient, OpenAICompatError
+from .llm import build_llm_client, resolve_llm_backend
+from .openai_compat import OpenAICompatError
 from .plan_runtime import PlanRuntime
 from .plugin_runtime import PluginRuntime
 from .remote_runtime import RemoteRuntime
@@ -122,6 +123,7 @@ class _RuntimeEventRecorder:
 class LocalCodingAgent:
     model_config: ModelConfig
     runtime_config: AgentRuntimeConfig
+    llm_backend: str = 'openai_compat'
     custom_system_prompt: str | None = None
     append_system_prompt: str | None = None
     override_system_prompt: str | None = None
@@ -233,7 +235,8 @@ class LocalCodingAgent:
         if virtual_tools:
             registry = {**registry, **virtual_tools}
         self.tool_registry = registry
-        self.client = OpenAICompatClient(self.model_config)
+        self.llm_backend = resolve_llm_backend(self.llm_backend or self.model_config.llm_backend)
+        self.client = build_llm_client(self.model_config, backend=self.llm_backend)
         self.tool_context = build_tool_context(
             self.runtime_config,
             tool_registry=self.tool_registry,
@@ -259,7 +262,7 @@ class LocalCodingAgent:
 
     def set_model(self, model: str) -> None:
         self.model_config = replace(self.model_config, model=model)
-        self.client = OpenAICompatClient(self.model_config)
+        self.client = build_llm_client(self.model_config, backend=self.llm_backend)
 
     def clear_runtime_state(self) -> None:
         self.last_session = None
@@ -4039,6 +4042,7 @@ class LocalCodingAgent:
             '# Status',
             '',
             f'- Model: {self.model_config.model}',
+            f'- LLM backend: {self.llm_backend}',
             f'- Token counter: {token_counter.backend} ({token_counter.source})',
             f'- Registered tools: {len(self.tool_registry)}',
             f'- Streaming model responses: {self.runtime_config.stream_model_responses}',

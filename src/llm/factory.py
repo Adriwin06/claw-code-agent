@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from ..agent_types import ModelConfig
+from ..openai_compat import OpenAICompatClient, OpenAICompatError
+from .litellm_backend import LiteLLMClient
+
+
+DEFAULT_LLM_BACKEND = 'openai_compat'
+SUPPORTED_LLM_BACKENDS = ('openai_compat', 'litellm')
+
+_BACKEND_ALIASES = {
+    'openai': 'openai_compat',
+    'openai_compat': 'openai_compat',
+    'compat': 'openai_compat',
+    'stdlib': 'openai_compat',
+    'lite-llm': 'litellm',
+    'lite_llm': 'litellm',
+    'litellm': 'litellm',
+}
+
+
+def resolve_llm_backend(backend: str | None = None) -> str:
+    raw = backend or os.environ.get('CLAW_LLM_BACKEND', DEFAULT_LLM_BACKEND)
+    normalized = _BACKEND_ALIASES.get(str(raw).strip().lower())
+    if normalized is None:
+        supported = ', '.join(SUPPORTED_LLM_BACKENDS)
+        raise OpenAICompatError(
+            f'Unsupported LLM backend {raw!r}. Expected one of: {supported}'
+        )
+    return normalized
+
+
+def build_llm_client(
+    model_config: ModelConfig,
+    *,
+    backend: str | None = None,
+) -> Any:
+    selected_backend = resolve_llm_backend(backend or model_config.llm_backend)
+    if selected_backend == 'openai_compat':
+        return OpenAICompatClient(model_config)
+    if selected_backend == 'litellm':
+        return LiteLLMClient(model_config)
+    supported = ', '.join(SUPPORTED_LLM_BACKENDS)
+    raise OpenAICompatError(
+        f'Unsupported LLM backend {selected_backend!r}. Expected one of: {supported}'
+    )

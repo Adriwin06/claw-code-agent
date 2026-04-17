@@ -5,7 +5,7 @@
 <h1 align="center">Claw Code Agent</h1>
 
 <p align="center">
-  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, stdlib-first core.</em>
+  <em>A Python reimplementation of the Claude Code agent architecture — local models, full control, LiteLLM-ready core.</em>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
   <a href="https://github.com/HarnessLab/claw-code-agent"><img src="https://img.shields.io/badge/repo-HarnessLab%2Fclaw--code--agent-181717?logo=github" alt="GitHub"></a>
   <a href="https://docs.vllm.ai/"><img src="https://img.shields.io/badge/backend-vLLM-FF6F00?logo=lightning&logoColor=white" alt="vLLM"></a>
   <a href="https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"><img src="https://img.shields.io/badge/model-Qwen3--Coder-FFD21E?logo=huggingface&logoColor=black" alt="Qwen3-Coder"></a>
-  <img src="https://img.shields.io/badge/core-stdlib--first-brightgreen" alt="Stdlib-first Core">
+  <img src="https://img.shields.io/badge/core-library--first-brightgreen" alt="Library-first Core">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha">
   <img src="https://img.shields.io/badge/license-open--source-green" alt="License">
 </p>
@@ -71,7 +71,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 
 > **Goal:** Not to ship the original npm source, but to reimplement the full agent flow in Python — prompt assembly, context building, slash commands, tool calling, session persistence, and local model execution.
 >
-> **Stdlib-first core** — the base runtime uses the Python standard library, and `Textual` is only needed for the optional `agent-tui` interface.
+> **Library-first core** — model transport is pluggable with a LiteLLM backend, and `Textual` is only needed for the optional `agent-tui` interface.
 
 <p align="center">
   <img src="images/demo_2.gif" alt="Claw Code Agent demo" width="900" />
@@ -114,7 +114,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | 🔐 **Permission System** | Granular control: `--allow-write`, `--allow-shell`, `--unsafe` |
 | 🏗️ **OpenAI-Compatible** | Works with vLLM, Ollama, LiteLLM Proxy, OpenRouter — any OpenAI-compatible API |
 | 🐉 **Qwen3-Coder** | First-class support for `Qwen3-Coder-30B-A3B-Instruct` via vLLM |
-| 📦 **Lean Core** | Core runtime stays stdlib-first, with Textual added only for the optional TUI |
+| 📦 **Lean Core** | Core runtime keeps a small surface with a pluggable LLM layer and optional Textual TUI |
 
 ---
 
@@ -213,7 +213,10 @@ claw-code/
 │   ├── agent_slash_commands.py   # Local slash command processing
 │   ├── agent_manager.py          # Nested agent lineage & group tracking
 │   ├── agent_types.py            # Shared dataclasses & type definitions
-│   ├── openai_compat.py          # OpenAI-compatible API client (streaming)
+│   ├── llm/                      # LLM backend adapters and client factory
+│   │   ├── factory.py            # Backend selection (openai_compat vs litellm)
+│   │   └── litellm_backend.py    # LiteLLM-backed client implementation
+│   ├── openai_compat.py          # OpenAI-compatible fallback backend (streaming)
 │   ├── plugin_runtime.py         # Plugin manifest, hooks, aliases, virtual tools
 │   ├── agent_plugin_cache.py     # Plugin discovery & prompt injection cache
 │   ├── session_store.py          # Session serialization & persistence
@@ -261,7 +264,7 @@ claw-code/
 | Requirement | Details |
 |-------------|---------|
 | 🐍 Python | `3.10` or higher |
-| 📚 Dependencies | **None** — pure Python standard library |
+| 📚 Dependencies | `litellm` for model transport; `textual` is optional for TUI |
 | 🖥️ Model Server | `vLLM`, `Ollama`, `LiteLLM Proxy`, or `OpenRouter`, with tool calling support |
 | 🧠 Model | [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) (recommended) |
 

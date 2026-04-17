@@ -32,7 +32,9 @@ classifiers = [
   "Topic :: Software Development",
   "Topic :: Software Development :: Build Tools",
 ]
-dependencies = []
+dependencies = [
+  "litellm>=1.74,<2.0",
+]
 
 [project.optional-dependencies]
 tui = [
