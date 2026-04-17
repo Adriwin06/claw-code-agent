@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.core.cost_tracker import CostTracker
+from src.core.governance.cost_tracker import CostTracker
 
 
 class CostTrackerTests(unittest.TestCase):

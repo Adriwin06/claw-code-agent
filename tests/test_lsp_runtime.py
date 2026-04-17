@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.features.lsp_runtime import LSPRuntime
+from src.features.integration.lsp_runtime import LSPRuntime
 
 
 SAMPLE_SOURCE = '''def helper(value):

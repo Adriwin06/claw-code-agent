@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.features.task_runtime import TaskRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
 
 
 DEFAULT_PLAN_RUNTIME_PATH = Path('.port_sessions') / 'plan_runtime.json'

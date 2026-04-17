@@ -6,7 +6,7 @@ from unittest.mock import patch
 from src.agent.agent_session import AgentSessionState
 from src.agent.agent_context_usage import ContextUsageReport, MessageBreakdown
 from src.agent.agent_types import BudgetConfig
-from src.core.token_budget import calculate_token_budget, format_token_budget
+from src.core.governance.token_budget import calculate_token_budget, format_token_budget
 
 
 class TokenBudgetTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class TokenBudgetTests(unittest.TestCase):
             token_counter_source='test',
             token_counter_accurate=False,
         )
-        with patch('src.core.token_budget.collect_context_usage', return_value=fake_usage):
+        with patch('src.core.governance.token_budget.collect_context_usage', return_value=fake_usage):
             snapshot = calculate_token_budget(
                 session=session,
                 model='test-model',
@@ -88,7 +88,7 @@ class TokenBudgetTests(unittest.TestCase):
             token_counter_source='test',
             token_counter_accurate=False,
         )
-        with patch('src.core.token_budget.collect_context_usage', return_value=fake_usage):
+        with patch('src.core.governance.token_budget.collect_context_usage', return_value=fake_usage):
             snapshot = calculate_token_budget(
                 session=session,
                 model='test-model',

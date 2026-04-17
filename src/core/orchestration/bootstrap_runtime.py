@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.core.catalog_runtime import built_in_command_names, get_commands, get_tools
+from src.core.catalog.catalog_runtime import built_in_command_names, get_commands, get_tools
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class PortContext:
 
 
 def build_port_context(base: Path | None = None) -> PortContext:
-    root = base or Path(__file__).resolve().parent.parent.parent
+    root = base or Path(__file__).resolve().parent.parent.parent.parent
     source_root = root / 'src'
     tests_root = root / 'tests'
     assets_root = root / 'assets'
@@ -170,7 +170,7 @@ def build_workspace_setup() -> WorkspaceSetup:
 
 
 def run_setup(cwd: Path | None = None, trusted: bool = True) -> SetupReport:
-    root = cwd or Path(__file__).resolve().parent.parent.parent
+    root = cwd or Path(__file__).resolve().parent.parent.parent.parent
     prefetches = [
         start_mdm_raw_read(),
         start_keychain_prefetch(),

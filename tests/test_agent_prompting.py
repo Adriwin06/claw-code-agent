@@ -6,12 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.agent.agent_prompting import build_prompt_context, build_system_prompt_parts, render_system_prompt
-from src.features.plan_runtime import PlanRuntime
+from src.features.orchestration.plan_runtime import PlanRuntime
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_session import AgentSessionState
 from src.agent.agent_tools import default_tool_registry
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
-from src.features.task_runtime import TaskRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
 
 
 class AgentPromptingTests(unittest.TestCase):

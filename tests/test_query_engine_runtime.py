@@ -9,8 +9,8 @@ from unittest.mock import patch
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
 from src.openai_compat import OpenAICompatClient
-from src.features.plugin_runtime import PluginRuntime
-from src.core.query_engine import QueryEngineConfig, QueryEnginePort
+from src.features.integration.plugin_runtime import PluginRuntime
+from src.core.orchestration.query_engine import QueryEngineConfig, QueryEnginePort
 
 
 class FakeHTTPResponse:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig
-from src.features.remote_runtime import (
+from src.features.integration.remote_runtime import (
     RemoteRuntime,
     run_deep_link_mode,
     run_direct_connect_mode,

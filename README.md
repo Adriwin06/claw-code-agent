@@ -232,19 +232,38 @@ claw-code/
 │   │   └── formatting.py         # UI preview/format helper utilities
 │   ├── openai_compat.py          # OpenAI-compatible fallback backend (streaming)
 │   ├── textual_ui.py             # Textual app orchestration and event bridge
-│   ├── core/                     # Shared core orchestration and catalog surfaces
-│   │   ├── query_engine.py       # Query engine facade & runtime orchestration
-│   │   ├── catalog_runtime.py    # Mirrored command/tool indexes, graphs, and manifest
-│   │   ├── bootstrap_runtime.py  # Context/history/startup/deferred-init helpers
-│   │   ├── runtime.py            # Mirrored runtime facade
+│   ├── core/                     # Shared core orchestration, catalog, and governance surfaces
+│   │   ├── orchestration/        # Runtime/query/bootstrap/task orchestration
+│   │   │   ├── query_engine.py   # Query engine facade & runtime orchestration
+│   │   │   ├── bootstrap_runtime.py # Context/history/startup/deferred-init helpers
+│   │   │   ├── runtime.py        # Mirrored runtime facade
+│   │   │   └── task.py           # Task-level planning structures
+│   │   ├── catalog/              # Mirrored command/tool indexes and parity audits
+│   │   │   ├── catalog_runtime.py
+│   │   │   ├── execution_registry.py
+│   │   │   └── parity_audit.py
+│   │   ├── governance/           # Permission and budget/cost controls
+│   │   │   ├── permissions.py
+│   │   │   ├── token_budget.py
+│   │   │   └── cost_tracker.py
 │   │   └── ...
-│   ├── features/                 # Feature runtimes (account/search/mcp/lsp/remote/workflow/etc.)
-│   │   ├── mcp_runtime.py        # Local MCP discovery and stdio MCP transport
-│   │   ├── search_runtime.py     # Search providers and provider-backed web_search
-│   │   ├── remote_runtime.py     # Local remote profiles, connect/disconnect state
-│   │   ├── account_runtime.py    # Local account profiles, login/logout state
-│   │   ├── config_runtime.py     # Local workspace config/settings discovery and mutation
-│   │   ├── lsp_runtime.py        # Local LSP-style code intelligence and diagnostics
+│   ├── features/                 # Feature runtimes grouped by concern
+│   │   ├── system/               # Workspace/system/account/config/doctor/tokenizer
+│   │   │   ├── account_runtime.py
+│   │   │   ├── config_runtime.py
+│   │   │   └── ...
+│   │   ├── integration/          # MCP/LSP/search/plugin/remote integrations
+│   │   │   ├── mcp_runtime.py
+│   │   │   ├── lsp_runtime.py
+│   │   │   ├── search_runtime.py
+│   │   │   └── ...
+│   │   ├── collaboration/        # Ask-user and team collaboration state
+│   │   │   ├── ask_user_runtime.py
+│   │   │   └── team_runtime.py
+│   │   ├── orchestration/        # Plan/task/workflow/worktree orchestration
+│   │   │   ├── plan_runtime.py
+│   │   │   ├── task_runtime.py
+│   │   │   └── ...
 │   │   └── ...
 │   ├── session/                  # Session persistence, transcript, and compaction helpers
 │   │   ├── session_store.py      # Session serialization & persistence

@@ -12,7 +12,7 @@ from src.agent.agent_types import (
     BudgetConfig,
     ModelPricing,
 )
-from src.features.background_runtime import BackgroundSessionRuntime, build_background_worker_command
+from src.features.system.background_runtime import BackgroundSessionRuntime, build_background_worker_command
 from ..cli.agent_cli_config import (
     _append_agent_forwarded_args,
     _build_agent,

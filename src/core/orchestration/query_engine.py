@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from src.agent.agent_runtime import LocalCodingAgent
-from src.core.catalog_runtime import (
+from src.core.catalog.catalog_runtime import (
     PermissionDenial,
     PortManifest,
     UsageSummary,
@@ -14,7 +14,7 @@ from src.core.catalog_runtime import (
     build_port_manifest,
     build_tool_backlog,
 )
-from src.features.plugin_runtime import PluginRuntime
+from src.features.integration.plugin_runtime import PluginRuntime
 from src.session.session_store import StoredSession, load_agent_session, load_session, save_session
 from src.session.transcript import TranscriptStore
 

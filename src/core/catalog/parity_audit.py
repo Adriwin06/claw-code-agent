@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-ARCHIVE_ROOT = Path(__file__).resolve().parent.parent.parent / 'archive' / 'claude_code_ts_snapshot' / 'src'
-CURRENT_ROOT = Path(__file__).resolve().parent.parent
+ARCHIVE_ROOT = Path(__file__).resolve().parent.parent.parent.parent / 'archive' / 'claude_code_ts_snapshot' / 'src'
+CURRENT_ROOT = Path(__file__).resolve().parent.parent.parent
 REFERENCE_SURFACE_PATH = CURRENT_ROOT / 'reference_data' / 'archive_surface_snapshot.json'
 COMMAND_SNAPSHOT_PATH = CURRENT_ROOT / 'reference_data' / 'commands_snapshot.json'
 TOOL_SNAPSHOT_PATH = CURRENT_ROOT / 'reference_data' / 'tools_snapshot.json'

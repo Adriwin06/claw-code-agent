@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS, execute_command, execute_tool
+from src.core.catalog.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS, execute_command, execute_tool
 
 
 @dataclass(frozen=True)

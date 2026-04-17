@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.features.account_runtime import AccountRuntime
+from src.features.system.account_runtime import AccountRuntime
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig
 

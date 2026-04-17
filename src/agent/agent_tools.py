@@ -17,19 +17,19 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Union
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
 
 if TYPE_CHECKING:
-    from src.features.account_runtime import AccountRuntime
-    from src.features.ask_user_runtime import AskUserRuntime
-    from src.features.config_runtime import ConfigRuntime
-    from src.features.lsp_runtime import LSPRuntime
-    from src.features.mcp_runtime import MCPRuntime
-    from src.features.plan_runtime import PlanRuntime
-    from src.features.remote_runtime import RemoteRuntime
-    from src.features.remote_trigger_runtime import RemoteTriggerRuntime
-    from src.features.search_runtime import SearchRuntime
-    from src.features.task_runtime import TaskRuntime
-    from src.features.team_runtime import TeamRuntime
-    from src.features.workflow_runtime import WorkflowRuntime
-    from src.features.worktree_runtime import WorktreeRuntime
+    from src.features.system.account_runtime import AccountRuntime
+    from src.features.collaboration.ask_user_runtime import AskUserRuntime
+    from src.features.system.config_runtime import ConfigRuntime
+    from src.features.integration.lsp_runtime import LSPRuntime
+    from src.features.integration.mcp_runtime import MCPRuntime
+    from src.features.orchestration.plan_runtime import PlanRuntime
+    from src.features.integration.remote_runtime import RemoteRuntime
+    from src.features.integration.remote_trigger_runtime import RemoteTriggerRuntime
+    from src.features.integration.search_runtime import SearchRuntime
+    from src.features.orchestration.task_runtime import TaskRuntime
+    from src.features.collaboration.team_runtime import TeamRuntime
+    from src.features.orchestration.workflow_runtime import WorkflowRuntime
+    from src.features.orchestration.worktree_runtime import WorktreeRuntime
 
 
 class ToolPermissionError(RuntimeError):

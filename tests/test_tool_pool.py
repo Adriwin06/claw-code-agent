@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from src.core.permissions import ToolPermissionContext
-from src.core.catalog_runtime import PortingModule, ToolPool, assemble_tool_pool
+from src.core.governance.permissions import ToolPermissionContext
+from src.core.catalog.catalog_runtime import PortingModule, ToolPool, assemble_tool_pool
 
 
 class TestAssembleToolPool(unittest.TestCase):

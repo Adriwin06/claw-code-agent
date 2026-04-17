@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from src.core.task import PortingTask, VALID_TASK_STATUSES
+from src.core.orchestration.task import PortingTask, VALID_TASK_STATUSES
 
 
 DEFAULT_TASK_RUNTIME_PATH = Path('.port_sessions') / 'task_runtime.json'

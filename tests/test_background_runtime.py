@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from src.features.background_runtime import BackgroundSessionRuntime
+from src.features.system.background_runtime import BackgroundSessionRuntime
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

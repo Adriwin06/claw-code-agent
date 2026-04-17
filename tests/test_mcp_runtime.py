@@ -14,7 +14,7 @@ from unittest.mock import patch
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
-from src.features.mcp_runtime import MCPRuntime
+from src.features.integration.mcp_runtime import MCPRuntime
 
 
 class FakeHTTPResponse:

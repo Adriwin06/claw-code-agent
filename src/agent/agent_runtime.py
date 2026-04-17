@@ -7,23 +7,23 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
-from src.features.account_runtime import AccountRuntime
+from src.features.system.account_runtime import AccountRuntime
 from src.agent.agent_manager import AgentManager
 from src.agent.agent_context import clear_context_caches
 from src.agent.agent_context import render_context_report as render_agent_context_report
 from src.agent.agent_context_usage import collect_context_usage, estimate_tokens, format_context_usage
 from src.session.compact import compact_conversation
-from src.features.ask_user_runtime import AskUserRuntime
+from src.features.collaboration.ask_user_runtime import AskUserRuntime
 from src.agent.agent_registry import (
     find_agent_definition,
     load_agent_registry,
     render_agent_detail,
     render_agents_report,
 )
-from src.features.config_runtime import ConfigRuntime
-from src.features.hook_policy import HookPolicyRuntime
-from src.features.lsp_runtime import LSPRuntime
-from src.features.mcp_runtime import MCPRuntime
+from src.features.system.config_runtime import ConfigRuntime
+from src.features.system.hook_policy import HookPolicyRuntime
+from src.features.integration.lsp_runtime import LSPRuntime
+from src.features.integration.mcp_runtime import MCPRuntime
 from src.agent.agent_prompting import (
     build_prompt_context,
     build_system_prompt_parts,
@@ -53,16 +53,16 @@ from src.agent.agent_types import (
 )
 from src.llm import build_llm_client, resolve_llm_backend
 from src.openai_compat import OpenAICompatError
-from src.features.plan_runtime import PlanRuntime
-from src.features.plugin_runtime import PluginRuntime
-from src.features.remote_runtime import RemoteRuntime
-from src.features.remote_trigger_runtime import RemoteTriggerRuntime
-from src.features.search_runtime import SearchRuntime
-from src.features.task_runtime import TaskRuntime
-from src.features.team_runtime import TeamRuntime
-from src.features.tokenizer_runtime import describe_token_counter
-from src.features.workflow_runtime import WorkflowRuntime
-from src.features.worktree_runtime import WorktreeRuntime
+from src.features.orchestration.plan_runtime import PlanRuntime
+from src.features.integration.plugin_runtime import PluginRuntime
+from src.features.integration.remote_runtime import RemoteRuntime
+from src.features.integration.remote_trigger_runtime import RemoteTriggerRuntime
+from src.features.integration.search_runtime import SearchRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
+from src.features.collaboration.team_runtime import TeamRuntime
+from src.features.system.tokenizer_runtime import describe_token_counter
+from src.features.orchestration.workflow_runtime import WorkflowRuntime
+from src.features.orchestration.worktree_runtime import WorktreeRuntime
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
@@ -71,7 +71,7 @@ from src.session.session_store import (
     serialize_runtime_config,
     usage_from_payload,
 )
-from src.core.token_budget import calculate_token_budget, format_token_budget
+from src.core.governance.token_budget import calculate_token_budget, format_token_budget
 from src.agent.builtin_agents import (
     AgentDefinition,
     ALL_AGENT_DISALLOWED_TOOLS,

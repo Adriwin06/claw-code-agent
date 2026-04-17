@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig
-from src.features.search_runtime import SearchRuntime
+from src.features.integration.search_runtime import SearchRuntime
 
 
 class FakeHTTPResponse:
@@ -92,7 +92,7 @@ class SearchRuntimeTests(unittest.TestCase):
             )
             runtime = SearchRuntime.from_workspace(workspace)
             with patch(
-                'src.features.search_runtime.request.urlopen',
+                'src.features.integration.search_runtime.request.urlopen',
                 return_value=FakeHTTPResponse(
                     '{"results":[{"title":"Alpha","url":"https://example.com/alpha","content":"Snippet"}]}'
                 ),
@@ -114,7 +114,7 @@ class SearchRuntimeTests(unittest.TestCase):
             with patch.dict('os.environ', {'BRAVE_SEARCH_API_KEY': 'demo-key'}, clear=False):
                 runtime = SearchRuntime.from_workspace(workspace)
                 with patch(
-                    'src.features.search_runtime.request.urlopen',
+                    'src.features.integration.search_runtime.request.urlopen',
                     return_value=FakeHTTPResponse(
                         '{"web":{"results":[{"title":"Alpha","url":"https://example.com/alpha","description":"Snippet"}]}}'
                     ),
@@ -140,7 +140,7 @@ class SearchRuntimeTests(unittest.TestCase):
                 search_runtime=runtime,
             )
             with patch(
-                'src.features.search_runtime.request.urlopen',
+                'src.features.integration.search_runtime.request.urlopen',
                 return_value=FakeHTTPResponse(
                     '{"results":[{"title":"Alpha","url":"https://example.com/alpha","content":"Snippet"}]}'
                 ),

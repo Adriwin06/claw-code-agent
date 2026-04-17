@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.core.bootstrap_runtime import (
+from src.core.orchestration.bootstrap_runtime import (
     HistoryLog,
     PortContext,
     SetupReport,
@@ -12,9 +12,9 @@ from src.core.bootstrap_runtime import (
     render_context,
     run_setup,
 )
-from src.core.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS, PermissionDenial, PortingModule
-from src.core.query_engine import QueryEngineConfig, QueryEnginePort, TurnResult
-from src.core.execution_registry import build_execution_registry
+from src.core.catalog.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS, PermissionDenial, PortingModule
+from src.core.orchestration.query_engine import QueryEngineConfig, QueryEnginePort, TurnResult
+from src.core.catalog.execution_registry import build_execution_registry
 
 
 @dataclass(frozen=True)

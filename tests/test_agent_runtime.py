@@ -26,7 +26,7 @@ from src.session.session_store import (
     serialize_model_config,
     serialize_runtime_config,
 )
-from src.core.token_budget import TokenBudgetSnapshot
+from src.core.governance.token_budget import TokenBudgetSnapshot
 
 
 class FakeHTTPResponse:

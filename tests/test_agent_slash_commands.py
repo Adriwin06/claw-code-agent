@@ -11,8 +11,8 @@ from unittest.mock import patch
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_slash_commands import looks_like_command, parse_slash_command
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
-from src.features.plan_runtime import PlanRuntime
-from src.features.task_runtime import TaskRuntime
+from src.features.orchestration.plan_runtime import PlanRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
 
 
 class _FakeHTTPResponse:
@@ -222,7 +222,7 @@ class AgentSlashCommandTests(unittest.TestCase):
                 runtime_config=AgentRuntimeConfig(cwd=workspace),
             )
             with patch(
-                'src.features.search_runtime.request.urlopen',
+                'src.features.integration.search_runtime.request.urlopen',
                 return_value=_FakeHTTPResponse(
                     '{"results":[{"title":"Alpha","url":"https://example.com/alpha","content":"Search snippet"}]}'
                 ),

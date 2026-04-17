@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.core.permissions import ToolPermissionContext
+from src.core.governance.permissions import ToolPermissionContext
 
 
 class TestToolPermissionContext(unittest.TestCase):

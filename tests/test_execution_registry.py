@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from src.core.execution_registry import (
+from src.core.catalog.execution_registry import (
     ExecutionRegistry,
     MirroredCommand,
     MirroredTool,
     build_execution_registry,
 )
-from src.core.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS
+from src.core.catalog.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS
 
 
 class TestBuildExecutionRegistry(unittest.TestCase):

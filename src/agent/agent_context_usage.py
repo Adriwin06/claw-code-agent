@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from src.agent.agent_prompting import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 from src.agent.agent_session import AgentMessage, AgentSessionState
-from src.features.tokenizer_runtime import describe_token_counter, count_tokens
+from src.features.system.tokenizer_runtime import describe_token_counter, count_tokens
 
 _PATH_HEADER_RE = re.compile(r'^## ((?:/|[A-Za-z]:[\\/]).+)$', re.MULTILINE)
 

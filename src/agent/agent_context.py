@@ -9,21 +9,21 @@ from functools import lru_cache
 from pathlib import Path
 
 from src.agent.agent_plugin_cache import load_plugin_cache_summary
-from src.features.account_runtime import AccountRuntime
-from src.features.ask_user_runtime import AskUserRuntime
-from src.features.config_runtime import ConfigRuntime
-from src.features.hook_policy import HookPolicyRuntime
-from src.features.lsp_runtime import LSPRuntime
-from src.features.mcp_runtime import MCPRuntime
-from src.features.plan_runtime import PlanRuntime
-from src.features.plugin_runtime import PluginRuntime
-from src.features.remote_runtime import RemoteRuntime
-from src.features.remote_trigger_runtime import RemoteTriggerRuntime
-from src.features.search_runtime import SearchRuntime
-from src.features.task_runtime import TaskRuntime
-from src.features.team_runtime import TeamRuntime
-from src.features.workflow_runtime import WorkflowRuntime
-from src.features.worktree_runtime import WorktreeRuntime
+from src.features.system.account_runtime import AccountRuntime
+from src.features.collaboration.ask_user_runtime import AskUserRuntime
+from src.features.system.config_runtime import ConfigRuntime
+from src.features.system.hook_policy import HookPolicyRuntime
+from src.features.integration.lsp_runtime import LSPRuntime
+from src.features.integration.mcp_runtime import MCPRuntime
+from src.features.orchestration.plan_runtime import PlanRuntime
+from src.features.integration.plugin_runtime import PluginRuntime
+from src.features.integration.remote_runtime import RemoteRuntime
+from src.features.integration.remote_trigger_runtime import RemoteTriggerRuntime
+from src.features.integration.search_runtime import SearchRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
+from src.features.collaboration.team_runtime import TeamRuntime
+from src.features.orchestration.workflow_runtime import WorkflowRuntime
+from src.features.orchestration.worktree_runtime import WorktreeRuntime
 from src.agent.agent_types import AgentRuntimeConfig
 
 MAX_STATUS_CHARS = 2000

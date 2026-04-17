@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.features.ask_user_runtime import AskUserRuntime
+from src.features.collaboration.ask_user_runtime import AskUserRuntime
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig
 

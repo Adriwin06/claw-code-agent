@@ -13,11 +13,11 @@ from src.agent.agent_context import (
     clear_context_caches,
     set_system_prompt_injection,
 )
-from src.features.ask_user_runtime import AskUserRuntime
-from src.features.plan_runtime import PlanRuntime
+from src.features.collaboration.ask_user_runtime import AskUserRuntime
+from src.features.orchestration.plan_runtime import PlanRuntime
 from src.agent.agent_types import AgentRuntimeConfig
-from src.features.task_runtime import TaskRuntime
-from src.features.team_runtime import TeamRuntime
+from src.features.orchestration.task_runtime import TaskRuntime
+from src.features.collaboration.team_runtime import TeamRuntime
 
 
 class AgentContextTests(unittest.TestCase):

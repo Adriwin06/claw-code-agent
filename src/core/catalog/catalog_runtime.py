@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from src.core.permissions import ToolPermissionContext
+from src.core.governance.permissions import ToolPermissionContext
 
 
 @dataclass(frozen=True)
@@ -55,8 +55,8 @@ class PortingBacklog:
         ]
 
 
-COMMAND_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / 'reference_data' / 'commands_snapshot.json'
-TOOL_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / 'reference_data' / 'tools_snapshot.json'
+COMMAND_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent.parent / 'reference_data' / 'commands_snapshot.json'
+TOOL_SNAPSHOT_PATH = Path(__file__).resolve().parent.parent.parent / 'reference_data' / 'tools_snapshot.json'
 
 
 @dataclass(frozen=True)
@@ -231,7 +231,7 @@ def render_tool_index(limit: int = 20, query: str | None = None) -> str:
     return '\n'.join(lines)
 
 
-DEFAULT_SRC_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SRC_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @dataclass(frozen=True)

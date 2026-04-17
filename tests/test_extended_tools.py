@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
-from src.features.lsp_runtime import LSPRuntime
+from src.features.integration.lsp_runtime import LSPRuntime
 
 
 class ExtendedToolTests(unittest.TestCase):
