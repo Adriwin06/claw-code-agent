@@ -220,7 +220,14 @@ claw-code/
 │   ├── llm/                      # LLM backend adapters and client factory
 │   │   ├── factory.py            # Backend selection (openai_compat vs litellm)
 │   │   └── litellm_backend.py    # LiteLLM-backed client implementation
+│   ├── ui/                       # Textual UI support modules (state, conversation, slash helpers)
+│   │   ├── state.py              # AgentTuiState + session hydration
+│   │   ├── conversation.py       # Conversation dataclasses and restore/history helpers
+│   │   ├── slash_commands.py     # Slash command suggestion/filter/render helpers
+│   │   ├── ids.py                # Textual-safe id and key-routing helpers
+│   │   └── formatting.py         # UI preview/format helper utilities
 │   ├── openai_compat.py          # OpenAI-compatible fallback backend (streaming)
+│   ├── textual_ui.py             # Textual app orchestration and event bridge
 │   ├── plugin_runtime.py         # Plugin manifest, hooks, aliases, virtual tools
 │   ├── agent_plugin_cache.py     # Plugin discovery & prompt injection cache
 │   ├── session_store.py          # Session serialization & persistence
