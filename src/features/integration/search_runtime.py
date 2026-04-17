@@ -23,6 +23,8 @@ WEB_SEARCH_CONTEXT_TO_MAX_RESULTS = {
     'medium': 5,
     'high': 8,
 }
+DEFAULT_WEB_SEARCH_ENABLED = True
+DEFAULT_WEB_SEARCH_CONTEXT_SIZE = 'medium'
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,9 @@ class SearchStatusReport:
     manifest_count: int = 0
     provider_count: int = 0
     api_key_env: str | None = None
+    web_search_enabled: bool | None = None
+    context_size: str | None = None
+    default_max_results: int | None = None
 
     def as_text(self) -> str:
         lines = [
@@ -72,6 +77,12 @@ class SearchStatusReport:
             lines.append(f'base_url={self.base_url}')
         if self.api_key_env:
             lines.append(f'api_key_env={self.api_key_env}')
+        if self.web_search_enabled is not None:
+            lines.append(f'web_search_enabled={self.web_search_enabled}')
+        if self.context_size is not None:
+            lines.append(f'web_search_context_size={self.context_size}')
+        if self.default_max_results is not None:
+            lines.append(f'default_max_results={self.default_max_results}')
         return '\n'.join(lines)
 
 
@@ -82,6 +93,8 @@ class SearchRuntime:
     manifests: tuple[str, ...] = field(default_factory=tuple)
     state_path: Path = field(default_factory=lambda: DEFAULT_SEARCH_STATE_FILE.resolve())
     active_provider_name: str | None = None
+    web_search_enabled: bool = DEFAULT_WEB_SEARCH_ENABLED
+    web_search_context_size: str = DEFAULT_WEB_SEARCH_CONTEXT_SIZE
 
     @classmethod
     def from_workspace(
@@ -89,14 +102,22 @@ class SearchRuntime:
         cwd: Path,
         additional_working_directories: tuple[str, ...] = (),
     ) -> 'SearchRuntime':
+        state_path = (cwd.resolve() / DEFAULT_SEARCH_STATE_FILE).resolve()
+        payload = _load_state_payload(state_path)
+        web_search_enabled = _state_bool(
+            payload.get('web_search_enabled'),
+            default=_env_bool('WEB_SEARCH_ENABLED', default=DEFAULT_WEB_SEARCH_ENABLED),
+        )
+        web_search_context_size = _normalize_context_size(
+            payload.get('web_search_context_size'),
+            default=_default_context_size_from_env(),
+        )
         manifest_paths = _discover_manifest_paths(cwd, additional_working_directories)
         providers: list[SearchProviderProfile] = []
         for manifest_path in manifest_paths:
             providers.extend(_load_profiles_from_manifest(manifest_path))
-        providers.extend(_load_profiles_from_env())
+        providers.extend(_load_profiles_from_env(context_size=web_search_context_size))
         providers = _dedupe_profiles(providers)
-        state_path = (cwd.resolve() / DEFAULT_SEARCH_STATE_FILE).resolve()
-        payload = _load_state_payload(state_path)
         active_provider_name = payload.get('active_provider_name')
         if not isinstance(active_provider_name, str):
             active_provider_name = None
@@ -106,10 +127,19 @@ class SearchRuntime:
             manifests=tuple(str(path) for path in manifest_paths),
             state_path=state_path,
             active_provider_name=active_provider_name,
+            web_search_enabled=web_search_enabled,
+            web_search_context_size=web_search_context_size,
         )
 
     def has_search_runtime(self) -> bool:
-        return bool(self.providers)
+        return self.web_search_enabled and bool(self.providers)
+
+    @property
+    def default_max_results(self) -> int:
+        return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS.get(
+            self.web_search_context_size,
+            WEB_SEARCH_CONTEXT_TO_MAX_RESULTS[DEFAULT_WEB_SEARCH_CONTEXT_SIZE],
+        )
 
     def list_providers(
         self,
@@ -168,13 +198,67 @@ class SearchRuntime:
             manifest_count=len(self.manifests),
             provider_count=len(self.providers),
             api_key_env=provider.api_key_env,
+            web_search_enabled=self.web_search_enabled,
+            context_size=self.web_search_context_size,
+            default_max_results=self.default_max_results,
+        )
+
+    def set_search_enabled(self, enabled: bool) -> SearchStatusReport:
+        self.web_search_enabled = bool(enabled)
+        self._persist_state()
+        return SearchStatusReport(
+            configured=self.has_search_runtime(),
+            detail=(
+                'Enabled web search runtime'
+                if self.web_search_enabled
+                else 'Disabled web search runtime'
+            ),
+            provider_name=self.current_provider().name if self.current_provider() is not None else None,
+            provider_kind=(
+                self.current_provider().provider
+                if self.current_provider() is not None
+                else None
+            ),
+            manifest_count=len(self.manifests),
+            provider_count=len(self.providers),
+            web_search_enabled=self.web_search_enabled,
+            context_size=self.web_search_context_size,
+            default_max_results=self.default_max_results,
+        )
+
+    def toggle_search_enabled(self) -> SearchStatusReport:
+        return self.set_search_enabled(not self.web_search_enabled)
+
+    def set_context_size(self, context_size: str) -> SearchStatusReport:
+        normalized = _normalize_context_size(context_size, default='')
+        if normalized not in WEB_SEARCH_CONTEXT_TO_MAX_RESULTS:
+            options = ', '.join(sorted(WEB_SEARCH_CONTEXT_TO_MAX_RESULTS))
+            raise ValueError(f'context size must be one of: {options}')
+        self.web_search_context_size = normalized
+        self._persist_state()
+        current = self.current_provider()
+        return SearchStatusReport(
+            configured=self.has_search_runtime(),
+            detail=f'Set web search context size to {normalized}',
+            provider_name=current.name if current is not None else None,
+            provider_kind=current.provider if current is not None else None,
+            manifest_count=len(self.manifests),
+            provider_count=len(self.providers),
+            web_search_enabled=self.web_search_enabled,
+            context_size=self.web_search_context_size,
+            default_max_results=self.default_max_results,
         )
 
     def render_summary(self) -> str:
         lines = [
             f'Local search manifests: {len(self.manifests)}',
             f'Configured search providers: {len(self.providers)}',
+            f'Web search enabled: {self.web_search_enabled}',
+            f'Web search context size: {self.web_search_context_size}',
+            f'Default max results: {self.default_max_results}',
         ]
+        if not self.web_search_enabled:
+            lines.append('- Web search is currently disabled. Use `/search on` to enable it.')
         current = self.current_provider()
         if current is None:
             lines.append('- Active search provider: none')
@@ -223,7 +307,7 @@ class SearchRuntime:
         query: str,
         *,
         provider_name: str | None = None,
-        max_results: int = 5,
+        max_results: int | None = None,
         domains: tuple[str, ...] = (),
         timeout_seconds: float = 20.0,
     ) -> str:
@@ -254,11 +338,17 @@ class SearchRuntime:
         query: str,
         *,
         provider_name: str | None = None,
-        max_results: int = 5,
+        max_results: int | None = None,
         domains: tuple[str, ...] = (),
         timeout_seconds: float = 20.0,
     ) -> tuple[SearchProviderProfile, tuple[SearchResult, ...]]:
         provider = self._resolve_provider(provider_name)
+        if max_results is None:
+            max_results = self.default_max_results
+        if isinstance(max_results, bool) or not isinstance(max_results, int):
+            raise ValueError('max_results must be an integer')
+        if max_results < 1:
+            raise ValueError('max_results must be greater than 0')
         backend = provider.provider.lower()
         if backend == 'searxng':
             results = _search_searxng(provider, query, max_results=max_results, timeout_seconds=timeout_seconds)
@@ -273,6 +363,8 @@ class SearchRuntime:
         return provider, tuple(results[:max_results])
 
     def _resolve_provider(self, provider_name: str | None) -> SearchProviderProfile:
+        if not self.web_search_enabled:
+            raise LookupError('Web search is disabled. Use `/search on` to enable it.')
         if provider_name:
             provider = self.get_provider(provider_name)
             if provider is None:
@@ -284,7 +376,11 @@ class SearchRuntime:
         return provider
 
     def _persist_state(self) -> None:
-        payload = {'active_provider_name': self.active_provider_name}
+        payload = {
+            'active_provider_name': self.active_provider_name,
+            'web_search_context_size': self.web_search_context_size,
+            'web_search_enabled': self.web_search_enabled,
+        }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(
             json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + '\n',
@@ -363,12 +459,12 @@ def _provider_from_payload(payload: Any, path: Path) -> SearchProviderProfile | 
     )
 
 
-def _load_profiles_from_env() -> list[SearchProviderProfile]:
-    if not _env_bool('WEB_SEARCH_ENABLED', default=True):
-        return []
-
+def _load_profiles_from_env(*, context_size: str) -> list[SearchProviderProfile]:
     providers: list[SearchProviderProfile] = []
-    default_max_results = _default_context_max_results()
+    default_max_results = WEB_SEARCH_CONTEXT_TO_MAX_RESULTS.get(
+        context_size,
+        WEB_SEARCH_CONTEXT_TO_MAX_RESULTS[DEFAULT_WEB_SEARCH_CONTEXT_SIZE],
+    )
     searxng_base = os.environ.get('SEARXNG_BASE_URL')
     if isinstance(searxng_base, str) and searxng_base.strip():
         providers.append(
@@ -417,14 +513,29 @@ def _env_bool(name: str, *, default: bool) -> bool:
     return normalized not in {'0', 'false', 'no', 'off', 'disabled'}
 
 
-def _default_context_max_results() -> int:
+def _state_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _normalize_context_size(value: Any, *, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    normalized = value.strip().strip('"').strip("'").lower()
+    if normalized in WEB_SEARCH_CONTEXT_TO_MAX_RESULTS:
+        return normalized
+    return default
+
+
+def _default_context_size_from_env() -> str:
     raw = os.environ.get('WEB_SEARCH_CONTEXT_SIZE')
-    if not isinstance(raw, str):
-        return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium']
-    normalized = raw.strip().strip('"').strip("'").lower()
-    if not normalized:
-        return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium']
-    return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS.get(normalized, WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium'])
+    return _normalize_context_size(raw, default=DEFAULT_WEB_SEARCH_CONTEXT_SIZE)
+
+
+def _default_context_max_results() -> int:
+    context_size = _default_context_size_from_env()
+    return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS[context_size]
 
 
 def _dedupe_profiles(providers: list[SearchProviderProfile]) -> list[SearchProviderProfile]:

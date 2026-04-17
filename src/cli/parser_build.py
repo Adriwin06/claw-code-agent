@@ -341,13 +341,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_parser = subparsers.add_parser('agent', help='run the real Python local-model agent')
     agent_parser.add_argument('prompt')
-    agent_parser.add_argument('--max-turns', type=int, default=12)
+    agent_parser.add_argument('--max-turns', type=int)
     agent_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(agent_parser, include_backend=True)
 
     background_parser = subparsers.add_parser('agent-bg', help='run the Python local-model agent as a local background session')
     background_parser.add_argument('prompt')
-    background_parser.add_argument('--max-turns', type=int, default=12)
+    background_parser.add_argument('--max-turns', type=int)
     background_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(background_parser, include_backend=True)
 
@@ -355,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     background_worker_parser.add_argument('background_id')
     background_worker_parser.add_argument('prompt')
     background_worker_parser.add_argument('--background-root', required=True)
-    background_worker_parser.add_argument('--max-turns', type=int, default=12)
+    background_worker_parser.add_argument('--max-turns', type=int)
     background_worker_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(background_worker_parser, include_backend=True)
 
@@ -379,7 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     daemon_start_parser = daemon_subparsers.add_parser('start', help='launch a local daemon-style background agent session')
     daemon_start_parser.add_argument('prompt')
-    daemon_start_parser.add_argument('--max-turns', type=int, default=12)
+    daemon_start_parser.add_argument('--max-turns', type=int)
     daemon_start_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(daemon_start_parser, include_backend=True)
 
@@ -387,7 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_worker_parser.add_argument('background_id')
     daemon_worker_parser.add_argument('prompt')
     daemon_worker_parser.add_argument('--background-root', required=True)
-    daemon_worker_parser.add_argument('--max-turns', type=int, default=12)
+    daemon_worker_parser.add_argument('--max-turns', type=int)
     daemon_worker_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(daemon_worker_parser, include_backend=True)
 
@@ -408,14 +408,14 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser = subparsers.add_parser('agent-chat', help='run an interactive Python local-model chat loop')
     chat_parser.add_argument('prompt', nargs='?')
     chat_parser.add_argument('--resume-session-id')
-    chat_parser.add_argument('--max-turns', type=int, default=12)
+    chat_parser.add_argument('--max-turns', type=int)
     chat_parser.add_argument('--show-transcript', action='store_true')
     _add_agent_common_args(chat_parser, include_backend=True)
 
     tui_parser = subparsers.add_parser('agent-tui', help='run the Textual terminal UI for the local-model agent')
     tui_parser.add_argument('prompt', nargs='?')
     tui_parser.add_argument('--resume-session-id')
-    tui_parser.add_argument('--max-turns', type=int, default=12)
+    tui_parser.add_argument('--max-turns', type=int)
     _add_agent_common_args(tui_parser, include_backend=True)
 
     resume_parser = subparsers.add_parser('agent-resume', help='resume a saved Python local-model agent session')

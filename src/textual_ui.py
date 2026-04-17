@@ -835,18 +835,42 @@ def render_details_panel(
     *,
     auto_follow: bool,
 ) -> str:
+    max_turns_label = 'unlimited' if state.max_turns is None else str(state.max_turns)
     lines = [
         'Run',
         '',
         f'status={state.status}',
         f'phase={state.phase}',
+        f'phase_detail={state.phase_detail}',
         f'model={state.model}',
         f'permissions={state.permissions}',
+        f'workspace={state.workspace}',
+        f'streaming={state.streaming_enabled}',
+        f'max_turns={max_turns_label}',
+        f'command_timeout_seconds={state.command_timeout_seconds:.1f}',
         f'session_id={state.session_id or "none"}',
         f'auto_follow={auto_follow}',
+        f'busy={state.busy}',
+        f'last_tool={state.last_tool or "none"}',
+        f'last_stop_reason={_friendly_stop_reason(state.last_stop_reason)}',
+        f'input_tokens={state.input_tokens}',
+        f'output_tokens={state.output_tokens}',
         f'prompts={state.prompt_count}',
+        f'conversation_turns={state.conversation_turns}',
+        f'activity_events={state.activity_events}',
+        f'last_turns={state.last_turns}',
+        f'last_tool_calls={state.last_tool_calls}',
         f'tokens={state.total_tokens}',
         f'cost_usd={state.total_cost_usd:.6f}',
+        '',
+        'Search',
+        '',
+        f'enabled={state.search_enabled}',
+        f'context_size={state.search_context_size}',
+        f'default_max_results={state.search_default_max_results}',
+        f'providers={state.search_provider_count}',
+        f'manifests={state.search_manifest_count}',
+        f'active_provider={state.search_active_provider}',
     ]
     if turn is not None:
         lines.extend(
@@ -1787,6 +1811,7 @@ def run_agent_tui(
             self._refresh_details_panel()
 
         def _handle_state_change(self, state: AgentTuiState) -> None:
+            state.refresh_from_agent(self._agent)
             workspace_name = Path(state.workspace).name or state.workspace
             self.sub_title = f'{workspace_name} | {state.status}'
             self._active_conversation().session_id = state.session_id
@@ -1953,6 +1978,7 @@ def run_agent_tui(
             option_list.highlighted = selected_index
 
         def _refresh_details_panel(self) -> None:
+            self._state.refresh_from_agent(self._agent)
             turn = self._selected_turn()
             reuse_button = self.query_one('#reuse-prompt-button', Button)
             retry_button = self.query_one('#retry-turn-button', Button)

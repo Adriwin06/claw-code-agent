@@ -14,6 +14,7 @@ from src.main import (
     _run_agent_chat_loop,
     build_parser,
 )
+from src.cli.agent_cli_config import _append_agent_forwarded_args
 from tests.test_helpers import make_urlopen_side_effect
 
 
@@ -285,6 +286,23 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(args.command, 'agent-tui')
         self.assertEqual(args.cwd, '.')
         self.assertEqual(args.resume_session_id, 'session-123')
+
+    def test_agent_chat_defaults_to_unlimited_turns_when_omitted(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['agent-chat', '--cwd', '.'])
+        self.assertIsNone(args.max_turns)
+
+        runtime_config = _build_runtime_config(args)
+        self.assertIsNone(runtime_config.max_turns)
+
+    def test_background_forwarded_args_omit_max_turns_when_unset(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['agent-bg', 'hello', '--cwd', '.'])
+
+        command: list[str] = []
+        _append_agent_forwarded_args(command, args, include_backend=True)
+
+        self.assertNotIn('--max-turns', command)
 
     def test_parser_accepts_llm_backend_for_agent_commands(self) -> None:
         parser = build_parser()

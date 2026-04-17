@@ -194,9 +194,13 @@ def deserialize_runtime_config(payload: JSONDict) -> AgentRuntimeConfig:
     if not isinstance(budget_payload, dict):
         budget_payload = {}
     output_schema_payload = payload.get('output_schema')
+    raw_max_turns = payload.get('max_turns', 12)
+    max_turns = _optional_int(raw_max_turns)
+    if raw_max_turns is not None and max_turns is None:
+        max_turns = 12
     return AgentRuntimeConfig(
         cwd=Path(str(payload['cwd'])).resolve(),
-        max_turns=int(payload.get('max_turns', 12)),
+        max_turns=max_turns,
         command_timeout_seconds=float(payload.get('command_timeout_seconds', 30.0)),
         max_output_chars=int(payload.get('max_output_chars', 12000)),
         stream_model_responses=bool(payload.get('stream_model_responses', False)),

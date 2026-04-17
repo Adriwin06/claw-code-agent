@@ -54,15 +54,21 @@ class AgentTuiState:
     last_tool: str | None = None
     last_stop_reason: str | None = None
     streaming_enabled: bool = False
-    max_turns: int = 0
+    max_turns: int | None = 0
     command_timeout_seconds: float = 0.0
     conversation_turns: int = 0
     activity_events: int = 0
+    search_enabled: bool = True
+    search_context_size: str = 'medium'
+    search_default_max_results: int = 5
+    search_provider_count: int = 0
+    search_manifest_count: int = 0
+    search_active_provider: str = 'none'
     busy: bool = False
 
     @classmethod
     def from_agent(cls, agent: LocalCodingAgent) -> 'AgentTuiState':
-        return cls(
+        state = cls(
             workspace=str(agent.runtime_config.cwd),
             model=agent.model_config.model,
             permissions=_render_permissions(agent),
@@ -70,8 +76,40 @@ class AgentTuiState:
             max_turns=agent.runtime_config.max_turns,
             command_timeout_seconds=agent.runtime_config.command_timeout_seconds,
         )
+        state.refresh_from_agent(agent)
+        return state
+
+    def refresh_from_agent(self, agent: LocalCodingAgent) -> None:
+        self.workspace = str(agent.runtime_config.cwd)
+        self.model = agent.model_config.model
+        self.permissions = _render_permissions(agent)
+        self.streaming_enabled = agent.runtime_config.stream_model_responses
+        self.max_turns = agent.runtime_config.max_turns
+        self.command_timeout_seconds = agent.runtime_config.command_timeout_seconds
+
+        search_runtime = agent.search_runtime
+        if search_runtime is None:
+            self.search_enabled = False
+            self.search_context_size = 'medium'
+            self.search_default_max_results = 5
+            self.search_provider_count = 0
+            self.search_manifest_count = 0
+            self.search_active_provider = 'none'
+            return
+
+        self.search_enabled = search_runtime.web_search_enabled
+        self.search_context_size = search_runtime.web_search_context_size
+        self.search_default_max_results = search_runtime.default_max_results
+        self.search_provider_count = len(search_runtime.providers)
+        self.search_manifest_count = len(search_runtime.manifests)
+        active_provider = search_runtime.current_provider()
+        if active_provider is None:
+            self.search_active_provider = 'none'
+        else:
+            self.search_active_provider = f'{active_provider.name} ({active_provider.provider})'
 
     def render(self) -> str:
+        max_turns_label = 'unlimited' if self.max_turns is None else str(self.max_turns)
         lines = [
             'Session',
             '',
@@ -82,8 +120,14 @@ class AgentTuiState:
             f'model={self.model}',
             f'permissions={self.permissions}',
             f'streaming={self.streaming_enabled}',
-            f'max_turns={self.max_turns}',
+            f'max_turns={max_turns_label}',
             f'command_timeout_seconds={self.command_timeout_seconds:.1f}',
+            f'search_enabled={self.search_enabled}',
+            f'search_context_size={self.search_context_size}',
+            f'search_default_max_results={self.search_default_max_results}',
+            f'search_provider_count={self.search_provider_count}',
+            f'search_manifest_count={self.search_manifest_count}',
+            f'search_active_provider={self.search_active_provider}',
             f'prompt_count={self.prompt_count}',
             f'conversation_turns={self.conversation_turns}',
             f'activity_events={self.activity_events}',

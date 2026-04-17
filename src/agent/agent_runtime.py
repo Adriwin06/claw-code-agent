@@ -561,7 +561,10 @@ class LocalCodingAgent:
             self.last_run_result = result
             return result
 
-        for turn_index in range(1, self.runtime_config.max_turns + 1):
+        max_turns = self.runtime_config.max_turns
+        turn_index = 0
+        while max_turns is None or turn_index < max_turns:
+            turn_index += 1
             self._microcompact_session_if_needed(
                 session,
                 stream_events,
@@ -1185,7 +1188,7 @@ class LocalCodingAgent:
                 last_content
                 or 'Stopped: max turns reached before the model produced a final answer.'
             ),
-            turns=self.runtime_config.max_turns,
+            turns=turn_index,
             tool_calls=tool_calls,
             transcript=session.transcript(),
             events=tuple(stream_events),
@@ -1201,7 +1204,7 @@ class LocalCodingAgent:
         result = self._append_runtime_after_turn_events(
             result,
             prompt=effective_prompt,
-            turn_index=self.runtime_config.max_turns,
+            turn_index=turn_index,
         )
         result = self._persist_session(session, result)
         self.last_run_result = result
@@ -2380,7 +2383,9 @@ class LocalCodingAgent:
             )
 
         # Resolve max_turns — agent definition or explicit param
-        effective_max_turns = max_turns or agent_def.max_turns or min(self.runtime_config.max_turns, 6)
+        parent_max_turns = self.runtime_config.max_turns
+        fallback_max_turns = 6 if parent_max_turns is None else min(parent_max_turns, 6)
+        effective_max_turns = max_turns or agent_def.max_turns or fallback_max_turns
 
         child_runtime_config = replace(
             self.runtime_config,
@@ -3568,10 +3573,16 @@ class LocalCodingAgent:
         query: str | None = None,
         *,
         provider: str | None = None,
-        max_results: int = 5,
+        max_results: int | None = None,
         domains: tuple[str, ...] = (),
     ) -> str:
-        if self.search_runtime is None or not self.search_runtime.has_search_runtime():
+        if self.search_runtime is None:
+            return (
+                '# Search\n\nNo local search provider is available. '
+                'Add a .claw-search.json or .claude/search.json manifest, '
+                'or set SEARXNG_BASE_URL (no API key required), BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
+            )
+        if not self.search_runtime.providers:
             return (
                 '# Search\n\nNo local search provider is available. '
                 'Add a .claw-search.json or .claude/search.json manifest, '
@@ -3598,12 +3609,43 @@ class LocalCodingAgent:
         return self.search_runtime.render_providers_index(query=query)
 
     def render_search_activate_report(self, provider: str) -> str:
-        if self.search_runtime is None or not self.search_runtime.has_search_runtime():
+        if self.search_runtime is None or not self.search_runtime.providers:
             return '# Search\n\nNo local search provider is available.'
         try:
             report = self.search_runtime.activate_provider(provider)
         except KeyError:
             return f'# Search\n\nUnknown search provider: {provider}'
+        clear_context_caches()
+        self.tool_context = replace(
+            self.tool_context,
+            search_runtime=self.search_runtime,
+        )
+        return '\n'.join(['# Search', '', report.as_text()])
+
+    def render_search_toggle_report(self, enabled: bool | None = None) -> str:
+        if self.search_runtime is None:
+            return '# Search\n\nNo local search runtime is available.'
+        report = (
+            self.search_runtime.toggle_search_enabled()
+            if enabled is None
+            else self.search_runtime.set_search_enabled(enabled)
+        )
+        clear_context_caches()
+        self.tool_context = replace(
+            self.tool_context,
+            search_runtime=self.search_runtime,
+        )
+        return '\n'.join(['# Search', '', report.as_text()])
+
+    def render_search_context_report(self, context_size: str | None = None) -> str:
+        if self.search_runtime is None:
+            return '# Search\n\nNo local search runtime is available.'
+        if context_size is None:
+            return '\n'.join(['# Search', '', self.search_runtime.render_summary()])
+        try:
+            report = self.search_runtime.set_context_size(context_size)
+        except ValueError as exc:
+            return f'# Search\n\n{exc}'
         clear_context_caches()
         self.tool_context = replace(
             self.tool_context,
@@ -4099,7 +4141,14 @@ class LocalCodingAgent:
                 lines.append(
                     f'- Active remote: {connection.mode} -> {connection.target}'
                 )
-        if self.search_runtime is not None and self.search_runtime.has_search_runtime():
+        if self.search_runtime is not None:
+            lines.append(f'- Web search enabled: {self.search_runtime.web_search_enabled}')
+            lines.append(
+                f'- Web search context size: {self.search_runtime.web_search_context_size}'
+            )
+            lines.append(
+                f'- Web search default max results: {self.search_runtime.default_max_results}'
+            )
             lines.append(f'- Search providers: {len(self.search_runtime.providers)}')
             active_provider = self.search_runtime.current_provider()
             if active_provider is not None:

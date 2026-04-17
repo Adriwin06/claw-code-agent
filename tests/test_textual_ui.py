@@ -129,6 +129,8 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('status=Idle', rendered)
         self.assertIn('phase=Idle', rendered)
         self.assertIn('streaming=False', rendered)
+        self.assertIn('search_enabled=', rendered)
+        self.assertIn('search_context_size=', rendered)
 
     def test_render_details_panel_highlights_actions_and_selected_turn(self) -> None:
         state = AgentTuiState(
@@ -141,6 +143,12 @@ class TextualUiTests(unittest.TestCase):
             prompt_count=2,
             total_tokens=42,
             total_cost_usd=0.125,
+            search_enabled=False,
+            search_context_size='high',
+            search_default_max_results=8,
+            search_provider_count=2,
+            search_manifest_count=1,
+            search_active_provider='local-search (searxng)',
         )
         turn = ConversationTurn(
             turn_id='turn-1',
@@ -158,6 +166,11 @@ class TextualUiTests(unittest.TestCase):
 
         self.assertIn('Run', rendered)
         self.assertIn('Selected Turn', rendered)
+        self.assertIn('Search', rendered)
+        self.assertIn('enabled=False', rendered)
+        self.assertIn('context_size=high', rendered)
+        self.assertIn('default_max_results=8', rendered)
+        self.assertIn('active_provider=local-search (searxng)', rendered)
         self.assertIn('stop_reason=completed', rendered)
         self.assertIn('last_activity=Tool finished', rendered)
         self.assertIn('Ctrl+U: reuse selected prompt', rendered)

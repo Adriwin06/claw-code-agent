@@ -121,7 +121,7 @@ def get_slash_command_specs() -> tuple[SlashCommandSpec, ...]:
         ),
         SlashCommandSpec(
             names=('search',),
-            description='Show search runtime status, list or activate providers, or run a real web search query.',
+            description='Show search status, toggle web search on/off, set context size, list or activate providers, or run a web search query.',
             handler=_handle_search,
         ),
         SlashCommandSpec(
@@ -475,6 +475,19 @@ def _handle_search(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
     command = args.strip()
     if not command:
         return _local_result(input_text, agent.render_search_report())
+    if command in {'on', 'enable'}:
+        return _local_result(input_text, agent.render_search_toggle_report(True))
+    if command in {'off', 'disable'}:
+        return _local_result(input_text, agent.render_search_toggle_report(False))
+    if command == 'toggle':
+        return _local_result(input_text, agent.render_search_toggle_report())
+    if command == 'context':
+        return _local_result(input_text, agent.render_search_context_report())
+    if command.startswith('context '):
+        context_size = command.split(' ', 1)[1].strip()
+        if not context_size:
+            return _local_result(input_text, 'Usage: /search context <low|medium|high>')
+        return _local_result(input_text, agent.render_search_context_report(context_size))
     if command == 'providers':
         return _local_result(input_text, agent.render_search_providers_report())
     if command.startswith('providers '):

@@ -43,6 +43,29 @@ class SearchRuntimeTests(unittest.TestCase):
         self.assertEqual(provider.name, 'searxng')
         self.assertEqual(provider.base_url, 'http://127.0.0.1:8888')
 
+    def test_search_runtime_toggle_and_context_persist_across_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch.dict('os.environ', {'SEARXNG_BASE_URL': 'http://127.0.0.1:8888'}, clear=False):
+                runtime = SearchRuntime.from_workspace(workspace)
+                disable_report = runtime.set_search_enabled(False)
+                context_report = runtime.set_context_size('high')
+                reloaded = SearchRuntime.from_workspace(workspace)
+
+        self.assertIn('web_search_enabled=False', disable_report.as_text())
+        self.assertIn('web_search_context_size=high', context_report.as_text())
+        self.assertFalse(reloaded.web_search_enabled)
+        self.assertEqual(reloaded.web_search_context_size, 'high')
+        self.assertEqual(reloaded.default_max_results, 8)
+
+    def test_search_runtime_set_context_size_rejects_invalid_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            runtime = SearchRuntime.from_workspace(workspace)
+
+            with self.assertRaises(ValueError):
+                runtime.set_context_size('ultra')
+
     def test_search_runtime_expands_manifest_base_url_from_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)

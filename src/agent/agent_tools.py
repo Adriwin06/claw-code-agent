@@ -1734,8 +1734,7 @@ def _web_search(arguments: dict[str, Any], context: ToolExecutionContext) -> str
         raise ToolExecutionError('domains must contain only non-empty strings')
     max_results = arguments.get('max_results')
     if max_results is None:
-        default_provider = runtime.get_provider(provider) if provider else runtime.current_provider()
-        max_results = default_provider.default_max_results if default_provider is not None else 5
+        max_results = runtime.default_max_results
     if isinstance(max_results, bool) or not isinstance(max_results, int):
         raise ToolExecutionError('max_results must be an integer')
     if max_results < 1 or max_results > 20:
@@ -3093,7 +3092,14 @@ def _require_ask_user_runtime(context: ToolExecutionContext):
 
 
 def _require_search_runtime(context: ToolExecutionContext):
-    if context.search_runtime is None or not context.search_runtime.has_search_runtime():
+    if context.search_runtime is None:
+        raise ToolExecutionError(
+            'No local search provider is available. Add a .claw-search.json or .claude/search.json manifest, '
+            'or set SEARXNG_BASE_URL (no API key required), BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
+        )
+    if not context.search_runtime.web_search_enabled:
+        raise ToolExecutionError('Web search is disabled. Use `/search on` to enable it.')
+    if not context.search_runtime.providers:
         raise ToolExecutionError(
             'No local search provider is available. Add a .claw-search.json or .claude/search.json manifest, '
             'or set SEARXNG_BASE_URL (no API key required), BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'

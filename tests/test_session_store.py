@@ -376,6 +376,11 @@ class TestRuntimeConfigSerialization(unittest.TestCase):
         self.assertIsNone(config.budget_config.max_total_tokens)
         self.assertIsNone(config.output_schema)
 
+    def test_deserialize_preserves_explicit_none_max_turns(self) -> None:
+        payload = {'cwd': '/home/user', 'max_turns': None}
+        config = deserialize_runtime_config(payload)
+        self.assertIsNone(config.max_turns)
+
     def test_deserialize_non_dict_permissions(self) -> None:
         payload = {'cwd': '/home', 'permissions': 'invalid'}
         config = deserialize_runtime_config(payload)

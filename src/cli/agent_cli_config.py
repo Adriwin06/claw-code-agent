@@ -218,7 +218,9 @@ def _append_agent_forwarded_args(
     include_backend: bool,
 ) -> None:
     command.extend(['--cwd', str(args.cwd)])
-    command.extend(['--max-turns', str(getattr(args, 'max_turns', 12))])
+    max_turns = getattr(args, 'max_turns', 12)
+    if max_turns is not None:
+        command.extend(['--max-turns', str(max_turns)])
     if include_backend:
         command.extend(['--model', str(args.model)])
         command.extend(['--base-url', str(args.base_url)])

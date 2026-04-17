@@ -154,7 +154,7 @@ class AgentPermissions:
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
     cwd: Path
-    max_turns: int = 12
+    max_turns: int | None = 12
     command_timeout_seconds: float = 30.0
     max_output_chars: int = 12000
     stream_model_responses: bool = False
