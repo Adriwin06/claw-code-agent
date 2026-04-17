@@ -315,6 +315,14 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(args.command, 'agent')
         self.assertEqual(args.llm_backend, 'litellm')
 
+    def test_parser_accepts_agents_command(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['agents', 'reviewer', '--cwd', '.', '--all'])
+        self.assertEqual(args.command, 'agents')
+        self.assertEqual(args.agent_type, 'reviewer')
+        self.assertTrue(args.all)
+        self.assertEqual(args.cwd, '.')
+
     def test_parser_accepts_team_runtime_commands(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['team-create', 'reviewers', '--member', 'alice', '--cwd', '.'])

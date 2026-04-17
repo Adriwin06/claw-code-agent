@@ -32,6 +32,7 @@
 | 🆕 | **Plugin Runtime** | Full manifest-based plugin system — hooks, tool aliases, virtual tools, tool blocking |
 | 🆕 | **Nested Agent Delegation** | Delegate subtasks to child agents with dependency-aware topological batching |
 | 🆕 | **Agent Manager** | Lineage tracking, group membership, batch summaries for nested agents |
+| 🆕 | **Custom Agent Profiles** | Discover local markdown-defined agents from `~/.claude/agents` and `./.claude/agents` and use them through the `Agent` tool |
 | 🆕 | **Cost Tracking & Budgets** | Token budgets, cost budgets, tool-call limits, model-call limits, session-turn limits |
 | 🆕 | **Structured Output** | JSON schema response mode with `--response-schema-file` |
 | 🆕 | **Context Compaction** | Auto-snip, auto-compact, and reactive compaction on prompt-too-long errors |
@@ -89,6 +90,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 | 🧰 **Core Tools** | File read / write / edit, glob search, grep search, shell execution |
 | 🔌 **Plugin Runtime** | Manifest-based plugins with hooks, aliases, virtual tools, and tool blocking |
 | 🪆 **Nested Delegation** | Delegate subtasks to child agents with dependency-aware topological batching |
+| 🧩 **Custom Agents** | Load local agent profiles from `~/.claude/agents` and `./.claude/agents`, inspect them via `/agents`, and delegate with `subagent_type` |
 | 📡 **Streaming** | Token-by-token streaming output with `--stream` |
 | 💬 **Slash Commands** | Local commands for context, config, account, search, MCP, remote, tasks, plan, hooks, and model control |
 | 🌐 **Remote Runtime** | Manifest-backed remote profiles with local `remote-mode`, `ssh-mode`, `teleport-mode`, and connect/disconnect state |
@@ -136,7 +138,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 - [x] Ollama, LiteLLM Proxy, and OpenRouter backends
 - [x] Core tools: `list_dir`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `bash`
 - [x] Context building and `/context`-style usage reporting
-- [x] Slash commands: `/help`, `/context`, `/context-raw`, `/prompt`, `/permissions`, `/model`, `/tools`, `/memory`, `/status`, `/clear`
+- [x] Slash commands: `/help`, `/context`, `/context-raw`, `/token-budget`, `/prompt`, `/permissions`, `/model`, `/tools`, `/agents`, `/memory`, `/status`, `/clear`
 - [x] Session persistence and `agent-resume` flow
 - [x] Permission system (read-only, write, shell, unsafe tiers)
 - [x] Streaming token-by-token assistant output
@@ -151,6 +153,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 - [x] File history journaling with snapshot IDs and replay summaries
 - [x] Nested agent delegation with dependency-aware topological batching
 - [x] Agent manager with lineage tracking and group membership
+- [x] Filesystem-backed custom agent profiles with built-in/user/project precedence
 - [x] Local daemon-style background command family
 - [x] Local background session workflows: `agent-bg`, `agent-ps`, `agent-logs`, `agent-attach`, `agent-kill`
 - [x] Local remote runtime: manifest discovery, profile listing, connect/disconnect persistence, and CLI/slash flows
@@ -207,6 +210,7 @@ claw-code/
 │   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
 │   ├── agent_tools.py            # Tool definitions & execution engine
 │   ├── agent_prompting.py        # System prompt assembly
+│   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
 │   ├── agent_context.py          # Context building & CLAUDE.md discovery
 │   ├── agent_context_usage.py    # Context usage estimation & reporting
 │   ├── agent_session.py          # Session state management
@@ -542,6 +546,7 @@ python3 -m src.main agent \
 | `agent-context` | Show estimated context usage |
 | `agent-context-raw` | Show the raw context snapshot |
 | `token-budget` | Show prompt-window budget, reserves, and soft/hard input limits |
+| `agents [agent_type]` | List active local agent definitions or show one agent profile |
 | `agent-resume <id> <prompt>` | Resume a saved session |
 
 ### Runtime Utility Commands
@@ -648,6 +653,7 @@ These are handled **locally** before the model loop:
 | `/permissions` | — | Show active tool permission mode |
 | `/model` | — | Show or update the active model |
 | `/tools` | — | List registered tools with permission status |
+| `/agents` | — | List active local agent definitions or show one profile |
 | `/memory` | — | Show loaded CLAUDE.md memory bundle |
 | `/status` | `/session` | Show runtime/session status summary |
 | `/clear` | — | Clear ephemeral runtime state |
@@ -657,7 +663,40 @@ python3 -m src.main agent "/help"
 python3 -m src.main agent "/context" --cwd .
 python3 -m src.main agent "/token-budget" --cwd .
 python3 -m src.main agent "/tools" --cwd .
+python3 -m src.main agent "/agents" --cwd .
 python3 -m src.main agent "/status" --cwd .
+```
+
+### Custom Agent Definitions
+
+Custom agent profiles can live in either of these directories:
+
+- `./.claude/agents/*.md`
+- `~/.claude/agents/*.md`
+
+Project agents override user agents, and user agents override built-ins when the `agent_type` matches.
+
+Example agent file:
+
+```md
+---
+name: reviewer
+description: "Review implementation changes carefully."
+tools: read_file, grep_search
+model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+initialPrompt: Start by identifying the highest-risk files.
+---
+
+Inspect code changes and summarize correctness risks, regressions, and missing tests.
+```
+
+Inspect the loaded profiles:
+
+```bash
+python3 -m src.main agents --cwd .
+python3 -m src.main agents reviewer --cwd .
+python3 -m src.main agent "/agents" --cwd .
+python3 -m src.main agent "/agents show reviewer" --cwd .
 ```
 
 ### Utility Commands
