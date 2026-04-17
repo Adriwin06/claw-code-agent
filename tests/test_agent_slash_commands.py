@@ -13,20 +13,7 @@ from src.agent.agent_slash_commands import looks_like_command, parse_slash_comma
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.orchestration.task_runtime import TaskRuntime
-
-
-class _FakeHTTPResponse:
-    def __init__(self, payload: str) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return self.payload.encode('utf-8')
-
-    def __enter__(self) -> '_FakeHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
+from tests.test_helpers import FakeHTTPResponse as _FakeHTTPResponse
 
 
 def _write_fake_mcp_server(workspace: Path) -> Path:

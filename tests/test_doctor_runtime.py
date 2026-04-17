@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,20 +8,7 @@ from urllib import error as urllib_error
 
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
 from src.features.system.doctor_runtime import run_doctor
-
-
-class FakeHTTPResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode('utf-8')
-
-    def __enter__(self) -> 'FakeHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
+from tests.test_helpers import FakeHTTPResponse
 
 
 class DoctorRuntimeTests(unittest.TestCase):

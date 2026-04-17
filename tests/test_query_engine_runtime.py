@@ -11,75 +11,11 @@ from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
 from src.openai_compat import OpenAICompatClient
 from src.features.integration.plugin_runtime import PluginRuntime
 from src.core.orchestration.query_engine import QueryEngineConfig, QueryEnginePort
-
-
-class FakeHTTPResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode('utf-8')
-
-    def __enter__(self) -> 'FakeHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
-class FakeStreamingHTTPResponse:
-    def __init__(self, payloads: list[dict[str, object]]) -> None:
-        self.lines: list[bytes] = []
-        for payload in payloads:
-            chunk = f'data: {json.dumps(payload)}\n\n'
-            self.lines.extend(part.encode('utf-8') for part in chunk.splitlines(keepends=True))
-        done_chunk = 'data: [DONE]\n\n'
-        self.lines.extend(part.encode('utf-8') for part in done_chunk.splitlines(keepends=True))
-
-    def readline(self) -> bytes:
-        if not self.lines:
-            return b''
-        return self.lines.pop(0)
-
-    def __enter__(self) -> 'FakeStreamingHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
-def make_recording_urlopen_side_effect(
-    responses: list[dict[str, object]],
-    recorded_payloads: list[dict[str, object]],
-):
-    queued = [FakeHTTPResponse(payload) for payload in responses]
-
-    def _fake_urlopen(request_obj, timeout=None):  # noqa: ANN001
-        body = request_obj.data.decode('utf-8')
-        recorded_payloads.append(json.loads(body))
-        return queued.pop(0)
-
-    return _fake_urlopen
-
-
-def make_urlopen_side_effect(responses: list[dict[str, object]]):
-    queued = [FakeHTTPResponse(payload) for payload in responses]
-
-    def _fake_urlopen(request_obj, timeout=None):  # noqa: ANN001
-        return queued.pop(0)
-
-    return _fake_urlopen
-
-
-def make_streaming_urlopen_side_effect(
-    responses: list[list[dict[str, object]]],
-):
-    queued = [FakeStreamingHTTPResponse(payloads) for payloads in responses]
-
-    def _fake_urlopen(request_obj, timeout=None):  # noqa: ANN001
-        return queued.pop(0)
-
-    return _fake_urlopen
+from tests.test_helpers import (
+    make_recording_urlopen_side_effect,
+    make_streaming_urlopen_side_effect,
+    make_urlopen_side_effect,
+)
 
 
 class QueryEngineRuntimeTests(unittest.TestCase):

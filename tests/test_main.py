@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -15,29 +14,7 @@ from src.main import (
     _run_agent_chat_loop,
     build_parser,
 )
-
-
-class FakeHTTPResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode('utf-8')
-
-    def __enter__(self) -> 'FakeHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
-def make_urlopen_side_effect(responses: list[dict[str, object]]):
-    queued = [FakeHTTPResponse(payload) for payload in responses]
-
-    def _fake_urlopen(request_obj, timeout=None):  # noqa: ANN001
-        return queued.pop(0)
-
-    return _fake_urlopen
+from tests.test_helpers import make_urlopen_side_effect
 
 
 class MainCliTests(unittest.TestCase):

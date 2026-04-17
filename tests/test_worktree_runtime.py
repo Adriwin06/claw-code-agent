@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import tempfile
@@ -12,29 +11,7 @@ from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
-
-
-class _FakeHTTPResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode('utf-8')
-
-    def __enter__(self) -> '_FakeHTTPResponse':
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
-def _make_urlopen_side_effect(responses: list[dict[str, object]]):
-    queued = [_FakeHTTPResponse(payload) for payload in responses]
-
-    def _fake_urlopen(request_obj, timeout=None):  # noqa: ANN001
-        return queued.pop(0)
-
-    return _fake_urlopen
+from tests.test_helpers import make_urlopen_side_effect as _make_urlopen_side_effect
 
 
 def _init_git_repo(workspace: Path) -> None:
