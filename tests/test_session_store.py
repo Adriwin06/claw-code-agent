@@ -260,7 +260,7 @@ class TestModelConfigSerialization(unittest.TestCase):
         self.assertEqual(config.model, 'gpt-4')
         self.assertEqual(config.base_url, 'http://127.0.0.1:8000/v1')
         self.assertEqual(config.api_key, 'local-token')
-        self.assertEqual(config.llm_backend, 'openai_compat')
+        self.assertEqual(config.llm_backend, 'litellm')
         self.assertAlmostEqual(config.temperature, 0.0)
         self.assertAlmostEqual(config.timeout_seconds, 120.0)
         self.assertAlmostEqual(config.pricing.input_cost_per_million_tokens_usd, 0.0)

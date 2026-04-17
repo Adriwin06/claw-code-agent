@@ -18,6 +18,11 @@ SEARCH_MANIFEST_PATHS = (
 DEFAULT_SEARXNG_BASE_URL = 'http://127.0.0.1:8080'
 DEFAULT_BRAVE_BASE_URL = 'https://api.search.brave.com/res/v1/web/search'
 DEFAULT_TAVILY_BASE_URL = 'https://api.tavily.com/search'
+WEB_SEARCH_CONTEXT_TO_MAX_RESULTS = {
+    'low': 3,
+    'medium': 5,
+    'high': 8,
+}
 
 
 @dataclass(frozen=True)
@@ -359,7 +364,11 @@ def _provider_from_payload(payload: Any, path: Path) -> SearchProviderProfile | 
 
 
 def _load_profiles_from_env() -> list[SearchProviderProfile]:
+    if not _env_bool('WEB_SEARCH_ENABLED', default=True):
+        return []
+
     providers: list[SearchProviderProfile] = []
+    default_max_results = _default_context_max_results()
     searxng_base = os.environ.get('SEARXNG_BASE_URL')
     if isinstance(searxng_base, str) and searxng_base.strip():
         providers.append(
@@ -368,6 +377,7 @@ def _load_profiles_from_env() -> list[SearchProviderProfile]:
                 provider='searxng',
                 source_manifest='env:SEARXNG_BASE_URL',
                 base_url=searxng_base.strip(),
+                default_max_results=default_max_results,
             )
         )
     brave_key = os.environ.get('BRAVE_SEARCH_API_KEY')
@@ -379,6 +389,7 @@ def _load_profiles_from_env() -> list[SearchProviderProfile]:
                 source_manifest='env:BRAVE_SEARCH_API_KEY',
                 base_url=DEFAULT_BRAVE_BASE_URL,
                 api_key_env='BRAVE_SEARCH_API_KEY',
+                default_max_results=default_max_results,
             )
         )
     tavily_key = os.environ.get('TAVILY_API_KEY')
@@ -390,9 +401,30 @@ def _load_profiles_from_env() -> list[SearchProviderProfile]:
                 source_manifest='env:TAVILY_API_KEY',
                 base_url=DEFAULT_TAVILY_BASE_URL,
                 api_key_env='TAVILY_API_KEY',
+                default_max_results=default_max_results,
             )
         )
     return providers
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if not isinstance(raw, str):
+        return default
+    normalized = raw.strip().lower()
+    if not normalized:
+        return default
+    return normalized not in {'0', 'false', 'no', 'off', 'disabled'}
+
+
+def _default_context_max_results() -> int:
+    raw = os.environ.get('WEB_SEARCH_CONTEXT_SIZE')
+    if not isinstance(raw, str):
+        return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium']
+    normalized = raw.strip().strip('"').strip("'").lower()
+    if not normalized:
+        return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium']
+    return WEB_SEARCH_CONTEXT_TO_MAX_RESULTS.get(normalized, WEB_SEARCH_CONTEXT_TO_MAX_RESULTS['medium'])
 
 
 def _dedupe_profiles(providers: list[SearchProviderProfile]) -> list[SearchProviderProfile]:

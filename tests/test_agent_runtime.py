@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.agent.agent_session import AgentMessage
 from src.agent.agent_runtime import LocalCodingAgent
@@ -182,7 +182,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -246,7 +246,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -338,7 +338,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 session_directory=session_dir,
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -388,7 +388,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_streaming_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -474,7 +474,7 @@ class AgentRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_streaming_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -544,7 +544,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -608,7 +608,7 @@ class AgentRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -667,7 +667,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -705,6 +705,9 @@ class AgentRuntimeTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
+            mock_client = MagicMock()
+            mock_client.complete.side_effect = AssertionError('backend should not be called')
+            mock_client.stream.side_effect = AssertionError('backend should not be called')
             with patch(
                 'src.agent.agent_runtime.calculate_token_budget',
                 return_value=snapshot,
@@ -712,8 +715,8 @@ class AgentRuntimeTests(unittest.TestCase):
                 'src.agent.agent_runtime.LocalCodingAgent._reduce_context_pressure',
                 return_value=False,
             ), patch(
-                'src.openai_compat.request.urlopen',
-                side_effect=AssertionError('backend should not be called'),
+                'src.agent.agent_runtime.build_llm_client',
+                return_value=mock_client,
             ):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
@@ -876,7 +879,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 'src.agent.agent_runtime.compact_conversation',
                 side_effect=fake_compact,
             ), patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -924,7 +927,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -990,7 +993,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1051,7 +1054,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1124,7 +1127,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1191,7 +1194,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             (workspace / 'large.txt').write_text('alpha\n' * 300, encoding='utf-8')
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1251,7 +1254,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_streaming_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -1324,7 +1327,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             (workspace / 'large.txt').write_text(('alpha beta gamma\n' * 400), encoding='utf-8')
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1401,7 +1404,7 @@ class AgentRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -1503,7 +1506,7 @@ class AgentRuntimeTests(unittest.TestCase):
             (workspace / 'draft.txt').write_text('hello world\n', encoding='utf-8')
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -1604,7 +1607,7 @@ class AgentRuntimeTests(unittest.TestCase):
             (workspace / 'large.txt').write_text(('alpha beta gamma\n' * 400), encoding='utf-8')
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -1701,7 +1704,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1792,7 +1795,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -1895,7 +1898,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -1991,7 +1994,7 @@ class AgentRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 seed_agent = LocalCodingAgent(
@@ -2093,7 +2096,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2136,7 +2139,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2186,7 +2189,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2232,7 +2235,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2334,7 +2337,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -2418,7 +2421,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -2530,7 +2533,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2624,7 +2627,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2672,7 +2675,7 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -2740,7 +2743,7 @@ class AgentRuntimeTests(unittest.TestCase):
             )
             with patch.dict('os.environ', {'HOOK_SAFE_TOKEN': 'demo-secret'}, clear=False):
                 with patch(
-                    'src.openai_compat.request.urlopen',
+                    'src.agent.agent_runtime.build_llm_client',
                     side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
                 ):
                     agent = LocalCodingAgent(
@@ -2804,7 +2807,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 '{"denyTools": ["bash"]}',
                 encoding='utf-8',
             )
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2846,7 +2849,7 @@ class AgentRuntimeTests(unittest.TestCase):
                 '{"budget": {"max_model_calls": 0}}',
                 encoding='utf-8',
             )
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -2857,3 +2860,4 @@ class AgentRuntimeTests(unittest.TestCase):
                 result = agent.run('Hello')
         self.assertEqual(result.stop_reason, 'budget_exceeded')
         self.assertIn('model-call budget was exceeded', result.final_output)
+

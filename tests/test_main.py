@@ -80,7 +80,7 @@ class MainCliTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 parser = build_parser()
@@ -307,3 +307,4 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(args.team_name, 'reviewers')
         self.assertEqual(args.member, ['alice'])
         self.assertEqual(args.cwd, '.')
+

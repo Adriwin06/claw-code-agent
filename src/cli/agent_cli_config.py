@@ -16,17 +16,78 @@ from src.agent.agent_types import (
 )
 
 
+_DEFAULT_MODEL = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
+
+
+def _env_first(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        if name in os.environ:
+            return os.environ.get(name, default)
+    return default
+
+
+def _env_float(*names: str, default: float) -> float:
+    raw = _env_first(*names)
+    if not isinstance(raw, str):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_optional_int(*names: str) -> int | None:
+    raw = _env_first(*names)
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _default_model_from_env() -> str:
+    model = _env_first('OPENAI_MODEL', 'LLM_MODEL', default=_DEFAULT_MODEL)
+    if not isinstance(model, str):
+        return _DEFAULT_MODEL
+    if 'OPENAI_MODEL' in os.environ:
+        return model
+    provider = _env_first('LLM_PROVIDER')
+    if isinstance(provider, str):
+        provider = provider.strip()
+        if provider and model and '/' not in model:
+            return f'{provider}/{model}'
+    return model
+
+
 def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: bool) -> None:
-    parser.add_argument('--model', default=os.environ.get('OPENAI_MODEL', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'))
+    parser.add_argument('--model', default=_default_model_from_env())
     if include_backend:
-        parser.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1'))
-        parser.add_argument('--api-key', default=os.environ.get('OPENAI_API_KEY', 'local-token'))
+        parser.add_argument(
+            '--base-url',
+            default=_env_first(
+                'OPENAI_BASE_URL',
+                'LLM_API_BASE',
+                default='http://127.0.0.1:8000/v1',
+            ),
+        )
+        parser.add_argument(
+            '--api-key',
+            default=_env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token'),
+        )
         parser.add_argument(
             '--llm-backend',
-            default=os.environ.get('CLAW_LLM_BACKEND', 'openai_compat'),
-            help='LLM transport backend (openai_compat or litellm)',
+            default=os.environ.get('CLAW_LLM_BACKEND', 'litellm'),
+            help='LLM transport backend (litellm; openai_compat is accepted as a compatibility alias)',
         )
-        parser.add_argument('--temperature', type=float, default=0.0)
+        parser.add_argument(
+            '--temperature',
+            type=float,
+            default=_env_float('AGENT_TEMPERATURE', 'LLM_TEMPERATURE', default=0.0),
+        )
         parser.add_argument('--timeout-seconds', type=float, default=120.0)
         parser.add_argument('--input-cost-per-million', type=float, default=0.0)
         parser.add_argument('--output-cost-per-million', type=float, default=0.0)
@@ -42,7 +103,7 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     parser.add_argument('--compact-preserve-messages', type=int, default=4)
     parser.add_argument('--max-total-tokens', type=int)
     parser.add_argument('--max-input-tokens', type=int)
-    parser.add_argument('--max-output-tokens', type=int)
+    parser.add_argument('--max-output-tokens', type=int, default=_env_optional_int('LLM_MAX_TOKENS'))
     parser.add_argument('--max-reasoning-tokens', type=int)
     parser.add_argument('--max-budget-usd', type=float)
     parser.add_argument('--max-tool-calls', type=int)
@@ -53,7 +114,7 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     parser.add_argument('--response-schema-name')
     parser.add_argument('--response-schema-strict', action='store_true')
     parser.add_argument('--scratchpad-root')
-    parser.add_argument('--system-prompt')
+    parser.add_argument('--system-prompt', default=_env_first('LLM_SYSTEM_PROMPT'))
     parser.add_argument('--append-system-prompt')
     parser.add_argument('--override-system-prompt')
 
@@ -110,14 +171,20 @@ def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
 
 
 def _build_model_config(args: argparse.Namespace) -> ModelConfig:
+    base_url = getattr(args, 'base_url', None)
+    if base_url is None:
+        base_url = _env_first('OPENAI_BASE_URL', 'LLM_API_BASE', default='http://127.0.0.1:8000/v1')
+    api_key = getattr(args, 'api_key', None)
+    if api_key is None:
+        api_key = _env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token')
     return ModelConfig(
-        model=args.model,
-        base_url=getattr(args, 'base_url', os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1')),
-        api_key=getattr(args, 'api_key', os.environ.get('OPENAI_API_KEY', 'local-token')),
+        model=(getattr(args, 'model', None) or _default_model_from_env()),
+        base_url=str(base_url),
+        api_key=str(api_key),
         llm_backend=getattr(
             args,
             'llm_backend',
-            os.environ.get('CLAW_LLM_BACKEND', 'openai_compat'),
+            os.environ.get('CLAW_LLM_BACKEND', 'litellm'),
         ),
         temperature=getattr(args, 'temperature', 0.0),
         timeout_seconds=getattr(args, 'timeout_seconds', 120.0),

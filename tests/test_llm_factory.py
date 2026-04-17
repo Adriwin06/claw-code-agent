@@ -9,12 +9,13 @@ from src.llm.factory import (
     resolve_llm_backend,
 )
 from src.llm.litellm_backend import LiteLLMClient
-from src.openai_compat import OpenAICompatClient, OpenAICompatError
+from src.openai_compat import OpenAICompatError
 
 
 class LLMFactoryTests(unittest.TestCase):
     def test_resolve_aliases(self) -> None:
-        self.assertEqual(resolve_llm_backend('openai'), 'openai_compat')
+        self.assertEqual(resolve_llm_backend('openai'), 'litellm')
+        self.assertEqual(resolve_llm_backend('openai_compat'), 'litellm')
         self.assertEqual(resolve_llm_backend('lite-llm'), 'litellm')
 
     def test_resolve_backend_from_env_default(self) -> None:
@@ -25,12 +26,12 @@ class LLMFactoryTests(unittest.TestCase):
         with self.assertRaises(OpenAICompatError):
             resolve_llm_backend('unknown-backend')
 
-    def test_build_openai_compat_client(self) -> None:
+    def test_build_openai_alias_uses_litellm_client(self) -> None:
         client = build_llm_client(
             ModelConfig(model='test-model'),
             backend='openai_compat',
         )
-        self.assertIsInstance(client, OpenAICompatClient)
+        self.assertIsInstance(client, LiteLLMClient)
 
     def test_build_litellm_client(self) -> None:
         client = build_llm_client(

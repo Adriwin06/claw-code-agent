@@ -99,7 +99,7 @@ class ModelConfig:
     temperature: float = 0.0
     timeout_seconds: float = 120.0
     pricing: ModelPricing = field(default_factory=ModelPricing)
-    llm_backend: str = 'openai_compat'
+    llm_backend: str = 'litellm'
 
 
 @dataclass(frozen=True)

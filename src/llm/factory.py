@@ -4,18 +4,18 @@ import os
 from typing import Any
 
 from src.agent.agent_types import ModelConfig
-from ..openai_compat import OpenAICompatClient, OpenAICompatError
 from .litellm_backend import LiteLLMClient
+from .parsers import LLMBackendError as OpenAICompatError
 
 
-DEFAULT_LLM_BACKEND = 'openai_compat'
-SUPPORTED_LLM_BACKENDS = ('openai_compat', 'litellm')
+DEFAULT_LLM_BACKEND = 'litellm'
+SUPPORTED_LLM_BACKENDS = ('litellm',)
 
 _BACKEND_ALIASES = {
-    'openai': 'openai_compat',
-    'openai_compat': 'openai_compat',
-    'compat': 'openai_compat',
-    'stdlib': 'openai_compat',
+    'openai': 'litellm',
+    'openai_compat': 'litellm',
+    'compat': 'litellm',
+    'stdlib': 'litellm',
     'lite-llm': 'litellm',
     'lite_llm': 'litellm',
     'litellm': 'litellm',
@@ -39,8 +39,6 @@ def build_llm_client(
     backend: str | None = None,
 ) -> Any:
     selected_backend = resolve_llm_backend(backend or model_config.llm_backend)
-    if selected_backend == 'openai_compat':
-        return OpenAICompatClient(model_config)
     if selected_backend == 'litellm':
         return LiteLLMClient(model_config)
     supported = ', '.join(SUPPORTED_LLM_BACKENDS)

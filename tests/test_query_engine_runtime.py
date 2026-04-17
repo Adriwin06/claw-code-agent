@@ -94,7 +94,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -187,7 +187,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -285,7 +285,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -380,7 +380,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -468,7 +468,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -550,7 +550,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
             ):
                 agent = LocalCodingAgent(
@@ -635,7 +635,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
                 encoding='utf-8',
             )
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -675,7 +675,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -751,7 +751,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             (workspace / 'large.txt').write_text(('alpha beta gamma\n' * 400), encoding='utf-8')
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -817,7 +817,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             (workspace / 'large.txt').write_text(('alpha beta gamma\n' * 400), encoding='utf-8')
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -859,7 +859,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_streaming_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -953,7 +953,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -1037,7 +1037,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             session_dir = workspace / '.port_sessions' / 'agent'
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 seed_agent = LocalCodingAgent(
@@ -1166,7 +1166,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -1254,7 +1254,7 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -1272,3 +1272,4 @@ class QueryEngineRuntimeTests(unittest.TestCase):
         self.assertIn('## Runtime Orchestration', summary)
         self.assertIn('- child_stop:pending_dependency=1', summary)
         self.assertIn('- child_stop:stop=1', summary)
+

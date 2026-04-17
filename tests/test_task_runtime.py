@@ -198,7 +198,7 @@ class TaskRuntimeTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
                 agent = LocalCodingAgent(
                     model_config=ModelConfig(
                         model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
@@ -220,3 +220,4 @@ class TaskRuntimeTests(unittest.TestCase):
             if message.get('role') == 'tool'
         )
         self.assertIn('task_create', tool_message.get('content', ''))
+

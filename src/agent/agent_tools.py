@@ -3096,7 +3096,7 @@ def _require_search_runtime(context: ToolExecutionContext):
     if context.search_runtime is None or not context.search_runtime.has_search_runtime():
         raise ToolExecutionError(
             'No local search provider is available. Add a .claw-search.json or .claude/search.json manifest, '
-            'or set SEARXNG_BASE_URL, BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
+            'or set SEARXNG_BASE_URL (no API key required), BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
         )
     return context.search_runtime
 

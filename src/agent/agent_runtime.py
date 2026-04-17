@@ -52,7 +52,7 @@ from src.agent.agent_types import (
     UsageStats,
 )
 from src.llm import build_llm_client, resolve_llm_backend
-from src.openai_compat import OpenAICompatError
+from src.llm.parsers import LLMBackendError as OpenAICompatError
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.integration.plugin_runtime import PluginRuntime
 from src.features.integration.remote_runtime import RemoteRuntime
@@ -126,7 +126,7 @@ class _RuntimeEventRecorder:
 class LocalCodingAgent:
     model_config: ModelConfig
     runtime_config: AgentRuntimeConfig
-    llm_backend: str = 'openai_compat'
+    llm_backend: str = 'litellm'
     custom_system_prompt: str | None = None
     append_system_prompt: str | None = None
     override_system_prompt: str | None = None
@@ -3575,7 +3575,7 @@ class LocalCodingAgent:
             return (
                 '# Search\n\nNo local search provider is available. '
                 'Add a .claw-search.json or .claude/search.json manifest, '
-                'or set SEARXNG_BASE_URL, BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
+                'or set SEARXNG_BASE_URL (no API key required), BRAVE_SEARCH_API_KEY, or TAVILY_API_KEY.'
             )
         if query:
             try:

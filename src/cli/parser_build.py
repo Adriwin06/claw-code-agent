@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 
-from .agent_cli_config import _add_agent_common_args, _add_agent_resume_args
+from .agent_cli_config import (
+    _add_agent_common_args,
+    _add_agent_resume_args,
+    _default_model_from_env,
+    _env_first,
+)
 
 
 def _add_internal_surface_parsers(subparsers, *, hidden: bool) -> None:
@@ -144,9 +148,15 @@ def build_parser() -> argparse.ArgumentParser:
         'doctor',
         help='check workspace, backend, and optional UI readiness',
     )
-    doctor_parser.add_argument('--model', default=os.environ.get('OPENAI_MODEL', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'))
-    doctor_parser.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL', 'http://127.0.0.1:8000/v1'))
-    doctor_parser.add_argument('--api-key', default=os.environ.get('OPENAI_API_KEY', 'local-token'))
+    doctor_parser.add_argument('--model', default=_default_model_from_env())
+    doctor_parser.add_argument(
+        '--base-url',
+        default=_env_first('OPENAI_BASE_URL', 'LLM_API_BASE', default='http://127.0.0.1:8000/v1'),
+    )
+    doctor_parser.add_argument(
+        '--api-key',
+        default=_env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token'),
+    )
     doctor_parser.add_argument('--timeout-seconds', type=float, default=15.0)
     doctor_parser.add_argument('--cwd', default='.')
     doctor_parser.add_argument('--skip-backend', action='store_true')

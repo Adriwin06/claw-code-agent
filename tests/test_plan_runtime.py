@@ -147,7 +147,7 @@ class PlanRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -169,3 +169,4 @@ class PlanRuntimeTests(unittest.TestCase):
             message for message in result.transcript if message.get('role') == 'tool'
         )
         self.assertIn('update_plan', tool_message.get('content', ''))
+

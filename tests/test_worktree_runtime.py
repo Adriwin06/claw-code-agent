@@ -142,7 +142,7 @@ class WorktreeRuntimeTests(unittest.TestCase):
             workspace = Path(tmp_dir)
             _init_git_repo(workspace)
             with patch(
-                'src.openai_compat.request.urlopen',
+                'src.agent.agent_runtime.build_llm_client',
                 side_effect=_make_urlopen_side_effect(responses),
             ):
                 agent = LocalCodingAgent(
@@ -161,4 +161,5 @@ class WorktreeRuntimeTests(unittest.TestCase):
         self.assertFalse((workspace / 'note.txt').exists())
         self.assertTrue((worktree_path / 'note.txt').exists())
         self.assertEqual(agent.runtime_config.cwd, worktree_path.resolve())
+
 

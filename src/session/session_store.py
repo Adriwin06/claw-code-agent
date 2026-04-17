@@ -139,7 +139,7 @@ def deserialize_model_config(payload: JSONDict) -> ModelConfig:
         api_key=str(payload.get('api_key', 'local-token')),
         temperature=float(payload.get('temperature', 0.0)),
         timeout_seconds=float(payload.get('timeout_seconds', 120.0)),
-        llm_backend=str(payload.get('llm_backend', 'openai_compat')),
+        llm_backend=str(payload.get('llm_backend', 'litellm')),
         pricing=_deserialize_pricing(payload.get('pricing')),
     )
 
