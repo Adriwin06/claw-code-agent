@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_session import AgentMessage
-from src.agent_runtime import LocalCodingAgent
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import (
+from src.agent.agent_session import AgentMessage
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,
@@ -18,15 +18,15 @@ from src.agent_types import (
     OutputSchemaConfig,
     UsageStats,
 )
-from src.compact import CompactionResult
+from src.session.compact import CompactionResult
 from src.openai_compat import OpenAICompatClient
-from src.session_store import (
+from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
     serialize_model_config,
     serialize_runtime_config,
 )
-from src.token_budget import TokenBudgetSnapshot
+from src.core.token_budget import TokenBudgetSnapshot
 
 
 class FakeHTTPResponse:
@@ -783,10 +783,10 @@ class AgentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
             with patch(
-                'src.agent_runtime.calculate_token_budget',
+                'src.agent.agent_runtime.calculate_token_budget',
                 return_value=snapshot,
             ), patch(
-                'src.agent_runtime.LocalCodingAgent._reduce_context_pressure',
+                'src.agent.agent_runtime.LocalCodingAgent._reduce_context_pressure',
                 return_value=False,
             ), patch(
                 'src.openai_compat.request.urlopen',
@@ -944,13 +944,13 @@ class AgentRuntimeTests(unittest.TestCase):
                 scratchpad_directory=None,
             )
             with patch(
-                'src.agent_runtime.calculate_token_budget',
+                'src.agent.agent_runtime.calculate_token_budget',
                 side_effect=fake_budget,
             ), patch(
-                'src.agent_runtime.LocalCodingAgent._reduce_context_pressure',
+                'src.agent.agent_runtime.LocalCodingAgent._reduce_context_pressure',
                 return_value=False,
             ), patch(
-                'src.agent_runtime.compact_conversation',
+                'src.agent.agent_runtime.compact_conversation',
                 side_effect=fake_compact,
             ), patch(
                 'src.openai_compat.request.urlopen',

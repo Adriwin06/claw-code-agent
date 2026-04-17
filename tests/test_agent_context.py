@@ -8,16 +8,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_context import (
+from src.agent.agent_context import (
     build_context_snapshot,
     clear_context_caches,
     set_system_prompt_injection,
 )
-from src.ask_user_runtime import AskUserRuntime
-from src.plan_runtime import PlanRuntime
-from src.agent_types import AgentRuntimeConfig
-from src.task_runtime import TaskRuntime
-from src.team_runtime import TeamRuntime
+from src.features.ask_user_runtime import AskUserRuntime
+from src.features.plan_runtime import PlanRuntime
+from src.agent.agent_types import AgentRuntimeConfig
+from src.features.task_runtime import TaskRuntime
+from src.features.team_runtime import TeamRuntime
 
 
 class AgentContextTests(unittest.TestCase):
@@ -312,7 +312,7 @@ class AgentContextTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
-            with patch('src.agent_context.subprocess.run', side_effect=_fake_run):
+            with patch('src.agent.agent_context.subprocess.run', side_effect=_fake_run):
                 snapshot = build_context_snapshot(AgentRuntimeConfig(cwd=workspace))
 
         git_status = snapshot.system_context.get('gitStatus', '')

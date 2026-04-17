@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_types import (
+from src.agent.agent_types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,
@@ -14,7 +14,7 @@ from src.agent_types import (
     OutputSchemaConfig,
     UsageStats,
 )
-from src.session_store import (
+from src.session.session_store import (
     StoredAgentSession,
     StoredSession,
     _deserialize_output_schema,

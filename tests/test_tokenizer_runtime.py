@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.tokenizer_runtime import (
+from src.features.tokenizer_runtime import (
     ResolvedTokenCounter,
     TokenCounterInfo,
     clear_token_counter_cache,
@@ -25,8 +25,8 @@ class TokenizerRuntimeTests(unittest.TestCase):
             ),
             count_text=lambda text: len(text.split()),
         )
-        with patch('src.tokenizer_runtime._try_build_tiktoken_counter', return_value=fake_counter):
-            with patch('src.tokenizer_runtime._try_build_transformers_counter', return_value=None):
+        with patch('src.features.tokenizer_runtime._try_build_tiktoken_counter', return_value=fake_counter):
+            with patch('src.features.tokenizer_runtime._try_build_transformers_counter', return_value=None):
                 info = describe_token_counter('gpt-4o-mini')
                 token_count = count_tokens('hello world from claw code', 'gpt-4o-mini')
 
@@ -48,7 +48,7 @@ class TokenizerRuntimeTests(unittest.TestCase):
             {'CLAW_CODE_TOKENIZER_PATH': '/tmp/fake-tokenizer'},
             clear=False,
         ):
-            with patch('src.tokenizer_runtime._try_build_transformers_counter', return_value=fake_counter):
+            with patch('src.features.tokenizer_runtime._try_build_transformers_counter', return_value=fake_counter):
                 info = describe_token_counter('Qwen/Qwen3-Coder-30B-A3B-Instruct')
                 token_count = count_tokens('one two three', 'Qwen/Qwen3-Coder-30B-A3B-Instruct')
 
@@ -57,8 +57,8 @@ class TokenizerRuntimeTests(unittest.TestCase):
         self.assertEqual(token_count, 3)
 
     def test_fallback_backend_is_used_when_all_tokenizers_fail(self) -> None:
-        with patch('src.tokenizer_runtime._try_build_tiktoken_counter', return_value=None):
-            with patch('src.tokenizer_runtime._try_build_transformers_counter', return_value=None):
+        with patch('src.features.tokenizer_runtime._try_build_tiktoken_counter', return_value=None):
+            with patch('src.features.tokenizer_runtime._try_build_transformers_counter', return_value=None):
                 counter = resolve_token_counter('unknown-model')
                 token_count = count_tokens('abcd' * 5, 'unknown-model')
 

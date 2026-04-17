@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..agent_runtime import LocalCodingAgent
-from ..session_store import StoredAgentSession, usage_from_payload
+from src.agent.agent_runtime import LocalCodingAgent
+from src.session.session_store import StoredAgentSession, usage_from_payload
 
 
 def _render_permissions(agent: LocalCodingAgent) -> str:

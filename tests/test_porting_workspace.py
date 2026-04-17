@@ -5,11 +5,9 @@ import sys
 import unittest
 from pathlib import Path
 
-from src.commands import PORTED_COMMANDS
-from src.parity_audit import run_parity_audit
-from src.port_manifest import build_port_manifest
-from src.query_engine import QueryEnginePort
-from src.tools import PORTED_TOOLS
+from src.core.catalog_runtime import PORTED_COMMANDS, PORTED_TOOLS, build_port_manifest
+from src.core.parity_audit import run_parity_audit
+from src.core.query_engine import QueryEnginePort
 
 
 class PortingWorkspaceTests(unittest.TestCase):
@@ -105,7 +103,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('Routed Matches', result.stdout)
 
     def test_bootstrap_session_tracks_turn_state(self) -> None:
-        from src.runtime import PortRuntime
+        from src.core.runtime import PortRuntime
 
         session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
         self.assertGreaterEqual(len(session.turn_result.matched_tools), 1)
@@ -152,7 +150,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('Tool entries:', tool_result.stdout)
 
     def test_load_session_cli_runs(self) -> None:
-        from src.runtime import PortRuntime
+        from src.core.runtime import PortRuntime
 
         session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
         session_id = Path(session.persisted_session_path).stem
@@ -219,7 +217,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('plugin_init=True', result.stdout)
 
     def test_execution_registry_runs(self) -> None:
-        from src.execution_registry import build_execution_registry
+        from src.core.execution_registry import build_execution_registry
 
         registry = build_execution_registry()
         self.assertGreaterEqual(len(registry.commands), 150)

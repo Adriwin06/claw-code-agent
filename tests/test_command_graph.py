@@ -1,8 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from src.command_graph import CommandGraph, build_command_graph
-from src.models import PortingModule
+from src.core.catalog_runtime import CommandGraph, PortingModule, build_command_graph
 
 
 def _module(name: str, source_hint: str) -> PortingModule:
@@ -92,7 +91,7 @@ class CommandGraphTests(unittest.TestCase):
 class BuildCommandGraphTests(unittest.TestCase):
     # -- return type -----------------------------------------------------------
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_returns_command_graph(self, mock_get: unittest.mock.MagicMock) -> None:
         mock_get.return_value = ()
         result = build_command_graph()
@@ -100,7 +99,7 @@ class BuildCommandGraphTests(unittest.TestCase):
 
     # -- categorization --------------------------------------------------------
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_plugin_source_goes_to_plugin_like(self, mock_get: unittest.mock.MagicMock) -> None:
         p = _module("p1", "plugin/p1.ts")
         mock_get.return_value = (p,)
@@ -109,7 +108,7 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertNotIn(p, graph.builtins)
         self.assertNotIn(p, graph.skill_like)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_skills_source_goes_to_skill_like(self, mock_get: unittest.mock.MagicMock) -> None:
         s = _module("s1", "skills/s1.ts")
         mock_get.return_value = (s,)
@@ -118,7 +117,7 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertNotIn(s, graph.builtins)
         self.assertNotIn(s, graph.plugin_like)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_plain_source_goes_to_builtins(self, mock_get: unittest.mock.MagicMock) -> None:
         b = _module("b1", "core/b1.ts")
         mock_get.return_value = (b,)
@@ -127,21 +126,21 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertNotIn(b, graph.plugin_like)
         self.assertNotIn(b, graph.skill_like)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_case_insensitive_plugin_match(self, mock_get: unittest.mock.MagicMock) -> None:
         p = _module("p1", "Plugin/p1.ts")
         mock_get.return_value = (p,)
         graph = build_command_graph()
         self.assertIn(p, graph.plugin_like)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_case_insensitive_skills_match(self, mock_get: unittest.mock.MagicMock) -> None:
         s = _module("s1", "Skills/s1.ts")
         mock_get.return_value = (s,)
         graph = build_command_graph()
         self.assertIn(s, graph.skill_like)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_mixed_commands_are_sorted_correctly(self, mock_get: unittest.mock.MagicMock) -> None:
         b = _module("b1", "core/b1.ts")
         p = _module("p1", "plugin/p1.ts")
@@ -152,7 +151,7 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertEqual(graph.plugin_like, (p,))
         self.assertEqual(graph.skill_like, (s,))
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_empty_commands_yields_empty_graph(self, mock_get: unittest.mock.MagicMock) -> None:
         mock_get.return_value = ()
         graph = build_command_graph()
@@ -160,7 +159,7 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertEqual(graph.plugin_like, ())
         self.assertEqual(graph.skill_like, ())
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_all_builtins(self, mock_get: unittest.mock.MagicMock) -> None:
         b1 = _module("b1", "core/b1.ts")
         b2 = _module("b2", "commands/b2.ts")
@@ -170,7 +169,7 @@ class BuildCommandGraphTests(unittest.TestCase):
         self.assertEqual(graph.plugin_like, ())
         self.assertEqual(graph.skill_like, ())
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_builtins_plugin_skill_are_tuples_of_porting_module(self, mock_get: unittest.mock.MagicMock) -> None:
         b = _module("b1", "core/b1.ts")
         p = _module("p1", "plugin/p1.ts")
@@ -182,7 +181,7 @@ class BuildCommandGraphTests(unittest.TestCase):
             for item in category:
                 self.assertIsInstance(item, PortingModule)
 
-    @patch("src.command_graph.get_commands")
+    @patch("src.core.catalog_runtime.get_commands")
     def test_flattened_matches_original_commands(self, mock_get: unittest.mock.MagicMock) -> None:
         modules = (
             _module("b1", "core/b1.ts"),

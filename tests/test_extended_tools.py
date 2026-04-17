@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
-from src.lsp_runtime import LSPRuntime
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.features.lsp_runtime import LSPRuntime
 
 
 class ExtendedToolTests(unittest.TestCase):

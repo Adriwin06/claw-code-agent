@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
-from src.config_runtime import ConfigRuntime
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.features.config_runtime import ConfigRuntime
 
 
 class ConfigRuntimeTests(unittest.TestCase):

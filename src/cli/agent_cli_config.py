@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from ..agent_runtime import LocalCodingAgent
-from ..agent_types import (
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,

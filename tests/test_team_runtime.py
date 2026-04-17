@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
-from src.team_runtime import TeamRuntime
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.features.team_runtime import TeamRuntime
 
 
 class TeamRuntimeTests(unittest.TestCase):

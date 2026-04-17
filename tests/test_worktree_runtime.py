@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_runtime import LocalCodingAgent
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
-from src.worktree_runtime import WorktreeRuntime
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ModelConfig
+from src.features.worktree_runtime import WorktreeRuntime
 
 
 class _FakeHTTPResponse:

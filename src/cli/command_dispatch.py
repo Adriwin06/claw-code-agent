@@ -4,22 +4,32 @@ import argparse
 import json
 from pathlib import Path
 
-from ..account_runtime import AccountRuntime
-from ..ask_user_runtime import AskUserRuntime
-from ..agent_types import AgentRuntimeConfig, ModelConfig
-from ..background_runtime import BackgroundSessionRuntime
-from ..bootstrap_graph import build_bootstrap_graph
-from ..command_graph import build_command_graph
-from ..commands import execute_command, get_command, get_commands, render_command_index
-from ..config_runtime import ConfigRuntime
-from ..doctor_runtime import run_doctor
-from ..lsp_runtime import LSPRuntime
-from ..mcp_runtime import MCPRuntime
-from ..parity_audit import run_parity_audit
-from ..permissions import ToolPermissionContext
-from ..port_manifest import build_port_manifest
-from ..query_engine import QueryEnginePort
-from ..remote_runtime import (
+from src.features.account_runtime import AccountRuntime
+from src.features.ask_user_runtime import AskUserRuntime
+from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.features.background_runtime import BackgroundSessionRuntime
+from src.core.bootstrap_runtime import build_bootstrap_graph, run_setup
+from src.core.catalog_runtime import (
+    build_command_graph,
+    build_port_manifest,
+    assemble_tool_pool,
+    execute_command,
+    execute_tool,
+    get_command,
+    get_commands,
+    get_tool,
+    get_tools,
+    render_command_index,
+    render_tool_index,
+)
+from src.features.config_runtime import ConfigRuntime
+from src.features.doctor_runtime import run_doctor
+from src.features.lsp_runtime import LSPRuntime
+from src.features.mcp_runtime import MCPRuntime
+from src.core.parity_audit import run_parity_audit
+from src.core.permissions import ToolPermissionContext
+from src.core.query_engine import QueryEnginePort
+from src.features.remote_runtime import (
     RemoteRuntime,
     run_deep_link_mode,
     run_direct_connect_mode,
@@ -27,18 +37,15 @@ from ..remote_runtime import (
     run_ssh_mode,
     run_teleport_mode,
 )
-from ..remote_trigger_runtime import RemoteTriggerRuntime
-from ..runtime import PortRuntime
-from ..search_runtime import SearchRuntime
-from ..session_store import load_session
-from ..setup import run_setup
-from ..task_runtime import TaskRuntime
-from ..team_runtime import TeamRuntime
+from src.features.remote_trigger_runtime import RemoteTriggerRuntime
+from src.core.runtime import PortRuntime
+from src.features.search_runtime import SearchRuntime
+from src.session.session_store import load_session
+from src.features.task_runtime import TaskRuntime
+from src.features.team_runtime import TeamRuntime
 from ..textual_ui import run_agent_tui
-from ..tool_pool import assemble_tool_pool
-from ..tools import execute_tool, get_tool, get_tools, render_tool_index
-from ..workflow_runtime import WorkflowRuntime
-from ..worktree_runtime import WorktreeRuntime
+from src.features.workflow_runtime import WorkflowRuntime
+from src.features.worktree_runtime import WorktreeRuntime
 from .agent_cli_config import _build_agent
 from .agent_runtime_ops import (
     _build_resumed_agent,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
-from ..agent_types import (
+from src.agent.agent_types import (
     AssistantTurn,
     ModelConfig,
     OutputSchemaConfig,

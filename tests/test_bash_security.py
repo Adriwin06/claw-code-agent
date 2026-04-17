@@ -6,7 +6,7 @@ Tests are organized by validator function, matching the npm test structure.
 
 import pytest
 
-from src.bash_security import (
+from src.agent.bash_security import (
     SecurityBehavior,
     SecurityResult,
     ValidationContext,

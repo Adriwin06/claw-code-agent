@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_runtime import LocalCodingAgent
-from src.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig, UsageStats
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig, UsageStats
 from src.textual_ui import (
     ActivityItem,
     AgentTuiEventBridge,

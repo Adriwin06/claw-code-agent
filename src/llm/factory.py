@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from ..agent_types import ModelConfig
+from src.agent.agent_types import ModelConfig
 from ..openai_compat import OpenAICompatClient, OpenAICompatError
 from .litellm_backend import LiteLLMClient
 

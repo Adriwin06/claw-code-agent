@@ -6,19 +6,19 @@ from pathlib import Path
 import sys
 from typing import Callable, TextIO
 
-from ..agent_runtime import LocalCodingAgent
-from ..agent_types import (
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_types import (
     AgentPermissions,
     BudgetConfig,
     ModelPricing,
 )
-from ..background_runtime import BackgroundSessionRuntime, build_background_worker_command
+from src.features.background_runtime import BackgroundSessionRuntime, build_background_worker_command
 from ..cli.agent_cli_config import (
     _append_agent_forwarded_args,
     _build_agent,
     _load_output_schema_config,
 )
-from ..session_store import (
+from src.session.session_store import (
     StoredAgentSession,
     deserialize_model_config,
     deserialize_runtime_config,

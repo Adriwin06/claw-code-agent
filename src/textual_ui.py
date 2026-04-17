@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .agent_slash_commands import find_slash_command
-from .agent_runtime import LocalCodingAgent
-from .agent_types import AgentRunResult
-from .session_store import StoredAgentSession, load_agent_session
+from src.agent.agent_slash_commands import find_slash_command
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_types import AgentRunResult
+from src.session.session_store import StoredAgentSession, load_agent_session
 from .ui.conversation import (
     ActivityItem,
     ConversationEntry,

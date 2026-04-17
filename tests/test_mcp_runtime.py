@@ -11,10 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_runtime import LocalCodingAgent
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentRuntimeConfig, ModelConfig
-from src.mcp_runtime import MCPRuntime
+from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.features.mcp_runtime import MCPRuntime
 
 
 class FakeHTTPResponse:

@@ -212,16 +212,15 @@ claw-code/
 │   │   ├── parser_build.py       # Full argparse tree construction
 │   │   ├── command_dispatch.py   # Top-level command routing and runtime invocation
 │   │   └── agent_runtime_ops.py  # Agent run loops, background workers, and live rendering
-│   ├── agent_runtime.py          # Core agent loop (LocalCodingAgent)
-│   ├── agent_tools.py            # Tool definitions & execution engine
-│   ├── agent_prompting.py        # System prompt assembly
-│   ├── agent_registry.py         # Built-in + filesystem-backed custom agent discovery
-│   ├── agent_context.py          # Context building & CLAUDE.md discovery
-│   ├── agent_context_usage.py    # Context usage estimation & reporting
-│   ├── agent_session.py          # Session state management
-│   ├── agent_slash_commands.py   # Local slash command processing
-│   ├── agent_manager.py          # Nested agent lineage & group tracking
-│   ├── agent_types.py            # Shared dataclasses & type definitions
+│   ├── agent/                    # Agent core modules (runtime, context, tools, prompting, types)
+│   │   ├── agent_runtime.py      # Core agent loop (LocalCodingAgent)
+│   │   ├── agent_tools.py        # Tool definitions & execution engine
+│   │   ├── agent_prompting.py    # System prompt assembly
+│   │   ├── agent_registry.py     # Built-in + filesystem-backed custom agent discovery
+│   │   ├── agent_context.py      # Context building & CLAUDE.md discovery
+│   │   ├── agent_session.py      # Session state management
+│   │   ├── agent_types.py        # Shared dataclasses & type definitions
+│   │   └── ...
 │   ├── llm/                      # LLM backend adapters and client factory
 │   │   ├── factory.py            # Backend selection (openai_compat vs litellm)
 │   │   └── litellm_backend.py    # LiteLLM-backed client implementation
@@ -233,34 +232,25 @@ claw-code/
 │   │   └── formatting.py         # UI preview/format helper utilities
 │   ├── openai_compat.py          # OpenAI-compatible fallback backend (streaming)
 │   ├── textual_ui.py             # Textual app orchestration and event bridge
-│   ├── plugin_runtime.py         # Plugin manifest, hooks, aliases, virtual tools
-│   ├── agent_plugin_cache.py     # Plugin discovery & prompt injection cache
-│   ├── session_store.py          # Session serialization & persistence
-│   ├── transcript.py             # Transcript block export & mutation tracking
-│   ├── query_engine.py           # Query engine facade & runtime orchestration
-│   ├── mcp_runtime.py            # Local MCP discovery and stdio MCP transport
-│   ├── search_runtime.py         # Search providers and provider-backed web_search
-│   ├── remote_runtime.py         # Local remote profiles, connect/disconnect state, remote CLI support
-│   ├── background_runtime.py     # Local background sessions and daemon support
-│   ├── account_runtime.py        # Local account profiles, login/logout state, account CLI support
-│   ├── ask_user_runtime.py       # Local ask-user queued answers and interaction history
-│   ├── config_runtime.py         # Local workspace config/settings discovery and mutation
-│   ├── lsp_runtime.py            # Local LSP-style code intelligence and diagnostics
-│   ├── token_budget.py           # Prompt-window budgeting and preflight prompt-length validation
-│   ├── plan_runtime.py           # Persistent plan runtime and plan sync
-│   ├── task_runtime.py           # Persistent task runtime and task execution
-│   ├── task.py                   # Task state model and task dataclasses
-│   ├── team_runtime.py           # Local teams, messages, and collaboration metadata
-│   ├── workflow_runtime.py       # Local workflow manifests and recorded workflow runs
-│   ├── remote_trigger_runtime.py # Local remote trigger manifests and trigger run history
-│   ├── worktree_runtime.py       # Managed git worktree sessions and cwd switching
-│   ├── hook_policy.py            # Hook/policy manifests, trust, and safe env handling
-│   ├── tokenizer_runtime.py      # Tokenizer-aware context accounting backends
-│   ├── permissions.py            # Tool permission filtering
-│   ├── cost_tracker.py           # Cost & budget enforcement
-│   ├── commands.py               # Mirrored command inventory
-│   ├── tools.py                  # Mirrored tool inventory
-│   ├── runtime.py                # Mirrored runtime facade
+│   ├── core/                     # Shared core orchestration and catalog surfaces
+│   │   ├── query_engine.py       # Query engine facade & runtime orchestration
+│   │   ├── catalog_runtime.py    # Mirrored command/tool indexes, graphs, and manifest
+│   │   ├── bootstrap_runtime.py  # Context/history/startup/deferred-init helpers
+│   │   ├── runtime.py            # Mirrored runtime facade
+│   │   └── ...
+│   ├── features/                 # Feature runtimes (account/search/mcp/lsp/remote/workflow/etc.)
+│   │   ├── mcp_runtime.py        # Local MCP discovery and stdio MCP transport
+│   │   ├── search_runtime.py     # Search providers and provider-backed web_search
+│   │   ├── remote_runtime.py     # Local remote profiles, connect/disconnect state
+│   │   ├── account_runtime.py    # Local account profiles, login/logout state
+│   │   ├── config_runtime.py     # Local workspace config/settings discovery and mutation
+│   │   ├── lsp_runtime.py        # Local LSP-style code intelligence and diagnostics
+│   │   └── ...
+│   ├── session/                  # Session persistence, transcript, and compaction helpers
+│   │   ├── session_store.py      # Session serialization & persistence
+│   │   ├── transcript.py         # Transcript block export & mutation tracking
+│   │   ├── compact.py            # Message compaction helpers
+│   │   └── ...
 │   └── reference_data/           # Mirrored inventory snapshots
 └── tests/                        # Unit tests
     ├── test_agent_runtime.py

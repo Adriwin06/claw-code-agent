@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent_types import AgentPermissions, AgentRuntimeConfig
-from src.remote_trigger_runtime import RemoteTriggerRuntime
+from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
+from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
+from src.features.remote_trigger_runtime import RemoteTriggerRuntime
 
 
 class RemoteTriggerRuntimeTests(unittest.TestCase):

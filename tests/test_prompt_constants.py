@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.prompt_constants import (
+from src.agent.prompt_constants import (
     # Product metadata
     PRODUCT_URL,
     CLAUDE_AI_BASE_URL,

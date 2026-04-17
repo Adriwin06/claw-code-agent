@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib import error as urllib_error
 
-from src.agent_types import AgentRuntimeConfig, ModelConfig
-from src.doctor_runtime import run_doctor
+from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.features.doctor_runtime import run_doctor
 
 
 class FakeHTTPResponse:
@@ -42,13 +42,13 @@ class DoctorRuntimeTests(unittest.TestCase):
                 timeout_seconds=1.0,
             )
             with patch(
-                'src.doctor_runtime.urllib_request.urlopen',
+                'src.features.doctor_runtime.urllib_request.urlopen',
                 return_value=FakeHTTPResponse({'data': [{'id': 'demo-model'}]}),
             ), patch(
-                'src.doctor_runtime.importlib.util.find_spec',
+                'src.features.doctor_runtime.importlib.util.find_spec',
                 return_value=object(),
             ), patch(
-                'src.doctor_runtime.shutil.which',
+                'src.features.doctor_runtime.shutil.which',
                 return_value='C:/Program Files/Git/bin/git.exe',
             ):
                 report = run_doctor(
@@ -75,7 +75,7 @@ class DoctorRuntimeTests(unittest.TestCase):
                 timeout_seconds=1.0,
             )
             with patch(
-                'src.doctor_runtime.urllib_request.urlopen',
+                'src.features.doctor_runtime.urllib_request.urlopen',
                 side_effect=urllib_error.URLError('connection refused'),
             ):
                 report = run_doctor(

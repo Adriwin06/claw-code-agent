@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.agent_types import ModelConfig
+from src.agent.agent_types import ModelConfig
 from src.llm.factory import (
     build_llm_client,
     resolve_llm_backend,

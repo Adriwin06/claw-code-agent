@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..agent_slash_commands import get_slash_command_specs
+from src.agent.agent_slash_commands import get_slash_command_specs
 
 
 @dataclass(frozen=True)
