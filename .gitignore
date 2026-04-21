@@ -5,6 +5,10 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+.venv-local/
+venv-local/
+.venv-linux/
+venv-linux/
 build/
 dist/
 *.egg-info/
