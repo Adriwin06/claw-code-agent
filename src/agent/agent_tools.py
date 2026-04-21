@@ -427,6 +427,18 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_tool_search,
         ),
         AgentTool(
+            name='list_available_tools',
+            description='List the tool names currently available in this session.',
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string'},
+                    'max_results': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+                },
+            },
+            handler=_list_available_tools,
+        ),
+        AgentTool(
             name='sleep',
             description='Pause execution briefly for bounded local wait flows.',
             parameters={
@@ -1795,6 +1807,27 @@ def _tool_search(arguments: dict[str, Any], context: ToolExecutionContext) -> st
     if not matches:
         return '(no matching tools)'
     lines = ['# Tool Search', '']
+    for name, description in matches[:max_results]:
+        lines.append(f'- `{name}`: {description}')
+    return '\n'.join(lines)
+
+
+def _list_available_tools(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    query = arguments.get('query')
+    if query is not None and not isinstance(query, str):
+        raise ToolExecutionError('query must be a string')
+    max_results = _coerce_int(arguments, 'max_results', 50)
+    registry = context.tool_registry or default_tool_registry()
+    lowered_query = query.lower() if isinstance(query, str) and query.strip() else None
+    matches: list[tuple[str, str]] = []
+    for tool in registry.values():
+        haystack = f'{tool.name} {tool.description}'.lower()
+        if lowered_query is not None and lowered_query not in haystack:
+            continue
+        matches.append((tool.name, tool.description))
+    if not matches:
+        return '(no matching tools)'
+    lines = ['# Available Tools', '']
     for name, description in matches[:max_results]:
         lines.append(f'- `{name}`: {description}')
     return '\n'.join(lines)

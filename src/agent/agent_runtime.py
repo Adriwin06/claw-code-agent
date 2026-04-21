@@ -96,6 +96,24 @@ class PromptPreflightResult:
 
 RuntimeEventHandler = Callable[[dict[str, object]], None]
 
+_COMPACT_OLLAMA_TOOL_SCHEMA_CHAR_LIMIT = 8_000
+_COMPACT_OLLAMA_TOOL_NAMES: tuple[str, ...] = (
+    'list_available_tools',
+    'tool_search',
+    'list_dir',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'glob_search',
+    'grep_search',
+    'bash',
+    'LSP',
+    'web_fetch',
+    'Agent',
+    'delegate_agent',
+    'Skill',
+)
+
 
 class _RuntimeEventRecorder:
     def __init__(self, handler: RuntimeEventHandler | None = None) -> None:
@@ -283,13 +301,18 @@ class LocalCodingAgent:
             scratchpad_directory=scratchpad_directory,
         )
 
-    def build_system_prompt_parts(self, prompt_context=None) -> list[str]:
+    def build_system_prompt_parts(
+        self,
+        prompt_context=None,
+        *,
+        tools: dict[str, AgentTool] | None = None,
+    ) -> list[str]:
         if prompt_context is None:
             prompt_context = self.build_prompt_context()
         return build_system_prompt_parts(
             prompt_context=prompt_context,
             runtime_config=self.runtime_config,
-            tools=self.tool_registry,
+            tools=tools or self._tool_registry_for_prompt(),
             available_agents=self.available_agents(),
             custom_system_prompt=self.custom_system_prompt,
             append_system_prompt=self.append_system_prompt,
@@ -309,13 +332,62 @@ class LocalCodingAgent:
         scratchpad_directory: Path | None = None,
     ) -> AgentSessionState:
         prompt_context = self.build_prompt_context(scratchpad_directory)
-        system_prompt_parts = self.build_system_prompt_parts(prompt_context)
+        system_prompt_parts = self.build_system_prompt_parts(
+            prompt_context,
+            tools=self._tool_registry_for_prompt(),
+        )
         return AgentSessionState.create(
             system_prompt_parts,
             user_prompt,
             user_context=prompt_context.user_context,
             system_context=prompt_context.system_context,
         )
+
+    def _tool_registry_for_prompt(self) -> dict[str, AgentTool]:
+        tool_specs = [tool.to_openai_tool() for tool in self.tool_registry.values()]
+        if not self._should_compact_ollama_tool_schema(tool_specs):
+            return dict(self.tool_registry)
+        allowed_names = self._compact_ollama_tool_names()
+        compact_registry = {
+            name: tool
+            for name, tool in self.tool_registry.items()
+            if name in allowed_names
+        }
+        return compact_registry or dict(self.tool_registry)
+
+    def _build_tool_specs_for_session(
+        self,
+        session: AgentSessionState,
+    ) -> list[dict[str, object]]:
+        tool_specs = [tool.to_openai_tool() for tool in self.tool_registry.values()]
+        if not self._should_compact_ollama_tool_schema(tool_specs):
+            return tool_specs
+        allowed_names = self._compact_ollama_tool_names(session)
+        compact_specs = [
+            tool.to_openai_tool()
+            for name, tool in self.tool_registry.items()
+            if name in allowed_names
+        ]
+        return compact_specs or tool_specs
+
+    def _should_compact_ollama_tool_schema(
+        self,
+        tool_specs: list[dict[str, object]],
+    ) -> bool:
+        base_url = self.model_config.base_url.strip().lower()
+        if ':11434' not in base_url and 'ollama' not in base_url:
+            return False
+        serialized = json.dumps(tool_specs, ensure_ascii=True)
+        return len(serialized) > _COMPACT_OLLAMA_TOOL_SCHEMA_CHAR_LIMIT
+
+    def _compact_ollama_tool_names(
+        self,
+        session: AgentSessionState | None = None,
+    ) -> set[str]:
+        _ = session
+        return {
+            name for name in _COMPACT_OLLAMA_TOOL_NAMES if name in self.tool_registry
+        }
 
     def _apply_hook_policy_budget_overrides(
         self,
@@ -497,7 +569,6 @@ class LocalCodingAgent:
         session.append_user(effective_prompt)
         self.last_session = session
         self.active_session_id = session_id
-        tool_specs = [tool.to_openai_tool() for tool in self.tool_registry.values()]
         starting_usage = UsageStats()
         starting_cost_usd = 0.0
         starting_tool_calls = 0
@@ -644,6 +715,7 @@ class LocalCodingAgent:
                 self.last_run_result = result
                 return result
             try:
+                tool_specs = self._build_tool_specs_for_session(session)
                 turn = self._query_model(session, tool_specs, stream_events)
             except OpenAICompatError as exc:
                 if self._is_prompt_too_long_error(exc) and self._reactive_compact_session(
@@ -652,6 +724,7 @@ class LocalCodingAgent:
                     turn_index=turn_index,
                 ):
                     try:
+                        tool_specs = self._build_tool_specs_for_session(session)
                         turn = self._query_model(session, tool_specs, stream_events)
                     except OpenAICompatError as retry_exc:
                         exc = retry_exc
@@ -1007,7 +1080,10 @@ class LocalCodingAgent:
                     )
                 if tool_call.name in ('Agent', 'delegate_agent'):
                     if tool_result is None:
-                        tool_result = self._execute_delegate_agent(tool_call.arguments)
+                        tool_result = self._execute_delegate_agent(
+                            tool_call.arguments,
+                            tool_name=tool_call.name,
+                        )
                 elif tool_call.name == 'Skill':
                     if tool_result is None:
                         tool_result = self._execute_skill(tool_call.arguments)
@@ -2340,8 +2416,9 @@ class LocalCodingAgent:
     def _execute_delegate_agent(
         self,
         arguments: dict[str, object],
+        *,
+        tool_name: str = 'Agent',
     ) -> ToolExecutionResult:
-        tool_name = 'Agent'
         agent_def = self._resolve_agent_definition(arguments)
         max_turns = arguments.get('max_turns')
         if max_turns is not None and (isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 1):
@@ -2384,7 +2461,7 @@ class LocalCodingAgent:
 
         # Resolve max_turns — agent definition or explicit param
         parent_max_turns = self.runtime_config.max_turns
-        fallback_max_turns = 6 if parent_max_turns is None else min(parent_max_turns, 6)
+        fallback_max_turns = None if parent_max_turns is None else min(parent_max_turns, 6)
         effective_max_turns = max_turns or agent_def.max_turns or fallback_max_turns
 
         child_runtime_config = replace(
@@ -2738,7 +2815,7 @@ class LocalCodingAgent:
             ok=True,
             content='\n'.join(summary_lines).strip(),
             metadata={
-                'action': 'Agent',
+                'action': tool_name,
                 'subagent_type': agent_def.agent_type,
                 'child_session_id': child_result.session_id,
                 'child_session_ids': child_session_ids,

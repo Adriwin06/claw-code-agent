@@ -11,6 +11,7 @@ from src.agent.agent_session import AgentMessage
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import (
+    AgentRunResult,
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,
@@ -303,6 +304,109 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(result.turns, 0)
         self.assertEqual(result.tool_calls, 0)
         self.assertIn('# Permissions', result.final_output)
+
+    def test_ollama_tool_schema_is_compacted_for_large_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='gemma4:e4b',
+                    base_url='http://127.0.0.1:11434/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            session = agent.build_session(None)
+            session.append_user('Analyze the MCP server architecture')
+            tool_specs = agent._build_tool_specs_for_session(session)
+
+        tool_names = {
+            spec.get('function', {}).get('name')
+            for spec in tool_specs
+            if isinstance(spec, dict)
+        }
+        self.assertLess(len(tool_specs), len(agent.tool_registry))
+        self.assertEqual(len(tool_specs), 14)
+        self.assertIn('Agent', tool_names)
+        self.assertIn('delegate_agent', tool_names)
+        self.assertIn('Skill', tool_names)
+        self.assertIn('list_dir', tool_names)
+        self.assertIn('list_available_tools', tool_names)
+        self.assertIn('tool_search', tool_names)
+        self.assertIn('web_fetch', tool_names)
+        self.assertNotIn('mcp_list_tools', tool_names)
+        self.assertNotIn('account_login', tool_names)
+
+    def test_delegate_agent_inherits_unlimited_turns_from_parent_runtime(self) -> None:
+        observed_max_turns: list[int | None] = []
+
+        def _fake_run(child: LocalCodingAgent, prompt: str, *, event_handler=None) -> AgentRunResult:
+            _ = prompt
+            _ = event_handler
+            observed_max_turns.append(child.runtime_config.max_turns)
+            return AgentRunResult(
+                final_output='Child completed.',
+                turns=1,
+                tool_calls=0,
+                transcript=(),
+                stop_reason='stop',
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                    base_url='http://127.0.0.1:8000/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace, max_turns=None),
+            )
+            with patch.object(LocalCodingAgent, 'run', autospec=True, side_effect=_fake_run):
+                result = agent._execute_delegate_agent(
+                    {
+                        'description': 'inspect workspace',
+                        'prompt': 'Inspect the repository.',
+                    }
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(observed_max_turns, [None])
+
+    def test_non_ollama_tool_schema_keeps_full_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                    base_url='http://127.0.0.1:8000/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            session = agent.build_session(None)
+            session.append_user('Inspect the workspace')
+            tool_specs = agent._build_tool_specs_for_session(session)
+
+        self.assertEqual(len(tool_specs), len(agent.tool_registry))
+
+    def test_ollama_prompt_tool_registry_matches_compacted_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='gemma4:e4b',
+                    base_url='http://127.0.0.1:11434/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            session = agent.build_session(None)
+            session.append_user('Review the workspace')
+            tool_specs = agent._build_tool_specs_for_session(session)
+
+        schema_tool_names = {
+            spec.get('function', {}).get('name')
+            for spec in tool_specs
+            if isinstance(spec, dict)
+        }
+        self.assertEqual(set(agent._tool_registry_for_prompt()), schema_tool_names)
 
     def test_agent_persists_session_and_can_resume(self) -> None:
         responses = [

@@ -49,6 +49,25 @@ class ExtendedToolTests(unittest.TestCase):
         self.assertIn('read_file', result.content)
         self.assertIn('write_file', result.content)
 
+    def test_list_available_tools_lists_registry(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                tool_registry=registry,
+            )
+            result = execute_tool(
+                registry,
+                'list_available_tools',
+                {},
+                context,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn('# Available Tools', result.content)
+        self.assertIn('list_dir', result.content)
+        self.assertIn('tool_search', result.content)
+
     def test_sleep_tool_waits_briefly_and_returns_metadata(self) -> None:
         registry = default_tool_registry()
         with tempfile.TemporaryDirectory() as tmp_dir:
