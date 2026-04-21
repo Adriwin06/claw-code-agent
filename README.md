@@ -360,7 +360,7 @@ Example values:
 ```env
 OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 OPENAI_API_KEY=ollama
-OPENAI_MODEL=gemma4:e4b
+OPENAI_MODEL=openai/gemma4:e4b
 SAGEMATH_IMAGE=sagemath/sagemath:latest
 SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
 AGENT_COMMAND=agent-tui

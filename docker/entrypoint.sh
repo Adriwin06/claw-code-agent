@@ -15,6 +15,28 @@ bool_true() {
 AGENT_COMMAND="${AGENT_COMMAND:-agent-chat}"
 AGENT_CWD="${AGENT_CWD:-/workspace}"
 AGENT_READ_ONLY="${AGENT_READ_ONLY:-false}"
+AGENT_VENV="${AGENT_VENV:-}"
+
+resolve_python_bin() {
+  local candidate_venv="$1"
+
+  if [[ -z "$candidate_venv" && -x "/workspace/venv-linux/bin/python" ]]; then
+    candidate_venv="/workspace/venv-linux"
+  fi
+
+  if [[ -n "$candidate_venv" ]]; then
+    if [[ ! -x "$candidate_venv/bin/python" ]]; then
+      echo "Configured AGENT_VENV does not contain an executable python: $candidate_venv/bin/python" >&2
+      exit 2
+    fi
+    export VIRTUAL_ENV="$candidate_venv"
+    export PATH="$candidate_venv/bin:$PATH"
+    printf '%s\n' "$candidate_venv/bin/python"
+    return 0
+  fi
+
+  command -v python
+}
 
 case "$AGENT_COMMAND" in
   agent|agent-bg|agent-chat|agent-tui|agent-prompt|agent-context|agent-context-raw|token-budget|doctor)
@@ -25,7 +47,8 @@ case "$AGENT_COMMAND" in
     ;;
 esac
 
-cmd=(python -m src.main "$AGENT_COMMAND")
+PYTHON_BIN="$(resolve_python_bin "$AGENT_VENV")"
+cmd=("$PYTHON_BIN" -m src.main "$AGENT_COMMAND")
 
 if [[ -n "${AGENT_PROMPT:-}" ]]; then
   cmd+=("${AGENT_PROMPT}")
@@ -152,5 +175,8 @@ if [[ -n "${AGENT_OVERRIDE_SYSTEM_PROMPT:-}" ]]; then
   cmd+=(--override-system-prompt "$AGENT_OVERRIDE_SYSTEM_PROMPT")
 fi
 
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  echo "Using virtual environment: $VIRTUAL_ENV" >&2
+fi
 echo "Launching: ${cmd[*]}" >&2
 exec "${cmd[@]}"

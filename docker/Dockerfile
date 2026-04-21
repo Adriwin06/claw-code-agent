@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -17,7 +17,8 @@ WORKDIR /workspace
 COPY . /workspace
 COPY docker/entrypoint.sh /usr/local/bin/claw-agent-entrypoint
 
-RUN python -m pip install --no-cache-dir "textual>=0.58,<1.0"
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir ".[tui]"
 
 RUN chmod +x /usr/local/bin/claw-agent-entrypoint
 

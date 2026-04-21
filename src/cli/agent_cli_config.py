@@ -17,6 +17,22 @@ from src.agent.agent_types import (
 
 
 _DEFAULT_MODEL = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
+_OPENAI_COMPAT_PROVIDER_ALIASES = {
+    'compat',
+    'ollama',
+    'ollama_chat',
+    'openai',
+    'openai_compat',
+}
+
+
+def _looks_like_ollama_base_url(base_url: str | None) -> bool:
+    if not isinstance(base_url, str):
+        return False
+    normalized = base_url.strip().lower()
+    if not normalized:
+        return False
+    return ':11434' in normalized or 'ollama' in normalized
 
 
 def _env_first(*names: str, default: str | None = None) -> str | None:
@@ -49,18 +65,35 @@ def _env_optional_int(*names: str) -> int | None:
         return None
 
 
-def _default_model_from_env() -> str:
-    model = _env_first('OPENAI_MODEL', 'LLM_MODEL', default=_DEFAULT_MODEL)
+def _normalize_model_name(
+    model: str | None,
+    *,
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> str:
     if not isinstance(model, str):
         return _DEFAULT_MODEL
-    if 'OPENAI_MODEL' in os.environ:
-        return model
+    normalized_model = model.strip()
+    if not normalized_model:
+        return _DEFAULT_MODEL
+    if '/' in normalized_model:
+        return normalized_model
+
+    normalized_provider = (provider or '').strip().lower()
+    if normalized_provider in {'ollama', 'ollama_chat'}:
+        if _looks_like_ollama_base_url(base_url):
+            return f'openai/{normalized_model}'
+        return f'ollama/{normalized_model}'
+    if normalized_provider and normalized_provider not in _OPENAI_COMPAT_PROVIDER_ALIASES:
+        return f'{normalized_provider}/{normalized_model}'
+    return normalized_model
+
+
+def _default_model_from_env() -> str:
+    model = _env_first('OPENAI_MODEL', 'LLM_MODEL', default=_DEFAULT_MODEL)
     provider = _env_first('LLM_PROVIDER')
-    if isinstance(provider, str):
-        provider = provider.strip()
-        if provider and model and '/' not in model:
-            return f'{provider}/{model}'
-    return model
+    base_url = _env_first('OPENAI_BASE_URL', 'LLM_API_BASE')
+    return _normalize_model_name(model, provider=provider, base_url=base_url)
 
 
 def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: bool) -> None:
@@ -177,8 +210,13 @@ def _build_model_config(args: argparse.Namespace) -> ModelConfig:
     api_key = getattr(args, 'api_key', None)
     if api_key is None:
         api_key = _env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token')
+    provider = _env_first('LLM_PROVIDER')
     return ModelConfig(
-        model=(getattr(args, 'model', None) or _default_model_from_env()),
+        model=_normalize_model_name(
+            getattr(args, 'model', None) or _default_model_from_env(),
+            provider=provider,
+            base_url=str(base_url),
+        ),
         base_url=str(base_url),
         api_key=str(api_key),
         llm_backend=getattr(
