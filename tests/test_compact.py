@@ -10,7 +10,12 @@ from unittest.mock import MagicMock
 
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_session import AgentMessage, AgentSessionState
-from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.agent.agent_types import (
+    AgentRuntimeConfig,
+    AssistantTurn,
+    ModelConfig,
+    UsageStats,
+)
 from src.session.compact import (
     AUTOCOMPACT_BUFFER_TOKENS,
     ERROR_INCOMPLETE_RESPONSE,
@@ -203,10 +208,6 @@ class TestCompactConversation(unittest.TestCase):
             msgs = self._make_messages(10)
             self._set_session(agent, msgs)
 
-            # Mock the client's complete method
-            from src.openai_compat import AssistantTurn
-            from src.agent.agent_types import UsageStats
-
             mock_turn = AssistantTurn(
                 content=(
                     '<analysis>Thinking through the conversation...</analysis>\n'
@@ -273,9 +274,6 @@ class TestCompactConversation(unittest.TestCase):
             agent = self._make_agent(tmp_dir)
             self._set_session(agent, self._make_messages(10))
 
-            from src.openai_compat import AssistantTurn
-            from src.agent.agent_types import UsageStats
-
             agent.client = MagicMock()
             agent.client.complete.return_value = AssistantTurn(
                 content='',
@@ -294,9 +292,6 @@ class TestCompactConversation(unittest.TestCase):
             agent = self._make_agent(tmp_dir)
             msgs = self._make_messages(12)
             self._set_session(agent, msgs)
-
-            from src.openai_compat import AssistantTurn
-            from src.agent.agent_types import UsageStats
 
             agent.client = MagicMock()
             agent.client.complete.return_value = AssistantTurn(
@@ -323,9 +318,6 @@ class TestCompactConversation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             agent = self._make_agent(tmp_dir)
             self._set_session(agent, self._make_messages(10))
-
-            from src.openai_compat import AssistantTurn
-            from src.agent.agent_types import UsageStats
 
             agent.client = MagicMock()
             agent.client.complete.return_value = AssistantTurn(
@@ -366,9 +358,6 @@ class TestCompactSlashCommand(unittest.TestCase):
                 ],
             )
             agent.last_session = session
-
-            from src.openai_compat import AssistantTurn
-            from src.agent.agent_types import UsageStats
 
             agent.client = MagicMock()
             agent.client.complete.return_value = AssistantTurn(

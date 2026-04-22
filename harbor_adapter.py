@@ -26,9 +26,9 @@ class ClawCodeInstalledAgent(BaseInstalledAgent):
     ]
 
     ENV_VARS = [
-        EnvVar("openai_api_key", env="OPENAI_API_KEY", type="str", env_fallback="OPENAI_API_KEY"),
-        EnvVar("openai_base_url", env="OPENAI_BASE_URL", type="str", env_fallback="OPENAI_BASE_URL"),
-        EnvVar("openai_model", env="OPENAI_MODEL", type="str", env_fallback="OPENAI_MODEL"),
+        EnvVar("llm_api_key", env="LLM_API_KEY", type="str", env_fallback="LLM_API_KEY"),
+        EnvVar("llm_api_base", env="LLM_API_BASE", type="str", env_fallback="LLM_API_BASE"),
+        EnvVar("llm_model", env="LLM_MODEL", type="str", env_fallback="LLM_MODEL"),
     ]
 
     @staticmethod
@@ -79,8 +79,8 @@ class ClawCodeInstalledAgent(BaseInstalledAgent):
     ) -> None:
         del context
         env = self.resolve_env_vars()
-        if self.model_name and "OPENAI_MODEL" not in env:
-            env["OPENAI_MODEL"] = self.model_name
+        if self.model_name and "LLM_MODEL" not in env:
+            env["LLM_MODEL"] = self.model_name
 
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""

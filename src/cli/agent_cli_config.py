@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_types import (
@@ -17,13 +18,48 @@ from src.agent.agent_types import (
 
 
 _DEFAULT_MODEL = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
-_OPENAI_COMPAT_PROVIDER_ALIASES = {
-    'compat',
-    'ollama',
-    'ollama_chat',
-    'openai',
-    'openai_compat',
+_LOCAL_BASE_URL_DEFAULT = 'http://127.0.0.1:8000/v1'
+_LOCAL_API_KEY_DEFAULT = 'local-token'
+_PROVIDER_ENV_ALIASES = {
+    'azure': 'azure_openai',
+    'azure_openai': 'azure_openai',
+    'anthropic': 'anthropic',
+    'deepseek': 'deepseek',
+    'gemini': 'gemini',
+    'google': 'gemini',
+    'groq': 'groq',
+    'mistral': 'mistral',
+    'ollama': 'ollama',
+    'ollama_chat': 'ollama',
+    'openai': 'openai',
+    'openrouter': 'openrouter',
+    'together': 'together',
+    'together_ai': 'together',
+    'xai': 'xai',
 }
+_PROVIDER_API_KEY_ENV_VARS = {
+    'anthropic': ('ANTHROPIC_API_KEY',),
+    'azure_openai': ('AZURE_OPENAI_API_KEY',),
+    'deepseek': ('DEEPSEEK_API_KEY',),
+    'gemini': ('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
+    'groq': ('GROQ_API_KEY',),
+    'mistral': ('MISTRAL_API_KEY',),
+    'openai': ('OPENAI_API_KEY',),
+    'openrouter': ('OPENROUTER_API_KEY',),
+    'together': ('TOGETHER_API_KEY',),
+    'xai': ('XAI_API_KEY',),
+}
+_BASE_URL_PROVIDER_HINTS = (
+    ('openrouter.ai', 'openrouter'),
+    ('api.openai.com', 'openai'),
+    ('api.anthropic.com', 'anthropic'),
+    ('generativelanguage.googleapis.com', 'gemini'),
+    ('api.mistral.ai', 'mistral'),
+    ('api.groq.com', 'groq'),
+    ('api.x.ai', 'xai'),
+    ('api.deepseek.com', 'deepseek'),
+    ('api.together.xyz', 'together'),
+)
 
 
 def _looks_like_ollama_base_url(base_url: str | None) -> bool:
@@ -35,10 +71,34 @@ def _looks_like_ollama_base_url(base_url: str | None) -> bool:
     return ':11434' in normalized or 'ollama' in normalized
 
 
+def _looks_like_local_base_url(base_url: str | None) -> bool:
+    if not isinstance(base_url, str):
+        return False
+    normalized = base_url.strip().lower()
+    if not normalized:
+        return False
+    parsed = urlparse(normalized)
+    hostname = (parsed.hostname or '').strip().lower()
+    return hostname in {'127.0.0.1', 'localhost', 'host.docker.internal'}
+
+
 def _env_first(*names: str, default: str | None = None) -> str | None:
     for name in names:
         if name in os.environ:
             return os.environ.get(name, default)
+    return default
+
+
+def _env_nonempty(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        if name not in os.environ:
+            continue
+        raw = os.environ.get(name)
+        if not isinstance(raw, str):
+            continue
+        stripped = raw.strip()
+        if stripped:
+            return stripped
     return default
 
 
@@ -65,6 +125,103 @@ def _env_optional_int(*names: str) -> int | None:
         return None
 
 
+def _normalize_provider_name(provider: str | None) -> str | None:
+    if not isinstance(provider, str):
+        return None
+    normalized = provider.strip().lower()
+    if not normalized:
+        return None
+    return _PROVIDER_ENV_ALIASES.get(normalized, normalized)
+
+
+def _provider_from_model_name(model: str | None) -> str | None:
+    if not isinstance(model, str):
+        return None
+    normalized_model = model.strip()
+    if not normalized_model or '/' not in normalized_model:
+        return None
+    return _normalize_provider_name(normalized_model.split('/', 1)[0])
+
+
+def _provider_from_base_url(base_url: str | None) -> str | None:
+    if _looks_like_ollama_base_url(base_url):
+        return 'ollama'
+    if not isinstance(base_url, str):
+        return None
+    normalized = base_url.strip().lower()
+    if not normalized:
+        return None
+    for marker, provider in _BASE_URL_PROVIDER_HINTS:
+        if marker in normalized:
+            return provider
+    return None
+
+
+def _resolve_provider_name(
+    provider: str | None,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str | None:
+    return (
+        _normalize_provider_name(provider)
+        or _provider_from_base_url(base_url)
+        or _provider_from_model_name(model)
+    )
+
+
+def _default_api_key_for_provider(
+    provider: str | None,
+    *,
+    base_url: str | None = None,
+) -> str:
+    if provider == 'ollama':
+        return 'ollama'
+    if _looks_like_local_base_url(base_url):
+        return _LOCAL_API_KEY_DEFAULT
+    return _LOCAL_API_KEY_DEFAULT
+
+
+def _resolve_api_key(
+    *,
+    explicit_api_key: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    explicit = explicit_api_key.strip() if isinstance(explicit_api_key, str) else ''
+    if explicit:
+        return explicit
+
+    override = _env_nonempty('LLM_API_KEY')
+    if override is not None:
+        return override
+
+    resolved_provider = _resolve_provider_name(
+        provider,
+        model=model,
+        base_url=base_url,
+    )
+    if resolved_provider is not None:
+        env_names = _PROVIDER_API_KEY_ENV_VARS.get(resolved_provider, ())
+        provider_key = _env_nonempty(*env_names)
+        if provider_key is not None:
+            return provider_key
+
+    return _default_api_key_for_provider(resolved_provider, base_url=base_url)
+
+
+def _default_api_key_from_env() -> str:
+    model = _env_nonempty('LLM_MODEL')
+    provider = _env_nonempty('LLM_PROVIDER')
+    base_url = _env_nonempty('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+    return _resolve_api_key(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+    )
+
+
 def _normalize_model_name(
     model: str | None,
     *,
@@ -84,15 +241,15 @@ def _normalize_model_name(
         if _looks_like_ollama_base_url(base_url):
             return f'openai/{normalized_model}'
         return f'ollama/{normalized_model}'
-    if normalized_provider and normalized_provider not in _OPENAI_COMPAT_PROVIDER_ALIASES:
+    if normalized_provider:
         return f'{normalized_provider}/{normalized_model}'
     return normalized_model
 
 
 def _default_model_from_env() -> str:
-    model = _env_first('OPENAI_MODEL', 'LLM_MODEL', default=_DEFAULT_MODEL)
-    provider = _env_first('LLM_PROVIDER')
-    base_url = _env_first('OPENAI_BASE_URL', 'LLM_API_BASE')
+    model = _env_first('LLM_MODEL', default=_DEFAULT_MODEL)
+    provider = _env_nonempty('LLM_PROVIDER')
+    base_url = _env_nonempty('LLM_API_BASE')
     return _normalize_model_name(model, provider=provider, base_url=base_url)
 
 
@@ -101,20 +258,16 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     if include_backend:
         parser.add_argument(
             '--base-url',
-            default=_env_first(
-                'OPENAI_BASE_URL',
-                'LLM_API_BASE',
-                default='http://127.0.0.1:8000/v1',
-            ),
+            default=_env_first('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT),
         )
         parser.add_argument(
             '--api-key',
-            default=_env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token'),
+            default=None,
         )
         parser.add_argument(
             '--llm-backend',
             default=os.environ.get('CLAW_LLM_BACKEND', 'litellm'),
-            help='LLM transport backend (litellm; openai_compat is accepted as a compatibility alias)',
+            help='LLM transport backend (litellm only)',
         )
         parser.add_argument(
             '--temperature',
@@ -206,14 +359,18 @@ def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
 def _build_model_config(args: argparse.Namespace) -> ModelConfig:
     base_url = getattr(args, 'base_url', None)
     if base_url is None:
-        base_url = _env_first('OPENAI_BASE_URL', 'LLM_API_BASE', default='http://127.0.0.1:8000/v1')
-    api_key = getattr(args, 'api_key', None)
-    if api_key is None:
-        api_key = _env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token')
-    provider = _env_first('LLM_PROVIDER')
+        base_url = _env_first('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+    provider = _env_nonempty('LLM_PROVIDER')
+    model = getattr(args, 'model', None) or _default_model_from_env()
+    api_key = _resolve_api_key(
+        explicit_api_key=getattr(args, 'api_key', None),
+        provider=provider,
+        model=str(model),
+        base_url=str(base_url),
+    )
     return ModelConfig(
         model=_normalize_model_name(
-            getattr(args, 'model', None) or _default_model_from_env(),
+            model,
             provider=provider,
             base_url=str(base_url),
         ),
@@ -260,9 +417,15 @@ def _append_agent_forwarded_args(
     if max_turns is not None:
         command.extend(['--max-turns', str(max_turns)])
     if include_backend:
+        resolved_api_key = _resolve_api_key(
+            explicit_api_key=getattr(args, 'api_key', None),
+            provider=_env_nonempty('LLM_PROVIDER'),
+            model=str(getattr(args, 'model', '')),
+            base_url=str(getattr(args, 'base_url', _LOCAL_BASE_URL_DEFAULT)),
+        )
         command.extend(['--model', str(args.model)])
         command.extend(['--base-url', str(args.base_url)])
-        command.extend(['--api-key', str(args.api_key)])
+        command.extend(['--api-key', resolved_api_key])
         command.extend(['--llm-backend', str(args.llm_backend)])
         command.extend(['--temperature', str(args.temperature)])
         command.extend(['--timeout-seconds', str(args.timeout_seconds)])

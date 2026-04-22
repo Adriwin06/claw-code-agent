@@ -23,7 +23,7 @@ class AccountRuntimeTests(unittest.TestCase):
                 ),
                 encoding='utf-8',
             )
-            with patch.dict('os.environ', {'OPENAI_API_KEY': 'local-token'}, clear=False):
+            with patch.dict('os.environ', {'LLM_API_KEY': 'local-token'}, clear=False):
                 runtime = AccountRuntime.from_workspace(workspace)
                 report = runtime.login('local')
                 restored = AccountRuntime.from_workspace(workspace)
@@ -33,7 +33,7 @@ class AccountRuntimeTests(unittest.TestCase):
         self.assertEqual(report.profile_name, 'local')
         self.assertIsNotNone(restored.active_session)
         self.assertEqual(restored.active_session.profile_name, 'local')
-        self.assertIn('Credential env vars: OPENAI_API_KEY', restored.render_summary())
+        self.assertIn('Credential env vars: LLM_API_KEY', restored.render_summary())
 
     def test_account_runtime_logout_clears_active_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

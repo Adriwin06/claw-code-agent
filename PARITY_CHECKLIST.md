@@ -2,7 +2,7 @@
 
 This document tracks what is already implemented in Python and what is still missing compared with the upstream npm runtime.
 
-This is a functionality-oriented checklist, not a line-by-line source equivalence claim. Large parts of the mirrored Python workspace still act as inventory or scaffolding, while the working Python runtime currently lives mainly in [`src/agent_runtime.py`](src/agent_runtime.py), [`src/query_engine.py`](src/query_engine.py), [`src/agent_tools.py`](src/agent_tools.py), [`src/agent_prompting.py`](src/agent_prompting.py), [`src/agent_context.py`](src/agent_context.py), [`src/agent_manager.py`](src/agent_manager.py), [`src/plugin_runtime.py`](src/plugin_runtime.py), [`src/agent_slash_commands.py`](src/agent_slash_commands.py), [`src/openai_compat.py`](src/openai_compat.py), [`src/builtin_agents.py`](src/builtin_agents.py), [`src/microcompact.py`](src/microcompact.py), [`src/compact.py`](src/compact.py), [`src/bundled_skills.py`](src/bundled_skills.py), and [`src/session_memory_compact.py`](src/session_memory_compact.py).
+This is a functionality-oriented checklist, not a line-by-line source equivalence claim. Large parts of the mirrored Python workspace still act as inventory or scaffolding, while the working Python runtime currently lives mainly in [`src/agent_runtime.py`](src/agent_runtime.py), [`src/query_engine.py`](src/query_engine.py), [`src/agent_tools.py`](src/agent_tools.py), [`src/agent_prompting.py`](src/agent_prompting.py), [`src/agent_context.py`](src/agent_context.py), [`src/agent_manager.py`](src/agent_manager.py), [`src/plugin_runtime.py`](src/plugin_runtime.py), [`src/agent_slash_commands.py`](src/agent_slash_commands.py), [`src/builtin_agents.py`](src/builtin_agents.py), [`src/microcompact.py`](src/microcompact.py), [`src/compact.py`](src/compact.py), [`src/bundled_skills.py`](src/bundled_skills.py), and [`src/session_memory_compact.py`](src/session_memory_compact.py).
 
 ---
 
@@ -765,7 +765,6 @@ Working Python runtime today (21,193 lines across 51 source files, 10,480 lines 
 - [x] `src/config_runtime.py` (296 lines)
 - [x] `src/hook_policy.py` (339 lines)
 - [x] `src/mcp_runtime.py` (880 lines)
-- [x] `src/openai_compat.py` (413 lines)
 - [x] `src/permissions.py` (20 lines)
 - [x] `src/plan_runtime.py` (396 lines)
 - [x] `src/plugin_runtime.py` (654 lines)

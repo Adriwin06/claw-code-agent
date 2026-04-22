@@ -222,7 +222,7 @@ claw-code/
 │   │   ├── agent_types.py        # Shared dataclasses & type definitions
 │   │   └── ...
 │   ├── llm/                      # LLM backend adapters and client factory
-│   │   ├── factory.py            # Backend selection (openai_compat vs litellm)
+│   │   ├── factory.py            # Backend selection and client construction
 │   │   └── litellm_backend.py    # LiteLLM-backed client implementation
 │   ├── ui/                       # Textual UI support modules (state, conversation, slash helpers)
 │   │   ├── state.py              # AgentTuiState + session hydration
@@ -230,7 +230,6 @@ claw-code/
 │   │   ├── slash_commands.py     # Slash command suggestion/filter/render helpers
 │   │   ├── ids.py                # Textual-safe id and key-routing helpers
 │   │   └── formatting.py         # UI preview/format helper utilities
-│   ├── openai_compat.py          # OpenAI-compatible fallback backend (streaming)
 │   ├── textual_ui.py             # Textual app orchestration and event bridge
 │   ├── core/                     # Shared core orchestration, catalog, and governance surfaces
 │   │   ├── orchestration/        # Runtime/query/bootstrap/task orchestration
@@ -332,9 +331,10 @@ ollama pull qwen3
 Then configure:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
-export OPENAI_API_KEY=ollama
-export OPENAI_MODEL=qwen3
+export LLM_PROVIDER=ollama_chat
+export LLM_API_BASE=http://127.0.0.1:11434/v1
+export LLM_API_KEY=ollama
+export LLM_MODEL=qwen3
 ```
 
 Notes:
@@ -358,9 +358,16 @@ cp .env.example .env
 Example values:
 
 ```env
-OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-OPENAI_API_KEY=ollama
-OPENAI_MODEL=openai/gemma4:e4b
+LLM_PROVIDER=ollama_chat
+LLM_API_BASE=http://host.docker.internal:11434/v1
+LLM_MODEL=gemma4:e4b
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+MISTRAL_API_KEY=
+OPENROUTER_API_KEY=
+# Optional override for local/proxy/custom endpoints:
+LLM_API_KEY=ollama
 SAGEMATH_IMAGE=sagemath/sagemath:latest
 SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
 AGENT_COMMAND=agent-tui
@@ -411,6 +418,8 @@ python3 -m src.main search "latest python release" --cwd .
 
 Notes:
 
+- provider-specific keys are auto-selected from `LLM_PROVIDER` and `LLM_MODEL`
+- `LLM_API_KEY` is an optional manual override for local servers, proxies, or custom endpoints
 - the default `.env` targets a local Ollama server running on the host machine
 - `host.docker.internal` is prewired in `docker-compose.yml` so the container can reach host Ollama
 - set `HOST_WORKSPACE_DIR` to mount a different host folder into the container
@@ -442,9 +451,9 @@ litellm --model ollama/qwen3
 LiteLLM Proxy runs on port `4000` by default. Then configure:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:4000
-export OPENAI_API_KEY=anything
-export OPENAI_MODEL=ollama/qwen3
+export LLM_API_BASE=http://127.0.0.1:4000
+export LLM_API_KEY=anything
+export LLM_MODEL=ollama/qwen3
 ```
 
 Notes:
@@ -462,9 +471,9 @@ Notes:
 Configure:
 
 ```bash
-export OPENAI_BASE_URL=https://openrouter.ai/api/v1
-export OPENAI_API_KEY=sk-or-v1-your-key-here
-export OPENAI_MODEL=openai/gpt-4o-mini
+export LLM_API_BASE=https://openrouter.ai/api/v1
+export OPENROUTER_API_KEY=sk-or-v1-your-key-here
+export LLM_MODEL=openai/gpt-4o-mini
 ```
 
 Notes:
@@ -479,9 +488,9 @@ Notes:
 ### 2. Configure Environment
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
-export OPENAI_API_KEY=local-token
-export OPENAI_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct
+export LLM_API_BASE=http://127.0.0.1:8000/v1
+export LLM_API_KEY=local-token
+export LLM_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct
 ```
 
 ### Use Another Model With vLLM
@@ -502,7 +511,7 @@ python -m vllm.entrypoints.openai.api_server \
 Then update:
 
 ```bash
-export OPENAI_MODEL=your-model-name
+export LLM_MODEL=your-model-name
 ```
 
 Notes:

@@ -10,7 +10,7 @@ from src.agent.agent_types import (
     ToolCall,
 )
 from .parsers import (
-    LLMBackendError as OpenAICompatError,
+    LLMBackendError,
     build_response_format,
     coerce_finish_reason,
     iter_stream_events,
@@ -33,13 +33,13 @@ def _coerce_payload(payload: Any) -> dict[str, Any]:
         dumped = dict_method()
         if isinstance(dumped, dict):
             return dumped
-    raise OpenAICompatError(
+    raise LLMBackendError(
         f'LiteLLM returned unsupported payload type: {type(payload).__name__}'
     )
 
 
 class LiteLLMClient:
-    """LiteLLM-backed chat client that mirrors OpenAICompatClient's interface."""
+    """LiteLLM-backed chat client with the shared runtime client interface."""
 
     def __init__(self, config: ModelConfig) -> None:
         self.config = config
@@ -62,14 +62,14 @@ class LiteLLMClient:
 
         choices = payload.get('choices')
         if not isinstance(choices, list) or not choices:
-            raise OpenAICompatError('LiteLLM backend returned no choices')
+            raise LLMBackendError('LiteLLM backend returned no choices')
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
-            raise OpenAICompatError('LiteLLM backend returned malformed choice data')
+            raise LLMBackendError('LiteLLM backend returned malformed choice data')
 
         message = first_choice.get('message')
         if not isinstance(message, dict):
-            raise OpenAICompatError('LiteLLM backend returned no assistant message')
+            raise LLMBackendError('LiteLLM backend returned no assistant message')
 
         return AssistantTurn(
             content=normalize_content(message.get('content')),
@@ -108,7 +108,7 @@ class LiteLLMClient:
         try:
             from litellm import completion  # type: ignore
         except ImportError as exc:
-            raise OpenAICompatError(
+            raise LLMBackendError(
                 'LiteLLM backend requested but litellm is not installed. '
                 'Install it with "pip install litellm".'
             ) from exc
@@ -133,7 +133,7 @@ class LiteLLMClient:
         try:
             return completion(**kwargs)
         except Exception as exc:  # pragma: no cover - defensive wrapper for provider errors
-            raise OpenAICompatError(f'LiteLLM request failed: {exc}') from exc
+            raise LLMBackendError(f'LiteLLM request failed: {exc}') from exc
 
     def _parse_tool_calls_from_message(self, message: dict[str, Any]) -> list[ToolCall]:
         return parse_tool_calls_from_message(

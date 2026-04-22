@@ -162,29 +162,29 @@ ENV_FILE="$REPO_ROOT/.env"
 DOCKER_NETWORK_ARGS=(--add-host "host.docker.internal:host-gateway")
 DOCKER_ENV_ARGS=()
 
-OPENAI_BASE_URL_VALUE="${OPENAI_BASE_URL:-}"
-OPENAI_MODEL_VALUE="${OPENAI_MODEL:-}"
-OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
+LLM_API_BASE_VALUE="${LLM_API_BASE:-}"
+LLM_MODEL_VALUE="${LLM_MODEL:-}"
+LLM_API_KEY_VALUE="${LLM_API_KEY:-}"
 if [[ -f "$ENV_FILE" ]]; then
-  OPENAI_BASE_URL_VALUE="$(read_env_file_value "$ENV_FILE" OPENAI_BASE_URL || printf '%s' "$OPENAI_BASE_URL_VALUE")"
-  OPENAI_MODEL_VALUE="$(read_env_file_value "$ENV_FILE" OPENAI_MODEL || printf '%s' "$OPENAI_MODEL_VALUE")"
-  OPENAI_API_KEY_VALUE="$(read_env_file_value "$ENV_FILE" OPENAI_API_KEY || printf '%s' "$OPENAI_API_KEY_VALUE")"
+  LLM_API_BASE_VALUE="$(read_env_file_value "$ENV_FILE" LLM_API_BASE || printf '%s' "$LLM_API_BASE_VALUE")"
+  LLM_MODEL_VALUE="$(read_env_file_value "$ENV_FILE" LLM_MODEL || printf '%s' "$LLM_MODEL_VALUE")"
+  LLM_API_KEY_VALUE="$(read_env_file_value "$ENV_FILE" LLM_API_KEY || printf '%s' "$LLM_API_KEY_VALUE")"
 fi
 
-if is_wsl && uses_ollama_backend "$OPENAI_BASE_URL_VALUE"; then
+if is_wsl && uses_ollama_backend "$LLM_API_BASE_VALUE"; then
   if ensure_ollama_running; then
     echo "Detected WSL-hosted Ollama. Using Docker host networking for the backend."
     DOCKER_NETWORK_ARGS=(--network host)
-    DOCKER_ENV_ARGS+=(-e "OPENAI_BASE_URL=http://127.0.0.1:11434/v1")
-    if [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
-      DOCKER_ENV_ARGS+=(-e "OPENAI_API_KEY=ollama")
+    DOCKER_ENV_ARGS+=(-e "LLM_API_BASE=http://127.0.0.1:11434/v1")
+    if [[ -z "$LLM_API_KEY_VALUE" ]]; then
+      DOCKER_ENV_ARGS+=(-e "LLM_API_KEY=ollama")
     fi
-    if [[ -n "$OPENAI_MODEL_VALUE" ]]; then
-      if [[ "$OPENAI_MODEL_VALUE" == */* ]]; then
-        DOCKER_ENV_ARGS+=(-e "OPENAI_MODEL=$OPENAI_MODEL_VALUE")
+    if [[ -n "$LLM_MODEL_VALUE" ]]; then
+      if [[ "$LLM_MODEL_VALUE" == */* ]]; then
+        DOCKER_ENV_ARGS+=(-e "LLM_MODEL=$LLM_MODEL_VALUE")
       else
-        echo "Adjusting OPENAI_MODEL for LiteLLM Ollama routing: openai/$OPENAI_MODEL_VALUE"
-        DOCKER_ENV_ARGS+=(-e "OPENAI_MODEL=openai/$OPENAI_MODEL_VALUE")
+        echo "Adjusting LLM_MODEL for LiteLLM Ollama routing: openai/$LLM_MODEL_VALUE"
+        DOCKER_ENV_ARGS+=(-e "LLM_MODEL=openai/$LLM_MODEL_VALUE")
       fi
     fi
   else

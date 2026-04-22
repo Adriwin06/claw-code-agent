@@ -363,7 +363,7 @@ def run_trial(
 
     env = {
         key: os.environ[key]
-        for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")
+        for key in ("LLM_API_KEY", "LLM_API_BASE", "LLM_MODEL")
         if os.environ.get(key)
     }
     env.update({str(k): str(v) for k, v in (task.raw_config.get("environment") or {}).get("env", {}).items()})
@@ -448,7 +448,7 @@ def save_results(path: Path, results: list[LocalTrialResult]) -> None:
     payload = {
         "benchmark": "terminal-bench-local-apptainer",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model": os.environ.get("OPENAI_MODEL", "unknown"),
+        "model": os.environ.get("LLM_MODEL", "unknown"),
         "results": [asdict(item) for item in results],
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

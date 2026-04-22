@@ -20,7 +20,6 @@ from src.agent.agent_types import (
     UsageStats,
 )
 from src.session.compact import CompactionResult
-from src.openai_compat import OpenAICompatClient
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
@@ -67,83 +66,6 @@ class AgentRuntimeTests(unittest.TestCase):
             self.assertEqual(agent_def.initial_prompt, 'Start with a repository scan.')
             self.assertEqual(child_model.model, 'child-model')
             self.assertEqual(sorted(child_tools), ['grep_search', 'read_file'])
-
-    def test_openai_client_parses_tool_calls(self) -> None:
-        responses = [
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'Inspecting the file.',
-                            'tool_calls': [
-                                {
-                                    'id': 'call_1',
-                                    'type': 'function',
-                                    'function': {
-                                        'name': 'read_file',
-                                        'arguments': '{"path": "hello.txt"}',
-                                    },
-                                }
-                            ],
-                        },
-                        'finish_reason': 'tool_calls',
-                    }
-                ]
-            }
-        ]
-        with patch('src.openai_compat.request.urlopen', side_effect=make_urlopen_side_effect(responses)):
-            client = OpenAICompatClient(
-                ModelConfig(
-                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
-                    base_url='http://127.0.0.1:8000/v1',
-                )
-            )
-            turn = client.complete(
-                messages=[{'role': 'user', 'content': 'read hello.txt'}],
-                tools=[],
-            )
-        self.assertEqual(turn.content, 'Inspecting the file.')
-        self.assertEqual(len(turn.tool_calls), 1)
-        self.assertEqual(turn.tool_calls[0].name, 'read_file')
-        self.assertEqual(turn.tool_calls[0].arguments['path'], 'hello.txt')
-
-    def test_openai_client_streams_content_and_usage(self) -> None:
-        responses = [
-            [
-                {'choices': [{'delta': {'content': 'Hello '}, 'finish_reason': None}]},
-                {'choices': [{'delta': {'content': 'world'}, 'finish_reason': None}]},
-                {
-                    'choices': [{'delta': {}, 'finish_reason': 'stop'}],
-                    'usage': {'prompt_tokens': 10, 'completion_tokens': 3},
-                },
-            ]
-        ]
-        with patch(
-            'src.openai_compat.request.urlopen',
-            side_effect=make_streaming_urlopen_side_effect(responses),
-        ):
-            client = OpenAICompatClient(
-                ModelConfig(
-                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
-                    base_url='http://127.0.0.1:8000/v1',
-                )
-            )
-            events = list(
-                client.stream(
-                    messages=[{'role': 'user', 'content': 'say hello'}],
-                    tools=[],
-                )
-            )
-        self.assertEqual(events[0].type, 'message_start')
-        self.assertEqual(
-            ''.join(event.delta for event in events if event.type == 'content_delta'),
-            'Hello world',
-        )
-        usage_events = [event for event in events if event.type == 'usage']
-        self.assertEqual(len(usage_events), 1)
-        self.assertEqual(usage_events[0].usage.input_tokens, 10)
-        self.assertEqual(usage_events[0].usage.output_tokens, 3)
 
     def test_agent_executes_tool_calls_against_fake_backend(self) -> None:
         responses = [

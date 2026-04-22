@@ -47,6 +47,8 @@ from ..textual_ui import run_agent_tui
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
 from .agent_cli_config import _build_agent
+from .agent_cli_config import _resolve_api_key
+from .agent_cli_config import _env_nonempty
 from .agent_runtime_ops import (
     _build_resumed_agent,
     _launch_background_agent,
@@ -66,11 +68,17 @@ def dispatch_main_command(
     manifest = build_port_manifest()
 
     if args.command == 'doctor':
+        resolved_api_key = _resolve_api_key(
+            explicit_api_key=args.api_key,
+            provider=_env_nonempty('LLM_PROVIDER'),
+            model=args.model,
+            base_url=args.base_url,
+        )
         report = run_doctor(
             model_config=ModelConfig(
                 model=args.model,
                 base_url=args.base_url,
-                api_key=args.api_key,
+                api_key=resolved_api_key,
                 timeout_seconds=args.timeout_seconds,
             ),
             runtime_config=AgentRuntimeConfig(cwd=Path(args.cwd).resolve()),

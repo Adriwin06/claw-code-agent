@@ -16,8 +16,11 @@ ACCOUNT_MANIFEST_PATHS = (
     Path('.claude/auth.json'),
 )
 CREDENTIAL_ENV_VARS = (
+    'LLM_API_KEY',
     'OPENAI_API_KEY',
+    'MISTRAL_API_KEY',
     'ANTHROPIC_API_KEY',
+    'GEMINI_API_KEY',
     'OPENROUTER_API_KEY',
     'LITELLM_MASTER_KEY',
 )

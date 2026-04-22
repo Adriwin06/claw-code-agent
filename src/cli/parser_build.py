@@ -151,11 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument('--model', default=_default_model_from_env())
     doctor_parser.add_argument(
         '--base-url',
-        default=_env_first('OPENAI_BASE_URL', 'LLM_API_BASE', default='http://127.0.0.1:8000/v1'),
+        default=_env_first('LLM_API_BASE', default='http://127.0.0.1:8000/v1'),
     )
     doctor_parser.add_argument(
         '--api-key',
-        default=_env_first('OPENAI_API_KEY', 'LLM_API_KEY', default='local-token'),
+        default=None,
     )
     doctor_parser.add_argument('--timeout-seconds', type=float, default=15.0)
     doctor_parser.add_argument('--cwd', default='.')

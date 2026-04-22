@@ -52,7 +52,7 @@ from src.agent.agent_types import (
     UsageStats,
 )
 from src.llm import build_llm_client, resolve_llm_backend
-from src.llm.parsers import LLMBackendError as OpenAICompatError
+from src.llm.parsers import LLMBackendError
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.integration.plugin_runtime import PluginRuntime
 from src.features.integration.remote_runtime import RemoteRuntime
@@ -717,7 +717,7 @@ class LocalCodingAgent:
             try:
                 tool_specs = self._build_tool_specs_for_session(session)
                 turn = self._query_model(session, tool_specs, stream_events)
-            except OpenAICompatError as exc:
+            except LLMBackendError as exc:
                 if self._is_prompt_too_long_error(exc) and self._reactive_compact_session(
                     session,
                     stream_events,
@@ -726,7 +726,7 @@ class LocalCodingAgent:
                     try:
                         tool_specs = self._build_tool_specs_for_session(session)
                         turn = self._query_model(session, tool_specs, stream_events)
-                    except OpenAICompatError as retry_exc:
+                    except LLMBackendError as retry_exc:
                         exc = retry_exc
                     else:
                         stream_events.extend(
@@ -1379,7 +1379,7 @@ class LocalCodingAgent:
             if isinstance(raw_arguments, str) and raw_arguments.strip():
                 arguments = json.loads(raw_arguments)
                 if not isinstance(arguments, dict):
-                    raise OpenAICompatError(
+                    raise LLMBackendError(
                         f'Tool arguments must decode to an object, got {type(arguments).__name__}'
                     )
             else:

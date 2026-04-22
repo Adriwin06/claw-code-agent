@@ -239,7 +239,7 @@ def save_results(results: list[TaskResult], output_path: str) -> None:
     data = {
         "benchmark": "claw-code-agent-local",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model": os.environ.get("OPENAI_MODEL", "unknown"),
+        "model": os.environ.get("LLM_MODEL", "unknown"),
         "total": len(results),
         "passed": sum(1 for r in results if r.passed),
         "score_pct": round(100 * sum(1 for r in results if r.passed) / len(results), 1) if results else 0,
@@ -310,8 +310,8 @@ def main() -> None:
     project_root = str(Path(__file__).resolve().parent.parent)
 
     # Check environment
-    model = os.environ.get("OPENAI_MODEL", "not set")
-    base_url = os.environ.get("OPENAI_BASE_URL", "not set")
+    model = os.environ.get("LLM_MODEL", "not set")
+    base_url = os.environ.get("LLM_API_BASE", "not set")
 
     print()
     print("=" * 72)

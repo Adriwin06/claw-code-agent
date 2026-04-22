@@ -232,7 +232,7 @@ class BenchmarkSuite(ABC):
         print(f"  {self.name} BENCHMARK")
         print(f"  {self.description}")
         print("=" * 72)
-        model = os.environ.get("OPENAI_MODEL", "unknown")
+        model = os.environ.get("LLM_MODEL", "unknown")
         print(f"  Model:    {model}")
         print(f"  Problems: {len(problems)}")
         print(f"  Timeout:  {self.agent_timeout}s per problem")

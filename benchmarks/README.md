@@ -13,9 +13,9 @@ This directory contains two benchmark systems:
 # From the repository root:
 
 # Set up your model endpoint
-export OPENAI_API_KEY="your-key"
-export OPENAI_MODEL="gpt-4"                        # or your model name
-export OPENAI_BASE_URL="http://localhost:8000/v1"   # if using local vLLM/ollama
+export LLM_API_KEY="your-key"
+export LLM_MODEL="gpt-4"                        # or your model name
+export LLM_API_BASE="http://localhost:8000/v1"   # if using local vLLM/ollama
 
 # Run a quick smoke test (5 problems from HumanEval)
 python3 -m benchmarks.run_suite --suite humaneval --limit 5 -v
@@ -292,9 +292,9 @@ python3 -m benchmarks.run -v -o local_results.json          # Verbose + save
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OPENAI_API_KEY` | API key for the model provider | `sk-...` |
-| `OPENAI_MODEL` | Model name to use | `gpt-4`, `qwen2.5-coder-32b` |
-| `OPENAI_BASE_URL` | API base URL (for local models) | `http://localhost:8000/v1` |
+| `LLM_API_KEY` | API key for the model provider | `sk-...` |
+| `LLM_MODEL` | Model name to use | `gpt-4`, `qwen2.5-coder-32b` |
+| `LLM_API_BASE` | API base URL (for local models) | `http://localhost:8000/v1` |
 
 ---
 

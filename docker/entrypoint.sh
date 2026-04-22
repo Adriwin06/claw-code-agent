@@ -59,16 +59,16 @@ fi
 
 cmd+=(--cwd "$AGENT_CWD")
 
-if [[ -n "${OPENAI_MODEL:-}" ]]; then
-  cmd+=(--model "$OPENAI_MODEL")
+if [[ -n "${LLM_MODEL:-}" ]]; then
+  cmd+=(--model "$LLM_MODEL")
 fi
 
 if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" || "$AGENT_COMMAND" == "agent-tui" || "$AGENT_COMMAND" == "doctor" ]]; then
-  if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
-    cmd+=(--base-url "$OPENAI_BASE_URL")
+  if [[ -n "${LLM_API_BASE:-}" ]]; then
+    cmd+=(--base-url "$LLM_API_BASE")
   fi
-  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-    cmd+=(--api-key "$OPENAI_API_KEY")
+  if [[ -n "${LLM_API_KEY:-}" ]]; then
+    cmd+=(--api-key "$LLM_API_KEY")
   fi
   if [[ "$AGENT_COMMAND" != "doctor" && -n "${AGENT_TEMPERATURE:-}" ]]; then
     cmd+=(--temperature "$AGENT_TEMPERATURE")

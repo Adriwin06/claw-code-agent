@@ -50,26 +50,30 @@ Use one backend at a time.
 For `vLLM`:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
-export OPENAI_API_KEY=local-token
-export OPENAI_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct
+export LLM_API_BASE=http://127.0.0.1:8000/v1
+export LLM_API_KEY=local-token
+export LLM_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct
 ```
 
 For `Ollama`:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
-export OPENAI_API_KEY=ollama
-export OPENAI_MODEL=qwen3
+export LLM_PROVIDER=ollama_chat
+export LLM_API_BASE=http://127.0.0.1:11434/v1
+export LLM_API_KEY=ollama
+export LLM_MODEL=qwen3
 ```
 
 For `LiteLLM Proxy`:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:4000
-export OPENAI_API_KEY=anything
-export OPENAI_MODEL=ollama/qwen3
+export LLM_API_BASE=http://127.0.0.1:4000
+export LLM_API_KEY=anything
+export LLM_MODEL=ollama/qwen3
 ```
+
+Provider-specific cloud keys are auto-selected from `LLM_PROVIDER` and `LLM_MODEL`.
+Use `LLM_API_KEY` as an override for local OpenAI-compatible servers, proxies, or custom endpoints.
 
 If your cluster wraps `python3`, use an explicit interpreter path such as `/usr/bin/python3.9 -m ...` for the commands below.
 
