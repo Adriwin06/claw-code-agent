@@ -11,11 +11,10 @@ from src.features.system.account_runtime import AccountRuntime
 from src.agent.agent_manager import AgentManager
 from src.agent.agent_context import clear_context_caches
 from src.agent.agent_context import render_context_report as render_agent_context_report
-from src.agent.agent_context_usage import collect_context_usage, estimate_tokens, format_context_usage
+from src.agent.agent_context_usage import collect_context_usage, format_context_usage
 from src.session.compact import compact_conversation
 from src.features.collaboration.ask_user_runtime import AskUserRuntime
 from src.agent.agent_registry import (
-    find_agent_definition,
     load_agent_registry,
     render_agent_detail,
     render_agents_report,
@@ -29,31 +28,55 @@ from src.agent.agent_prompting import (
     build_system_prompt_parts,
     render_system_prompt,
 )
-from src.agent.prompt_constants import CLAUDE_MODEL_IDS
+from src.agent.model_turn_runner import (
+    normalize_finish_reason,
+    query_model_turn,
+)
+from src.agent.prompt_pressure import (
+    build_prompt_length_error,
+    can_auto_compact_with_summary,
+    check_token_budget,
+    compact_session_pass,
+    preflight_prompt_length,
+    reactive_compact_session,
+    reduce_context_pressure,
+    snip_session_pass,
+)
+from src.agent.run_state import (
+    BudgetDecision,
+    PromptPreflightResult,
+    PromptRunState,
+    TurnLoopDirective,
+    build_run_result,
+)
+from src.agent.delegate_orchestrator import (
+    delegated_task_units,
+    execute_delegate_agent,
+)
+from src.agent.tool_call_runner import (
+    ToolCallExecutionHooks,
+    execute_runtime_tool_call,
+)
 from src.agent.agent_session import AgentSessionState
 from src.agent.agent_slash_commands import preprocess_slash_command
 from src.agent.agent_tools import (
     AgentTool,
     build_tool_context,
     default_tool_registry,
-    execute_tool_streaming,
-    serialize_tool_result,
 )
 from src.agent.agent_types import (
     AgentRunResult,
-    AgentPermissions,
     AgentRuntimeConfig,
     AssistantTurn,
     BudgetConfig,
     ModelConfig,
-    OutputSchemaConfig,
     StreamEvent,
     ToolCall,
     ToolExecutionResult,
     UsageStats,
 )
 from src.llm import build_llm_client, resolve_llm_backend
-from src.llm.parsers import LLMBackendError, coerce_finish_reason
+from src.llm.parsers import LLMBackendError
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.integration.plugin_runtime import PluginRuntime
 from src.features.integration.remote_runtime import RemoteRuntime
@@ -65,35 +88,15 @@ from src.features.system.tokenizer_runtime import describe_token_counter
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
 from src.agent.runtime_dependencies import AgentRuntimeDependencies
+from src.agent.session_persistence import persist_agent_run
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
-    save_agent_session,
-    serialize_model_config,
-    serialize_runtime_config,
     usage_from_payload,
 )
 from src.core.governance.token_budget import calculate_token_budget, format_token_budget
-from src.agent.builtin_agents import (
-    AgentDefinition,
-    ALL_AGENT_DISALLOWED_TOOLS,
-    GENERAL_PURPOSE_AGENT,
-)
+from src.agent.builtin_agents import AgentDefinition
 from src.session.microcompact import microcompact_messages as _microcompact_messages
-
-
-@dataclass(frozen=True)
-class BudgetDecision:
-    exceeded: bool
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
-class PromptPreflightResult:
-    usage_increment: UsageStats = field(default_factory=UsageStats)
-    model_calls_increment: int = 0
-    stop_reason: str | None = None
-    reason: str | None = None
 
 
 RuntimeEventHandler = Callable[[dict[str, object]], None]
@@ -534,6 +537,178 @@ class LocalCodingAgent:
         session.append_user(effective_prompt)
         self.last_session = session
         self.active_session_id = session_id
+        state = self._build_prompt_run_state(
+            session_id=session_id,
+            scratchpad_directory=scratchpad_directory,
+            effective_prompt=effective_prompt,
+            session=session,
+            existing_file_history=existing_file_history,
+            base_session=base_session,
+            event_handler=event_handler,
+        )
+        initial_budget = self._check_budget(
+            state.total_usage,
+            state.total_cost_usd,
+            tool_calls=state.tool_calls,
+            delegated_tasks=state.delegated_tasks,
+            model_calls=state.model_calls,
+            session_turns=state.starting_session_turns,
+        )
+        if initial_budget.exceeded:
+            return self._finalize_run_state_result(
+                state,
+                final_output=initial_budget.reason or 'Stopped before the first model call.',
+                turns=0,
+                stop_reason='budget_exceeded',
+            )
+
+        max_turns = self.runtime_config.max_turns
+        while max_turns is None or state.turn_index < max_turns:
+            state.turn_index += 1
+            self._microcompact_session_if_needed(
+                state.session,
+                state.stream_events,
+                turn_index=state.turn_index,
+            )
+            self._snip_session_if_needed(
+                state.session,
+                state.stream_events,
+                turn_index=state.turn_index,
+            )
+            self._compact_session_if_needed(
+                state.session,
+                state.stream_events,
+                turn_index=state.turn_index,
+            )
+            preflight = self._preflight_prompt_length(
+                state.session,
+                state.stream_events,
+                turn_index=state.turn_index,
+            )
+            if preflight.usage_increment.total_tokens or preflight.model_calls_increment:
+                state.total_usage = state.total_usage + preflight.usage_increment
+                state.total_cost_usd = self.model_config.pricing.estimate_cost_usd(
+                    state.total_usage
+                )
+                state.model_calls += preflight.model_calls_increment
+                budget_after_preflight = self._check_budget(
+                    state.total_usage,
+                    state.total_cost_usd,
+                    tool_calls=state.tool_calls,
+                    delegated_tasks=state.delegated_tasks,
+                    model_calls=state.model_calls,
+                    session_turns=state.starting_session_turns + state.turn_index,
+                )
+                if budget_after_preflight.exceeded:
+                    return self._finalize_run_state_result(
+                        state,
+                        final_output=(
+                            budget_after_preflight.reason
+                            or 'Stopped because the runtime budget was exceeded.'
+                        ),
+                        turns=state.turn_index,
+                        stop_reason='budget_exceeded',
+                    )
+            if preflight.stop_reason is not None:
+                return self._finalize_run_state_result(
+                    state,
+                    final_output=preflight.reason or 'Stopped before the next model call.',
+                    turns=max(state.turn_index - 1, 0),
+                    stop_reason=preflight.stop_reason,
+                    append_after_turn=True,
+                    after_turn_index=max(state.turn_index - 1, 0),
+                )
+            try:
+                tool_specs = self._build_tool_specs_for_session(state.session)
+                turn = self._query_turn_with_recovery(
+                    state.session,
+                    state.stream_events,
+                    turn_index=state.turn_index,
+                    tool_specs=tool_specs,
+                )
+            except LLMBackendError as exc:
+                return self._finalize_run_state_result(
+                    state,
+                    final_output=str(exc),
+                    turns=max(state.turn_index - 1, 0),
+                    stop_reason='backend_error',
+                    append_after_turn=True,
+                    after_turn_index=state.turn_index,
+                )
+            directive = self._process_model_turn(state, turn)
+            if directive.result is not None:
+                return directive.result
+            if directive.continue_loop:
+                continue
+
+            for tool_call in turn.tool_calls:
+                state.assistant_response_segments.clear()
+                state.tool_calls += 1
+                if tool_call.name in ('Agent', 'delegate_agent'):
+                    state.delegated_tasks += delegated_task_units(
+                        tool_call.arguments
+                    )
+                budget_after_tool_request = self._check_budget(
+                    state.total_usage,
+                    state.total_cost_usd,
+                    tool_calls=state.tool_calls,
+                    delegated_tasks=state.delegated_tasks,
+                    model_calls=state.model_calls,
+                    session_turns=state.starting_session_turns + state.turn_index,
+                )
+                if budget_after_tool_request.exceeded:
+                    state.stream_events.append(
+                        {
+                            'type': 'task_budget_exceeded',
+                            'turn_index': state.turn_index,
+                            'tool_name': tool_call.name,
+                            'tool_call_id': tool_call.id,
+                            'reason': budget_after_tool_request.reason,
+                        }
+                    )
+                    return self._finalize_run_state_result(
+                        state,
+                        final_output=(
+                            budget_after_tool_request.reason
+                            or 'Stopped because the runtime budget was exceeded.'
+                        ),
+                        turns=state.turn_index,
+                        stop_reason='budget_exceeded',
+                    )
+                tool_outcome = execute_runtime_tool_call(
+                    tool_call=tool_call,
+                    turn_index=state.turn_index,
+                    session=state.session,
+                    tool_registry=self.tool_registry,
+                    tool_context=self.tool_context,
+                    stream_events=state.stream_events,
+                    plugin_runtime=self.plugin_runtime,
+                    hooks=self._build_tool_call_execution_hooks(),
+                )
+                if tool_outcome.history_entry is not None:
+                    state.file_history.append(tool_outcome.history_entry)
+
+        return self._finalize_run_state_result(
+            state,
+            final_output=(
+                state.last_content
+                or 'Stopped: max turns reached before the model produced a final answer.'
+            ),
+            turns=state.turn_index,
+            stop_reason='max_turns',
+        )
+
+    def _build_prompt_run_state(
+        self,
+        *,
+        session_id: str,
+        scratchpad_directory: Path | None,
+        effective_prompt: str,
+        session: AgentSessionState,
+        existing_file_history: tuple[dict[str, object], ...],
+        base_session: AgentSessionState | None,
+        event_handler: RuntimeEventHandler | None,
+    ) -> PromptRunState:
         starting_usage = UsageStats()
         starting_cost_usd = 0.0
         starting_tool_calls = 0
@@ -557,699 +732,168 @@ class LocalCodingAgent:
                     if isinstance(stored_resume_state.budget_state, dict)
                     else {}
                 )
-                starting_model_calls = int(budget_state.get('model_calls', 0)) if isinstance(budget_state.get('model_calls', 0), int) else 0
-        tool_calls = starting_tool_calls
-        last_content = ''
-        total_usage = starting_usage
-        total_cost_usd = starting_cost_usd
+                model_calls = budget_state.get('model_calls', 0)
+                if isinstance(model_calls, int) and not isinstance(model_calls, bool):
+                    starting_model_calls = model_calls
         file_history = list(existing_file_history)
-        stream_events = _RuntimeEventRecorder(event_handler)
-        assistant_response_segments: list[str] = []
-        delegated_tasks = sum(
-            1 for entry in file_history if entry.get('action') in ('delegate_agent', 'Agent')
+        return PromptRunState(
+            session_id=session_id,
+            scratchpad_directory=scratchpad_directory,
+            effective_prompt=effective_prompt,
+            session=session,
+            starting_session_turns=starting_session_turns,
+            tool_calls=starting_tool_calls,
+            total_usage=starting_usage,
+            total_cost_usd=starting_cost_usd,
+            file_history=file_history,
+            stream_events=_RuntimeEventRecorder(event_handler),
+            delegated_tasks=sum(
+                1
+                for entry in file_history
+                if entry.get('action') in ('delegate_agent', 'Agent')
+            ),
+            model_calls=starting_model_calls,
         )
-        model_calls = starting_model_calls
 
-        initial_budget = self._check_budget(
-            total_usage,
-            total_cost_usd,
-            tool_calls=tool_calls,
-            delegated_tasks=delegated_tasks,
-            model_calls=model_calls,
-            session_turns=starting_session_turns,
+    def _finalize_run_state_result(
+        self,
+        state: PromptRunState,
+        *,
+        final_output: str,
+        turns: int,
+        stop_reason: str | None,
+        append_after_turn: bool = False,
+        after_turn_index: int | None = None,
+    ) -> AgentRunResult:
+        result = build_run_result(
+            state,
+            final_output=final_output,
+            turns=turns,
+            stop_reason=stop_reason,
         )
-        if initial_budget.exceeded:
-            result = AgentRunResult(
-                final_output=initial_budget.reason or 'Stopped before the first model call.',
-                turns=0,
-                tool_calls=0,
-                transcript=session.transcript(),
-                session_id=session_id,
-                usage=total_usage,
-                total_cost_usd=total_cost_usd,
-                stop_reason='budget_exceeded',
-                file_history=tuple(file_history),
-                scratchpad_directory=(
-                    str(scratchpad_directory) if scratchpad_directory is not None else None
-                ),
+        if append_after_turn:
+            result = self._append_runtime_after_turn_events(
+                result,
+                prompt=state.effective_prompt,
+                turn_index=after_turn_index if after_turn_index is not None else state.turn_index,
             )
-            result = self._persist_session(session, result)
-            self.last_run_result = result
-            return result
+        result = self._persist_session(state.session, result)
+        self.last_run_result = result
+        return result
 
-        max_turns = self.runtime_config.max_turns
-        turn_index = 0
-        while max_turns is None or turn_index < max_turns:
-            turn_index += 1
-            self._microcompact_session_if_needed(
+    def _query_turn_with_recovery(
+        self,
+        session: AgentSessionState,
+        stream_events: _RuntimeEventRecorder,
+        *,
+        turn_index: int,
+        tool_specs: list[dict[str, object]],
+    ) -> AssistantTurn:
+        try:
+            return self._query_model(session, tool_specs, stream_events)
+        except LLMBackendError as exc:
+            if not self._is_prompt_too_long_error(exc):
+                raise
+            if not self._reactive_compact_session(
                 session,
                 stream_events,
                 turn_index=turn_index,
+            ):
+                raise
+            retry_specs = self._build_tool_specs_for_session(session)
+            turn = self._query_model(session, retry_specs, stream_events)
+            stream_events.extend(
+                {
+                    'type': 'reactive_compact_retry',
+                    'turn_index': turn_index,
+                }
+                for _ in [0]
             )
-            self._snip_session_if_needed(
-                session,
-                stream_events,
-                turn_index=turn_index,
-            )
-            self._compact_session_if_needed(
-                session,
-                stream_events,
-                turn_index=turn_index,
-            )
-            preflight = self._preflight_prompt_length(
-                session,
-                stream_events,
-                turn_index=turn_index,
-            )
-            if preflight.usage_increment.total_tokens or preflight.model_calls_increment:
-                total_usage = total_usage + preflight.usage_increment
-                total_cost_usd = self.model_config.pricing.estimate_cost_usd(total_usage)
-                model_calls += preflight.model_calls_increment
-                budget_after_preflight = self._check_budget(
-                    total_usage,
-                    total_cost_usd,
-                    tool_calls=tool_calls,
-                    delegated_tasks=delegated_tasks,
-                    model_calls=model_calls,
-                    session_turns=starting_session_turns + turn_index,
-                )
-                if budget_after_preflight.exceeded:
-                    result = AgentRunResult(
-                        final_output=(
-                            budget_after_preflight.reason
-                            or 'Stopped because the runtime budget was exceeded.'
-                        ),
-                        turns=turn_index,
-                        tool_calls=tool_calls,
-                        transcript=session.transcript(),
-                        events=tuple(stream_events),
-                        usage=total_usage,
-                        total_cost_usd=total_cost_usd,
-                        stop_reason='budget_exceeded',
-                        file_history=tuple(file_history),
-                        session_id=session_id,
-                        scratchpad_directory=(
-                            str(scratchpad_directory) if scratchpad_directory is not None else None
-                        ),
-                    )
-                    result = self._persist_session(session, result)
-                    self.last_run_result = result
-                    return result
-            if preflight.stop_reason is not None:
-                result = AgentRunResult(
-                    final_output=preflight.reason or 'Stopped before the next model call.',
-                    turns=max(turn_index - 1, 0),
-                    tool_calls=tool_calls,
-                    transcript=session.transcript(),
-                    events=tuple(stream_events),
-                    usage=total_usage,
-                    total_cost_usd=total_cost_usd,
-                    stop_reason=preflight.stop_reason,
-                    file_history=tuple(file_history),
-                    session_id=session_id,
-                    scratchpad_directory=(
-                        str(scratchpad_directory) if scratchpad_directory is not None else None
-                    ),
-                )
-                result = self._append_runtime_after_turn_events(
-                    result,
-                    prompt=effective_prompt,
-                    turn_index=max(turn_index - 1, 0),
-                )
-                result = self._persist_session(session, result)
-                self.last_run_result = result
-                return result
-            try:
-                tool_specs = self._build_tool_specs_for_session(session)
-                turn = self._query_model(session, tool_specs, stream_events)
-            except LLMBackendError as exc:
-                if self._is_prompt_too_long_error(exc) and self._reactive_compact_session(
-                    session,
-                    stream_events,
-                    turn_index=turn_index,
-                ):
-                    try:
-                        tool_specs = self._build_tool_specs_for_session(session)
-                        turn = self._query_model(session, tool_specs, stream_events)
-                    except LLMBackendError as retry_exc:
-                        exc = retry_exc
-                    else:
-                        stream_events.extend(
-                            {
-                                'type': 'reactive_compact_retry',
-                                'turn_index': turn_index,
-                            }
-                            for _ in [0]
-                        )
-                        model_calls += 1
-                        total_usage = total_usage + turn.usage
-                        total_cost_usd = self.model_config.pricing.estimate_cost_usd(total_usage)
-                        last_content = turn.content
+            return turn
 
-                        budget_after_model = self._check_budget(
-                            total_usage,
-                            total_cost_usd,
-                            tool_calls=tool_calls,
-                            delegated_tasks=delegated_tasks,
-                            model_calls=model_calls,
-                            session_turns=starting_session_turns + turn_index,
-                        )
-                        if budget_after_model.exceeded:
-                            result = AgentRunResult(
-                                final_output=(
-                                    budget_after_model.reason
-                                    or 'Stopped because the runtime budget was exceeded.'
-                                ),
-                                turns=turn_index,
-                                tool_calls=tool_calls,
-                                transcript=session.transcript(),
-                                events=tuple(stream_events),
-                                usage=total_usage,
-                                total_cost_usd=total_cost_usd,
-                                stop_reason='budget_exceeded',
-                                file_history=tuple(file_history),
-                                session_id=session_id,
-                                scratchpad_directory=(
-                                    str(scratchpad_directory) if scratchpad_directory is not None else None
-                                ),
-                            )
-                            result = self._persist_session(session, result)
-                            self.last_run_result = result
-                            return result
+    def _process_model_turn(
+        self,
+        state: PromptRunState,
+        turn: AssistantTurn,
+    ) -> TurnLoopDirective:
+        state.model_calls += 1
+        state.total_usage = state.total_usage + turn.usage
+        state.total_cost_usd = self.model_config.pricing.estimate_cost_usd(
+            state.total_usage
+        )
+        state.last_content = turn.content
 
-                        if not turn.tool_calls:
-                            assistant_response_segments.append(turn.content)
-                            truncated_response = self._is_truncated_response(turn)
-                            if self._should_continue_response(
-                                turn,
-                                prompt=effective_prompt,
-                                tool_calls_so_far=tool_calls,
-                                current_response=''.join(assistant_response_segments),
-                                continuation_count=len(assistant_response_segments),
-                            ):
-                                if not truncated_response and assistant_response_segments:
-                                    assistant_response_segments[-1] = (
-                                        assistant_response_segments[-1].rstrip() + '\n\n'
-                                    )
-                                session.append_user(
-                                    self._build_continuation_prompt(
-                                        truncated=truncated_response,
-                                    ),
-                                    metadata={
-                                        'kind': 'continuation_request',
-                                        'continuation_index': len(assistant_response_segments),
-                                    },
-                                    message_id=f'continuation_{turn_index}',
-                                )
-                                stream_events.append(
-                                    {
-                                        'type': 'continuation_request',
-                                        'reason': turn.finish_reason,
-                                        'continuation_index': len(assistant_response_segments),
-                                    }
-                                )
-                                last_content = ''.join(assistant_response_segments)
-                                continue
-                            result = AgentRunResult(
-                                final_output=''.join(assistant_response_segments),
-                                turns=turn_index,
-                                tool_calls=tool_calls,
-                                transcript=session.transcript(),
-                                events=tuple(stream_events),
-                                usage=total_usage,
-                                total_cost_usd=total_cost_usd,
-                                stop_reason=turn.finish_reason,
-                                file_history=tuple(file_history),
-                                session_id=session_id,
-                                scratchpad_directory=(
-                                    str(scratchpad_directory) if scratchpad_directory is not None else None
-                                ),
-                            )
-                            result = self._persist_session(session, result)
-                            self.last_run_result = result
-                            return result
-                        # fall through to the normal tool-call branch below
-                # normal error path if not recovered
-                result = AgentRunResult(
-                    final_output=str(exc),
-                    turns=max(turn_index - 1, 0),
-                    tool_calls=tool_calls,
-                    transcript=session.transcript(),
-                    events=tuple(stream_events),
-                    usage=total_usage,
-                    total_cost_usd=total_cost_usd,
-                    stop_reason='backend_error',
-                    file_history=tuple(file_history),
-                    session_id=session_id,
-                    scratchpad_directory=(
-                        str(scratchpad_directory) if scratchpad_directory is not None else None
-                    ),
-                )
-                result = self._append_runtime_after_turn_events(
-                    result,
-                    prompt=effective_prompt,
-                    turn_index=turn_index,
-                )
-                result = self._persist_session(session, result)
-                self.last_run_result = result
-                return result
-
-            model_calls += 1
-            total_usage = total_usage + turn.usage
-            total_cost_usd = self.model_config.pricing.estimate_cost_usd(total_usage)
-            last_content = turn.content
-
-            budget_after_model = self._check_budget(
-                total_usage,
-                total_cost_usd,
-                tool_calls=tool_calls,
-                delegated_tasks=delegated_tasks,
-                model_calls=model_calls,
-                session_turns=starting_session_turns + turn_index,
-            )
-            if budget_after_model.exceeded:
-                result = AgentRunResult(
+        budget_after_model = self._check_budget(
+            state.total_usage,
+            state.total_cost_usd,
+            tool_calls=state.tool_calls,
+            delegated_tasks=state.delegated_tasks,
+            model_calls=state.model_calls,
+            session_turns=state.starting_session_turns + state.turn_index,
+        )
+        if budget_after_model.exceeded:
+            return TurnLoopDirective(
+                result=self._finalize_run_state_result(
+                    state,
                     final_output=(
                         budget_after_model.reason
                         or 'Stopped because the runtime budget was exceeded.'
                     ),
-                    turns=turn_index,
-                    tool_calls=tool_calls,
-                    transcript=session.transcript(),
-                    events=tuple(stream_events),
-                    usage=total_usage,
-                    total_cost_usd=total_cost_usd,
+                    turns=state.turn_index,
                     stop_reason='budget_exceeded',
-                    file_history=tuple(file_history),
-                    session_id=session_id,
-                    scratchpad_directory=(
-                        str(scratchpad_directory) if scratchpad_directory is not None else None
-                    ),
                 )
-                result = self._persist_session(session, result)
-                self.last_run_result = result
-                return result
+            )
+        if turn.tool_calls:
+            return TurnLoopDirective()
+        return self._handle_assistant_only_turn(state, turn)
 
-            if not turn.tool_calls:
-                assistant_response_segments.append(turn.content)
-                truncated_response = self._is_truncated_response(turn)
-                if self._should_continue_response(
-                    turn,
-                    prompt=effective_prompt,
-                    tool_calls_so_far=tool_calls,
-                    current_response=''.join(assistant_response_segments),
-                    continuation_count=len(assistant_response_segments),
-                ):
-                    if not truncated_response and assistant_response_segments:
-                        assistant_response_segments[-1] = (
-                            assistant_response_segments[-1].rstrip() + '\n\n'
-                        )
-                    session.append_user(
-                        self._build_continuation_prompt(
-                            truncated=truncated_response,
-                        ),
-                        metadata={
-                            'kind': 'continuation_request',
-                            'continuation_index': len(assistant_response_segments),
-                        },
-                        message_id=f'continuation_{turn_index}',
-                    )
-                    stream_events.append(
-                        {
-                            'type': 'continuation_request',
-                            'reason': turn.finish_reason,
-                            'continuation_index': len(assistant_response_segments),
-                        }
-                    )
-                    last_content = ''.join(assistant_response_segments)
-                    continue
-                result = AgentRunResult(
-                    final_output=''.join(assistant_response_segments),
-                    turns=turn_index,
-                    tool_calls=tool_calls,
-                    transcript=session.transcript(),
-                    events=tuple(stream_events),
-                    usage=total_usage,
-                    total_cost_usd=total_cost_usd,
-                    stop_reason=turn.finish_reason,
-                    file_history=tuple(file_history),
-                    session_id=session_id,
-                    scratchpad_directory=(
-                        str(scratchpad_directory) if scratchpad_directory is not None else None
-                    ),
+    def _handle_assistant_only_turn(
+        self,
+        state: PromptRunState,
+        turn: AssistantTurn,
+    ) -> TurnLoopDirective:
+        state.assistant_response_segments.append(turn.content)
+        truncated_response = self._is_truncated_response(turn)
+        if self._should_continue_response(
+            turn,
+            prompt=state.effective_prompt,
+            tool_calls_so_far=state.tool_calls,
+            current_response=''.join(state.assistant_response_segments),
+            continuation_count=len(state.assistant_response_segments),
+        ):
+            if not truncated_response and state.assistant_response_segments:
+                state.assistant_response_segments[-1] = (
+                    state.assistant_response_segments[-1].rstrip() + '\n\n'
                 )
-                result = self._append_runtime_after_turn_events(
-                    result,
-                    prompt=effective_prompt,
-                    turn_index=turn_index,
-                )
-                result = self._persist_session(session, result)
-                self.last_run_result = result
-                return result
-
-            for tool_call in turn.tool_calls:
-                assistant_response_segments.clear()
-                tool_calls += 1
-                if tool_call.name in ('Agent', 'delegate_agent'):
-                    delegated_tasks += self._delegated_task_units(tool_call.arguments)
-                budget_after_tool_request = self._check_budget(
-                    total_usage,
-                    total_cost_usd,
-                    tool_calls=tool_calls,
-                    delegated_tasks=delegated_tasks,
-                    model_calls=model_calls,
-                    session_turns=starting_session_turns + turn_index,
-                )
-                if budget_after_tool_request.exceeded:
-                    stream_events.append(
-                        {
-                            'type': 'task_budget_exceeded',
-                            'turn_index': turn_index,
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'reason': budget_after_tool_request.reason,
-                        }
-                    )
-                    result = AgentRunResult(
-                        final_output=(
-                            budget_after_tool_request.reason
-                            or 'Stopped because the runtime budget was exceeded.'
-                        ),
-                        turns=turn_index,
-                        tool_calls=tool_calls,
-                        transcript=session.transcript(),
-                        events=tuple(stream_events),
-                        usage=total_usage,
-                        total_cost_usd=total_cost_usd,
-                        stop_reason='budget_exceeded',
-                        file_history=tuple(file_history),
-                        session_id=session_id,
-                        scratchpad_directory=(
-                            str(scratchpad_directory) if scratchpad_directory is not None else None
-                        ),
-                    )
-                    result = self._persist_session(session, result)
-                    self.last_run_result = result
-                    return result
-                tool_result = None
-                tool_message_index = session.start_tool(
-                    name=tool_call.name,
-                    tool_call_id=tool_call.id,
-                    message_id=f'tool_{len(session.messages)}',
-                    metadata={'phase': 'starting'},
-                )
-                stream_events.append(
-                    {
-                        'type': 'tool_start',
-                        'tool_name': tool_call.name,
-                        'tool_call_id': tool_call.id,
-                        'message_id': session.messages[tool_message_index].message_id,
-                        'arguments': dict(tool_call.arguments),
-                    }
-                )
-                if self.plugin_runtime is not None:
-                    self.plugin_runtime.record_tool_attempt(tool_call.name, blocked=False)
-                plugin_preflight_messages = self._plugin_tool_preflight_messages(tool_call.name)
-                policy_preflight_messages = self._hook_policy_tool_preflight_messages(
-                    tool_call.name
-                )
-                if plugin_preflight_messages:
-                    stream_events.append(
-                        {
-                            'type': 'plugin_tool_preflight',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': session.messages[tool_message_index].message_id,
-                            'message_count': len(plugin_preflight_messages),
-                        }
-                    )
-                if policy_preflight_messages:
-                    stream_events.append(
-                        {
-                            'type': 'hook_policy_tool_preflight',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': session.messages[tool_message_index].message_id,
-                            'message_count': len(policy_preflight_messages),
-                        }
-                    )
-                plugin_block_message = self._plugin_block_message(tool_call.name)
-                policy_block_message = self._hook_policy_block_message(tool_call.name)
-                if plugin_block_message is not None:
-                    if self.plugin_runtime is not None:
-                        blocked_attempts = int(
-                            self.plugin_runtime.session_state.get('blocked_tool_attempts', 0)
-                        )
-                        self.plugin_runtime.session_state['blocked_tool_attempts'] = (
-                            blocked_attempts + 1
-                        )
-                    tool_result = ToolExecutionResult(
-                        name=tool_call.name,
-                        ok=False,
-                        content=plugin_block_message,
-                        metadata={
-                            'action': 'plugin_block',
-                            'plugin_blocked': True,
-                            'plugin_block_message': plugin_block_message,
-                        },
-                    )
-                    stream_events.append(
-                        {
-                            'type': 'plugin_tool_block',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': session.messages[tool_message_index].message_id,
-                            'message': plugin_block_message,
-                        }
-                    )
-                if policy_block_message is not None:
-                    tool_result = ToolExecutionResult(
-                        name=tool_call.name,
-                        ok=False,
-                        content=policy_block_message,
-                        metadata={
-                            'action': 'hook_policy_block',
-                            'hook_policy_blocked': True,
-                            'hook_policy_block_message': policy_block_message,
-                            'error_kind': 'permission_denied',
-                        },
-                    )
-                    stream_events.append(
-                        {
-                            'type': 'hook_policy_tool_block',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': session.messages[tool_message_index].message_id,
-                            'message': policy_block_message,
-                        }
-                    )
-                if tool_call.name in ('Agent', 'delegate_agent'):
-                    if tool_result is None:
-                        tool_result = self._execute_delegate_agent(
-                            tool_call.arguments,
-                            tool_name=tool_call.name,
-                        )
-                elif tool_call.name == 'Skill':
-                    if tool_result is None:
-                        tool_result = self._execute_skill(tool_call.arguments)
-                elif tool_result is None:
-                    for update in execute_tool_streaming(
-                        self.tool_registry,
-                        tool_call.name,
-                        tool_call.arguments,
-                        self.tool_context,
-                    ):
-                        if update.kind == 'delta':
-                            session.append_tool_delta(
-                                tool_message_index,
-                                update.content,
-                                metadata={'last_stream': update.stream or 'tool'},
-                            )
-                            stream_events.append(
-                                {
-                                    'type': 'tool_delta',
-                                    'tool_name': tool_call.name,
-                                    'tool_call_id': tool_call.id,
-                                    'message_id': session.messages[tool_message_index].message_id,
-                                    'stream': update.stream,
-                                    'delta': update.content,
-                                }
-                            )
-                            continue
-                        tool_result = update.result
-                if tool_result is None:
-                    raise RuntimeError(f'Tool executor returned no final result for {tool_call.name}')
-                if self.plugin_runtime is not None:
-                    self.plugin_runtime.record_tool_result(
-                        tool_call.name,
-                        ok=tool_result.ok,
-                        metadata=tool_result.metadata,
-                    )
-                plugin_messages = self._plugin_tool_result_messages(tool_call.name)
-                policy_messages = self._hook_policy_tool_result_messages(tool_call.name)
-                if plugin_messages:
-                    merged_metadata = dict(tool_result.metadata)
-                    merged_metadata['plugin_messages'] = list(plugin_messages)
-                    tool_result = ToolExecutionResult(
-                        name=tool_result.name,
-                        ok=tool_result.ok,
-                        content=tool_result.content,
-                        metadata=merged_metadata,
-                    )
-                    for message in plugin_messages:
-                        stream_events.append(
-                            {
-                                'type': 'plugin_tool_hook',
-                                'tool_name': tool_call.name,
-                                'tool_call_id': tool_call.id,
-                                'message_id': session.messages[tool_message_index].message_id,
-                                'message': message,
-                            }
-                        )
-                if policy_messages:
-                    merged_metadata = dict(tool_result.metadata)
-                    merged_metadata['hook_policy_messages'] = list(policy_messages)
-                    tool_result = ToolExecutionResult(
-                        name=tool_result.name,
-                        ok=tool_result.ok,
-                        content=tool_result.content,
-                        metadata=merged_metadata,
-                    )
-                    for message in policy_messages:
-                        stream_events.append(
-                            {
-                                'type': 'hook_policy_tool_hook',
-                                'tool_name': tool_call.name,
-                                'tool_call_id': tool_call.id,
-                                'message_id': session.messages[tool_message_index].message_id,
-                                'message': message,
-                            }
-                        )
-                if tool_result.metadata.get('error_kind') == 'permission_denied':
-                    stream_events.append(
-                        {
-                            'type': 'tool_permission_denial',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': session.messages[tool_message_index].message_id,
-                            'reason': tool_result.content,
-                            'source': (
-                                'hook_policy'
-                                if tool_result.metadata.get('action') == 'hook_policy_block'
-                                else 'tool_runtime'
-                            ),
-                        }
-                    )
-                session.finalize_tool(
-                    tool_message_index,
-                    content=serialize_tool_result(tool_result),
-                    metadata={
-                        'phase': 'completed',
-                        'plugin_preflight_messages': list(plugin_preflight_messages),
-                        'hook_policy_preflight_messages': list(policy_preflight_messages),
-                        **dict(tool_result.metadata),
-                    },
-                    stop_reason='tool_completed',
-                )
-                stream_events.append(
-                    {
-                        'type': 'tool_result',
-                        'tool_name': tool_call.name,
-                        'tool_call_id': tool_call.id,
-                        'message_id': session.messages[tool_message_index].message_id,
-                        'ok': tool_result.ok,
-                        'metadata': dict(tool_result.metadata),
-                    }
-                )
-                self._append_runtime_tool_followup_events(
-                    stream_events,
-                    tool_call=tool_call,
-                    tool_result=tool_result,
-                )
-                plugin_runtime_message = self._build_plugin_tool_runtime_message(
-                    tool_name=tool_call.name,
-                    preflight_messages=plugin_preflight_messages,
-                    block_message=plugin_block_message,
-                    plugin_messages=plugin_messages,
-                    hook_policy_preflight_messages=policy_preflight_messages,
-                    hook_policy_block_message=policy_block_message,
-                    hook_policy_messages=policy_messages,
-                    delegate_preflight_messages=tuple(
-                        message
-                        for message in tool_result.metadata.get(
-                            'plugin_delegate_preflight_messages',
-                            [],
-                        )
-                        if isinstance(message, str) and message
-                    ),
-                    delegate_after_messages=tuple(
-                        message
-                        for message in tool_result.metadata.get(
-                            'plugin_delegate_after_messages',
-                            [],
-                        )
-                        if isinstance(message, str) and message
-                    ),
-                )
-                if plugin_runtime_message is not None:
-                    session.append_user(
-                        plugin_runtime_message,
-                        metadata={
-                            'kind': 'plugin_tool_runtime',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'plugin_blocked': plugin_block_message is not None,
-                            'plugin_message_count': len(plugin_messages),
-                            'plugin_preflight_count': len(plugin_preflight_messages),
-                        },
-                        message_id=f'plugin_tool_runtime_{tool_call.id}',
-                    )
-                    stream_events.append(
-                        {
-                            'type': 'plugin_tool_context',
-                            'tool_name': tool_call.name,
-                            'tool_call_id': tool_call.id,
-                            'message_id': f'plugin_tool_runtime_{tool_call.id}',
-                            'blocked': plugin_block_message is not None,
-                            'message_count': len(plugin_messages),
-                            'preflight_count': len(plugin_preflight_messages),
-                        }
-                    )
-                self._refresh_runtime_views_for_tool_result(tool_call.name, tool_result)
-                history_entry = self._build_file_history_entry(
-                    tool_call=tool_call,
-                    tool_result=tool_result,
-                    turn_index=turn_index,
-                )
-                if history_entry is not None:
-                    file_history.append(history_entry)
-
-        result = AgentRunResult(
-            final_output=(
-                last_content
-                or 'Stopped: max turns reached before the model produced a final answer.'
-            ),
-            turns=turn_index,
-            tool_calls=tool_calls,
-            transcript=session.transcript(),
-            events=tuple(stream_events),
-            usage=total_usage,
-            total_cost_usd=total_cost_usd,
-            stop_reason='max_turns',
-            file_history=tuple(file_history),
-            session_id=session_id,
-            scratchpad_directory=(
-                str(scratchpad_directory) if scratchpad_directory is not None else None
-            ),
+            state.session.append_user(
+                self._build_continuation_prompt(
+                    truncated=truncated_response,
+                ),
+                metadata={
+                    'kind': 'continuation_request',
+                    'continuation_index': len(state.assistant_response_segments),
+                },
+                message_id=f'continuation_{state.turn_index}',
+            )
+            state.stream_events.append(
+                {
+                    'type': 'continuation_request',
+                    'reason': turn.finish_reason,
+                    'continuation_index': len(state.assistant_response_segments),
+                }
+            )
+            state.last_content = ''.join(state.assistant_response_segments)
+            return TurnLoopDirective(continue_loop=True)
+        return TurnLoopDirective(
+            result=self._finalize_run_state_result(
+                state,
+                final_output=''.join(state.assistant_response_segments),
+                turns=state.turn_index,
+                stop_reason=turn.finish_reason,
+                append_after_turn=True,
+                after_turn_index=state.turn_index,
+            )
         )
-        result = self._append_runtime_after_turn_events(
-            result,
-            prompt=effective_prompt,
-            turn_index=turn_index,
-        )
-        result = self._persist_session(session, result)
-        self.last_run_result = result
-        return result
 
     def _query_model(
         self,
@@ -1257,138 +901,41 @@ class LocalCodingAgent:
         tool_specs: list[dict[str, object]],
         stream_events: _RuntimeEventRecorder | None = None,
     ) -> AssistantTurn:
-        if not self.runtime_config.stream_model_responses:
-            turn = self.client.complete(
-                session.to_openai_messages(),
-                tool_specs,
-                output_schema=self.runtime_config.output_schema,
-            )
-            normalized_finish_reason = self._normalize_finish_reason(
-                turn.finish_reason,
-                has_tool_calls=bool(turn.tool_calls),
-                content=turn.content,
-            )
-            if normalized_finish_reason != turn.finish_reason:
-                turn = replace(turn, finish_reason=normalized_finish_reason)
-            assistant_tool_calls = tuple(
-                {
-                    'id': tool_call.id,
-                    'type': 'function',
-                    'function': {
-                        'name': tool_call.name,
-                        'arguments': json.dumps(
-                            tool_call.arguments,
-                            ensure_ascii=True,
-                        ),
-                    },
-                }
-                for tool_call in turn.tool_calls
-            )
-            session.append_assistant(
-                turn.content,
-                assistant_tool_calls,
-                message_id=f'assistant_{len(session.messages)}',
-                stop_reason=normalized_finish_reason,
-                usage=turn.usage,
-            )
-            return turn
-
-        assistant_index = session.start_assistant(
-            message_id=f'assistant_{len(session.messages)}'
-        )
-        usage = UsageStats()
-        finish_reason: str | None = None
-        for event in self.client.stream(
-            session.to_openai_messages(),
-            tool_specs,
+        return query_model_turn(
+            client=self.client,
+            session=session,
+            tool_specs=tool_specs,
+            stream_model_responses=self.runtime_config.stream_model_responses,
             output_schema=self.runtime_config.output_schema,
-        ):
-            if stream_events is not None:
-                stream_events.append(event)
-            if event.type == 'content_delta':
-                session.append_assistant_delta(assistant_index, event.delta)
-            elif event.type == 'tool_call_delta':
-                session.merge_assistant_tool_call_delta(
-                    assistant_index,
-                    tool_call_index=event.tool_call_index or 0,
-                    tool_call_id=event.tool_call_id,
-                    tool_name=event.tool_name,
-                    arguments_delta=event.arguments_delta,
-                )
-            elif event.type == 'usage':
-                usage = usage + event.usage
-            elif event.type == 'message_stop':
-                finish_reason = event.finish_reason
-
-        assistant_message = session.messages[assistant_index]
-        finish_reason = self._normalize_finish_reason(
-            finish_reason,
-            has_tool_calls=bool(assistant_message.tool_calls),
-            content=assistant_message.content,
+            stream_event_append=stream_events.append if stream_events is not None else None,
         )
-        session.finalize_assistant(
-            assistant_index,
-            finish_reason=finish_reason,
-            usage=usage,
-        )
-        assistant_message = session.messages[assistant_index]
-        turn = AssistantTurn(
-            content=assistant_message.content,
-            tool_calls=self._tool_calls_from_message(assistant_message.tool_calls),
-            finish_reason=finish_reason,
-            raw_message=assistant_message.to_openai_message(),
-            usage=usage,
-        )
-        return turn
 
-    def _tool_calls_from_message(
-        self,
-        tool_calls: tuple[dict[str, object], ...],
-    ) -> tuple[ToolCall, ...]:
-        parsed: list[ToolCall] = []
-        for index, raw_tool_call in enumerate(tool_calls):
-            function_block = raw_tool_call.get('function')
-            if not isinstance(function_block, dict):
-                continue
-            name = function_block.get('name')
-            if not isinstance(name, str) or not name:
-                continue
-            raw_arguments = function_block.get('arguments', '')
-            if isinstance(raw_arguments, str) and raw_arguments.strip():
-                arguments = json.loads(raw_arguments)
-                if not isinstance(arguments, dict):
-                    raise LLMBackendError(
-                        f'Tool arguments must decode to an object, got {type(arguments).__name__}'
-                    )
-            else:
-                arguments = {}
-            call_id = raw_tool_call.get('id')
-            if not isinstance(call_id, str) or not call_id:
-                call_id = f'call_{index}'
-            parsed.append(
-                ToolCall(
-                    id=call_id,
-                    name=name,
-                    arguments=arguments,
-                )
-            )
-        return tuple(parsed)
-
-    def _normalize_finish_reason(
-        self,
-        finish_reason: str | None,
-        *,
-        has_tool_calls: bool,
-        content: str,
-    ) -> str | None:
-        normalized = coerce_finish_reason(finish_reason)
-        if normalized is not None:
-            return normalized
-        if has_tool_calls:
-            return 'tool_calls'
-        if content.strip():
-            return 'stop'
-        return None
+    def _build_tool_call_execution_hooks(self) -> ToolCallExecutionHooks:
+        return ToolCallExecutionHooks(
+            plugin_tool_preflight_messages=self._plugin_tool_preflight_messages,
+            hook_policy_tool_preflight_messages=self._hook_policy_tool_preflight_messages,
+            plugin_block_message=self._plugin_block_message,
+            hook_policy_block_message=self._hook_policy_block_message,
+            execute_delegate_agent=lambda arguments, tool_name: self._execute_delegate_agent(
+                arguments,
+                tool_name=tool_name,
+            ),
+            execute_skill=self._execute_skill,
+            plugin_tool_result_messages=self._plugin_tool_result_messages,
+            hook_policy_tool_result_messages=self._hook_policy_tool_result_messages,
+            append_runtime_tool_followup_events=lambda events, current_tool_call, tool_result: self._append_runtime_tool_followup_events(
+                events,
+                tool_call=current_tool_call,
+                tool_result=tool_result,
+            ),
+            build_plugin_tool_runtime_message=self._build_plugin_tool_runtime_message,
+            refresh_runtime_views_for_tool_result=self._refresh_runtime_views_for_tool_result,
+            build_file_history_entry=lambda current_tool_call, tool_result, current_turn_index: self._build_file_history_entry(
+                tool_call=current_tool_call,
+                tool_result=tool_result,
+                turn_index=current_turn_index,
+            ),
+        )
 
     def _should_continue_response(
         self,
@@ -1402,7 +949,7 @@ class LocalCodingAgent:
         if self._is_truncated_response(turn):
             return True
         if (
-            self._normalize_finish_reason(
+            normalize_finish_reason(
                 turn.finish_reason,
                 has_tool_calls=bool(turn.tool_calls),
                 content=turn.content,
@@ -1547,169 +1094,21 @@ class LocalCodingAgent:
         *,
         turn_index: int,
     ) -> PromptPreflightResult:
-        snapshot = calculate_token_budget(
-            session=session,
-            model=self.model_config.model,
-            budget_config=self.runtime_config.budget_config,
-            output_schema=self.runtime_config.output_schema,
-        )
-        if not snapshot.exceeds_soft_limit and not snapshot.exceeds_hard_limit:
-            return PromptPreflightResult()
-
-        stream_events.append(
-            {
-                'type': 'prompt_length_check',
-                'turn_index': turn_index,
-                'projected_input_tokens': snapshot.projected_input_tokens,
-                'soft_input_limit_tokens': snapshot.soft_input_limit_tokens,
-                'hard_input_limit_tokens': snapshot.hard_input_limit_tokens,
-                'soft_overflow_tokens': snapshot.soft_overflow_tokens,
-                'overflow_tokens': snapshot.overflow_tokens,
-                'exceeds_hard_limit': snapshot.exceeds_hard_limit,
-            }
-        )
-
-        target_tokens = snapshot.soft_input_limit_tokens
-        if snapshot.exceeds_hard_limit:
-            target_tokens = snapshot.hard_input_limit_tokens
-        if target_tokens < 0:
-            target_tokens = 0
-
-        if self._reduce_context_pressure(
+        return preflight_prompt_length(
+            self,
             session,
             stream_events,
             turn_index=turn_index,
-            target_tokens=target_tokens,
-            allow_compaction=True,
-        ):
-            recovered = calculate_token_budget(
-                session=session,
-                model=self.model_config.model,
-                budget_config=self.runtime_config.budget_config,
-                output_schema=self.runtime_config.output_schema,
-            )
-            stream_events.append(
-                {
-                    'type': 'prompt_length_recovery',
-                    'turn_index': turn_index,
-                    'strategy': 'heuristic',
-                    'projected_input_tokens': recovered.projected_input_tokens,
-                    'soft_input_limit_tokens': recovered.soft_input_limit_tokens,
-                    'hard_input_limit_tokens': recovered.hard_input_limit_tokens,
-                    'exceeds_hard_limit': recovered.exceeds_hard_limit,
-                    'exceeds_soft_limit': recovered.exceeds_soft_limit,
-                }
-            )
-            if not recovered.exceeds_soft_limit and not recovered.exceeds_hard_limit:
-                return PromptPreflightResult()
-            snapshot = recovered
-
-        # Circuit-breaker: skip auto-compact after MAX_COMPACT_FAILURES consecutive failures
-        from src.session.compact import MAX_COMPACT_FAILURES
-        if self._compact_consecutive_failures >= MAX_COMPACT_FAILURES:
-            stream_events.append(
-                {
-                    'type': 'auto_compact_circuit_breaker',
-                    'turn_index': turn_index,
-                    'consecutive_failures': self._compact_consecutive_failures,
-                }
-            )
-        elif self._can_auto_compact_with_summary(session):
-            compact_result = compact_conversation(
-                self,
-                custom_instructions=(
-                    'Automatically collapse earlier conversation context to fit the next model '
-                    'turn. Preserve the active task, recent file changes, failures, pending work, '
-                    'and exact next step.'
-                ),
-            )
-            if compact_result.error is None:
-                self._compact_consecutive_failures = 0  # Reset on success
-                recovered = calculate_token_budget(
-                    session=session,
-                    model=self.model_config.model,
-                    budget_config=self.runtime_config.budget_config,
-                    output_schema=self.runtime_config.output_schema,
-                )
-                stream_events.append(
-                    {
-                        'type': 'auto_compact_summary',
-                        'turn_index': turn_index,
-                        'pre_compact_token_count': compact_result.pre_compact_token_count,
-                        'post_compact_token_count': compact_result.post_compact_token_count,
-                        'true_post_compact_token_count': compact_result.true_post_compact_token_count,
-                        'summary_usage_tokens': compact_result.usage.total_tokens,
-                        'ptl_retries': compact_result.ptl_retries,
-                        'projected_input_tokens': recovered.projected_input_tokens,
-                        'soft_input_limit_tokens': recovered.soft_input_limit_tokens,
-                        'hard_input_limit_tokens': recovered.hard_input_limit_tokens,
-                        'exceeds_hard_limit': recovered.exceeds_hard_limit,
-                        'exceeds_soft_limit': recovered.exceeds_soft_limit,
-                    }
-                )
-                if not recovered.exceeds_soft_limit and not recovered.exceeds_hard_limit:
-                    return PromptPreflightResult(
-                        usage_increment=compact_result.usage,
-                        model_calls_increment=1,
-                    )
-                snapshot = recovered
-                if compact_result.usage.total_tokens:
-                    return PromptPreflightResult(
-                        usage_increment=compact_result.usage,
-                        model_calls_increment=1,
-                        stop_reason=(
-                            'prompt_too_long'
-                            if recovered.exceeds_hard_limit
-                            else None
-                        ),
-                        reason=(
-                            self._build_prompt_length_error(recovered)
-                            if recovered.exceeds_hard_limit
-                            else None
-                        ),
-                    )
-            else:
-                self._compact_consecutive_failures += 1
-                stream_events.append(
-                    {
-                        'type': 'auto_compact_failed',
-                        'turn_index': turn_index,
-                        'reason': compact_result.error,
-                        'consecutive_failures': self._compact_consecutive_failures,
-                    }
-                )
-
-        if snapshot.exceeds_hard_limit:
-            return PromptPreflightResult(
-                stop_reason='prompt_too_long',
-                reason=self._build_prompt_length_error(snapshot),
-            )
-
-        stream_events.append(
-            {
-                'type': 'prompt_length_warning',
-                'turn_index': turn_index,
-                'projected_input_tokens': snapshot.projected_input_tokens,
-                'soft_input_limit_tokens': snapshot.soft_input_limit_tokens,
-                'hard_input_limit_tokens': snapshot.hard_input_limit_tokens,
-                'soft_overflow_tokens': snapshot.soft_overflow_tokens,
-            }
+            calculate_token_budget_fn=calculate_token_budget,
+            compact_conversation_fn=compact_conversation,
+            reduce_context_pressure_fn=self._reduce_context_pressure,
         )
-        return PromptPreflightResult()
 
     def _can_auto_compact_with_summary(self, session: AgentSessionState) -> bool:
-        prefix_count = self._compact_prefix_count(session)
-        preserve_count = max(self.runtime_config.compact_preserve_messages, 1)
-        return len(session.messages) - prefix_count > preserve_count
+        return can_auto_compact_with_summary(self, session)
 
     def _build_prompt_length_error(self, snapshot) -> str:
-        return (
-            'Stopped before the next model call because the prompt would exceed the '
-            'effective input budget. '
-            f'Projected prompt tokens: {snapshot.projected_input_tokens:,}; '
-            f'hard input limit: {snapshot.hard_input_limit_tokens:,}; '
-            f'soft input limit: {snapshot.soft_input_limit_tokens:,}.'
-        )
+        return build_prompt_length_error(snapshot)
 
     def _microcompact_session_if_needed(
         self,
@@ -1787,13 +1186,11 @@ class LocalCodingAgent:
         *,
         turn_index: int,
     ) -> bool:
-        return self._reduce_context_pressure(
+        return reactive_compact_session(
+            self,
             session,
             stream_events,
             turn_index=turn_index,
-            target_tokens=0,
-            allow_compaction=True,
-            reactive=True,
         )
 
     def _reduce_context_pressure(
@@ -1806,38 +1203,15 @@ class LocalCodingAgent:
         allow_compaction: bool,
         reactive: bool = False,
     ) -> bool:
-        changed = False
-        for _ in range(6):
-            usage_report = collect_context_usage(
-                session=session,
-                model=self.model_config.model,
-                strategy='reactive_compact' if reactive else 'context_pressure',
-            )
-            if usage_report.total_tokens <= target_tokens:
-                break
-            if self._snip_session_pass(
-                session,
-                stream_events,
-                turn_index=turn_index,
-                target_tokens=target_tokens,
-                current_total=usage_report.total_tokens,
-                reactive=reactive,
-            ):
-                changed = True
-                continue
-            if allow_compaction and self._compact_session_pass(
-                session,
-                stream_events,
-                turn_index=turn_index,
-                usage_total=usage_report.total_tokens,
-                reactive=reactive,
-            ):
-                changed = True
-                if reactive:
-                    continue
-                break
-            break
-        return changed
+        return reduce_context_pressure(
+            self,
+            session,
+            stream_events,
+            turn_index=turn_index,
+            target_tokens=target_tokens,
+            allow_compaction=allow_compaction,
+            reactive=reactive,
+        )
 
     def _snip_session_pass(
         self,
@@ -1849,67 +1223,15 @@ class LocalCodingAgent:
         current_total: int,
         reactive: bool,
     ) -> bool:
-        prefix_count = self._compact_prefix_count(session)
-        tail_count = min(
-            max(self.runtime_config.compact_preserve_messages, 0),
-            max(len(session.messages) - prefix_count, 0),
+        return snip_session_pass(
+            self,
+            session,
+            stream_events,
+            turn_index=turn_index,
+            target_tokens=target_tokens,
+            current_total=current_total,
+            reactive=reactive,
         )
-        candidate_indexes = [
-            index
-            for index in range(prefix_count, max(len(session.messages) - tail_count, prefix_count))
-            if self._message_can_be_snipped(session.messages[index])
-        ]
-        if not candidate_indexes:
-            return False
-        snipped_count = 0
-        tokens_removed = 0
-        snipped_message_ids: list[str] = []
-        for index in candidate_indexes:
-            if current_total <= target_tokens and not reactive:
-                break
-            message = session.messages[index]
-            original_tokens = estimate_tokens(message.content, self.model_config.model)
-            replacement = self._build_snipped_message_content(message)
-            replacement_tokens = estimate_tokens(replacement, self.model_config.model)
-            if replacement_tokens >= original_tokens:
-                continue
-            session.tombstone_message(
-                index,
-                summary=replacement,
-                stop_reason='snipped_for_context',
-                mutation_kind='snip_tombstone',
-                metadata={
-                    'kind': 'snipped_message',
-                    'original_token_estimate': original_tokens,
-                    'replacement_token_estimate': replacement_tokens,
-                    'snipped_turn_index': turn_index,
-                    'snipped_from_role': message.role,
-                    'snipped_from_message_id': message.message_id,
-                    'snipped_from_kind': message.metadata.get('kind'),
-                    'snipped_from_lineage_id': message.metadata.get('lineage_id'),
-                    'snipped_from_revision': message.metadata.get('revision'),
-                },
-            )
-            delta = original_tokens - replacement_tokens
-            current_total -= delta
-            tokens_removed += delta
-            snipped_count += 1
-            if session.messages[index].message_id:
-                snipped_message_ids.append(session.messages[index].message_id)
-            if reactive and snipped_count >= 3:
-                break
-        if not snipped_count:
-            return False
-        stream_events.append(
-            {
-                'type': 'reactive_snip_boundary' if reactive else 'snip_boundary',
-                'turn_index': turn_index,
-                'snipped_message_count': snipped_count,
-                'estimated_tokens_removed': tokens_removed,
-                'snipped_message_ids': snipped_message_ids,
-            }
-        )
-        return True
 
     def _compact_session_pass(
         self,
@@ -1920,99 +1242,21 @@ class LocalCodingAgent:
         usage_total: int,
         reactive: bool,
     ) -> bool:
-        prefix_count = self._compact_prefix_count(session)
-        preserve_messages = max(self.runtime_config.compact_preserve_messages, 0)
-        if reactive:
-            preserve_messages = max(preserve_messages // 2, 1)
-        tail_count = min(
-            preserve_messages,
-            max(len(session.messages) - prefix_count, 0),
-        )
-        compact_end = len(session.messages) - tail_count
-        if compact_end <= prefix_count:
-            return False
-        candidates = session.messages[prefix_count:compact_end]
-        preserved_tail = list(session.messages[compact_end:])
-        if not candidates:
-            return False
-        compacted_tokens = sum(
-            usage.tokens
-            for usage in (
-                collect_context_usage(
-                    session=AgentSessionState(
-                        system_prompt_parts=session.system_prompt_parts,
-                        user_context=session.user_context,
-                        system_context=session.system_context,
-                        messages=list(candidates),
-                    ),
-                    model=self.model_config.model,
-                    strategy='compacted_segment',
-                ).categories
-            )
-            if usage.name != 'Free space'
-        )
-        compact_message = self._build_compact_boundary_message(
-            candidates,
+        return compact_session_pass(
+            self,
+            session,
+            stream_events,
             turn_index=turn_index,
-            estimated_tokens_before=usage_total,
-            estimated_tokens_removed=compacted_tokens,
-            preserved_tail_count=tail_count,
-            preserved_tail=preserved_tail,
+            usage_total=usage_total,
+            reactive=reactive,
         )
-        session.messages = (
-            session.messages[:prefix_count]
-            + [compact_message]
-            + session.messages[compact_end:]
-        )
-        stream_events.append(
-            {
-                'type': 'reactive_compact_boundary' if reactive else 'compact_boundary',
-                'turn_index': turn_index,
-                'compacted_message_count': len(candidates),
-                'estimated_tokens_before': usage_total,
-                'estimated_tokens_removed': compacted_tokens,
-                'preserved_tail_count': tail_count,
-                'preserved_tail_ids': [
-                    message.message_id for message in preserved_tail if message.message_id
-                ],
-                'compaction_depth': compact_message.metadata.get('compaction_depth'),
-                'nested_compaction_count': compact_message.metadata.get('nested_compaction_count'),
-                'compacted_message_ids': [
-                    message.message_id for message in candidates if message.message_id
-                ],
-            }
-        )
-        return True
 
     def _check_token_budget(
         self,
         usage: UsageStats,
         budget: BudgetConfig,
     ) -> str | None:
-        if budget.max_total_tokens is not None and usage.total_tokens > budget.max_total_tokens:
-            return (
-                'Stopped because the total token budget was exceeded '
-                f'({usage.total_tokens} > {budget.max_total_tokens}).'
-            )
-        if budget.max_input_tokens is not None and usage.input_tokens > budget.max_input_tokens:
-            return (
-                'Stopped because the input token budget was exceeded '
-                f'({usage.input_tokens} > {budget.max_input_tokens}).'
-            )
-        if budget.max_output_tokens is not None and usage.output_tokens > budget.max_output_tokens:
-            return (
-                'Stopped because the output token budget was exceeded '
-                f'({usage.output_tokens} > {budget.max_output_tokens}).'
-            )
-        if (
-            budget.max_reasoning_tokens is not None
-            and usage.reasoning_tokens > budget.max_reasoning_tokens
-        ):
-            return (
-                'Stopped because the reasoning token budget was exceeded '
-                f'({usage.reasoning_tokens} > {budget.max_reasoning_tokens}).'
-            )
-        return None
+        return check_token_budget(usage, budget)
 
     def _build_file_history_entry(
         self,
@@ -2344,692 +1588,13 @@ class LocalCodingAgent:
             },
         )
 
-    def _resolve_agent_definition(
-        self,
-        arguments: dict[str, object],
-    ) -> AgentDefinition:
-        """Resolve the agent definition from subagent_type or default to general-purpose."""
-        subagent_type = arguments.get('subagent_type')
-        if isinstance(subagent_type, str) and subagent_type:
-            agent_def = find_agent_definition(self.runtime_config.cwd, subagent_type)
-            if agent_def is not None:
-                return agent_def
-        return GENERAL_PURPOSE_AGENT
-
-    def _resolve_child_model_config(
-        self,
-        arguments: dict[str, object],
-        agent_def: AgentDefinition,
-    ) -> ModelConfig:
-        """Resolve model config for a child agent based on explicit override or agent definition."""
-        model_override = arguments.get('model')
-        agent_model = agent_def.model
-
-        # Explicit model param in arguments takes priority
-        if isinstance(model_override, str) and model_override.strip():
-            return replace(self.model_config, model=model_override.strip())
-
-        # Agent definition model
-        if agent_model and agent_model != 'inherit':
-            return replace(
-                self.model_config,
-                model=self._resolve_agent_model_override(agent_model),
-            )
-
-        return self.model_config
-
-    def _resolve_agent_model_override(self, agent_model: str) -> str:
-        normalized = agent_model.strip()
-        if not normalized:
-            return self.model_config.model
-
-        canonical_claude_model = CLAUDE_MODEL_IDS.get(normalized.lower())
-        if canonical_claude_model is None:
-            return normalized
-
-        parent_model = self.model_config.model.strip()
-        if not parent_model:
-            return canonical_claude_model
-        if '/' not in parent_model:
-            return canonical_claude_model if 'claude' in parent_model.lower() else parent_model
-
-        provider, _ = parent_model.split('/', 1)
-        if provider.lower() == 'anthropic':
-            return f'{provider}/{canonical_claude_model}'
-        return parent_model
-
-    def _filter_tools_for_agent(
-        self,
-        agent_def: AgentDefinition,
-    ) -> dict[str, AgentTool]:
-        """Build the tool registry for a child agent based on its definition."""
-        # Start from parent tools, remove Agent/delegate_agent to prevent recursive spawning
-        base_tools = {
-            name: tool
-            for name, tool in self.tool_registry.items()
-            if name not in ('delegate_agent', 'Agent')
-        }
-
-        # Apply agent-specific tool allow-list
-        if agent_def.tools is not None:
-            allowed = set(agent_def.tools)
-            base_tools = {
-                name: tool
-                for name, tool in base_tools.items()
-                if name in allowed
-            }
-
-        # Apply agent-specific disallowed tools
-        if agent_def.disallowed_tools:
-            denied = set(agent_def.disallowed_tools)
-            base_tools = {
-                name: tool
-                for name, tool in base_tools.items()
-                if name not in denied
-            }
-
-        # Apply universal agent disallowed tools
-        base_tools = {
-            name: tool
-            for name, tool in base_tools.items()
-            if name not in ALL_AGENT_DISALLOWED_TOOLS
-        }
-
-        return base_tools
-
     def _execute_delegate_agent(
         self,
         arguments: dict[str, object],
         *,
         tool_name: str = 'Agent',
     ) -> ToolExecutionResult:
-        agent_def = self._resolve_agent_definition(arguments)
-        max_turns = arguments.get('max_turns')
-        if max_turns is not None and (isinstance(max_turns, bool) or not isinstance(max_turns, int) or max_turns < 1):
-            return ToolExecutionResult(
-                name=tool_name,
-                ok=False,
-                content='max_turns must be an integer >= 1',
-            )
-        subtasks = self._normalize_delegate_subtasks(arguments)
-        if not subtasks:
-            return ToolExecutionResult(
-                name=tool_name,
-                ok=False,
-                content='prompt must be a non-empty string or subtasks must contain at least one prompt',
-            )
-
-        # Resolve child permissions — read-only agents get no write/shell
-        if agent_def.disallowed_tools and (
-            'edit_file' in agent_def.disallowed_tools
-            or 'write_file' in agent_def.disallowed_tools
-        ):
-            # Read-only agent (Explore, Plan, verification)
-            child_permissions = AgentPermissions(
-                allow_file_write=False,
-                allow_shell_commands=self.runtime_config.permissions.allow_shell_commands,
-                allow_destructive_shell_commands=False,
-            )
-        else:
-            child_permissions = AgentPermissions(
-                allow_file_write=(
-                    self.runtime_config.permissions.allow_file_write
-                    and bool(arguments.get('allow_write', False))
-                ),
-                allow_shell_commands=(
-                    self.runtime_config.permissions.allow_shell_commands
-                    and bool(arguments.get('allow_shell', False))
-                ),
-                allow_destructive_shell_commands=False,
-            )
-
-        # Resolve max_turns — agent definition or explicit param
-        parent_max_turns = self.runtime_config.max_turns
-        fallback_max_turns = None if parent_max_turns is None else min(parent_max_turns, 6)
-        effective_max_turns = max_turns or agent_def.max_turns or fallback_max_turns
-
-        child_runtime_config = replace(
-            self.runtime_config,
-            max_turns=effective_max_turns,
-            permissions=child_permissions,
-            auto_compact_threshold_tokens=self.runtime_config.auto_compact_threshold_tokens,
-        )
-
-        child_model_config = self._resolve_child_model_config(arguments, agent_def)
-        child_tools = self._filter_tools_for_agent(agent_def)
-        include_parent_context = bool(arguments.get('include_parent_context', True))
-        continue_on_error = bool(arguments.get('continue_on_error', True))
-        max_failures = arguments.get('max_failures')
-        if isinstance(max_failures, bool) or (max_failures is not None and not isinstance(max_failures, int)):
-            max_failures = None
-        if isinstance(max_failures, int) and max_failures < 0:
-            max_failures = None
-        strategy = self._normalize_delegate_strategy(arguments.get('strategy'))
-        child_summaries: list[dict[str, object]] = []
-        child_session_ids: list[str] = []
-        prior_results: list[dict[str, str]] = []
-        completed_labels: set[str] = set()
-        failed_labels: set[str] = set()
-        delegate_preflight_messages = (
-            self.plugin_runtime.before_delegate_injections()
-            if self.plugin_runtime is not None
-            else ()
-        )
-        delegate_after_messages: tuple[str, ...] = ()
-        group_id: str | None = None
-        if self.agent_manager is not None and len(subtasks) > 1:
-            group_id = self.agent_manager.start_group(
-                label=str(arguments.get('label') or 'delegated_group'),
-                parent_agent_id=self.managed_agent_id,
-                strategy=strategy,
-            )
-        planned_batches = self._plan_delegate_batches(subtasks, strategy)
-        batch_summaries: list[dict[str, object]] = []
-        failed_children = 0
-        dependency_skips = 0
-        child_result = None
-        stop_processing = False
-        for batch_index, batch in enumerate(planned_batches, start=1):
-            if stop_processing:
-                break
-            batch_completed = 0
-            batch_failed = 0
-            batch_skipped = 0
-            batch_labels: list[str] = []
-            for subtask in batch:
-                index = int(subtask.get('_delegate_index', len(child_summaries) + 1))
-                subtask_label = str(subtask.get('label') or f'subtask_{index}')
-                batch_labels.append(subtask_label)
-                dependencies = tuple(
-                    item
-                    for item in subtask.get('depends_on', ())
-                    if isinstance(item, str) and item
-                )
-                unmet_dependencies = [
-                    dependency
-                    for dependency in dependencies
-                    if dependency not in completed_labels
-                ]
-                blocked_dependencies = [
-                    dependency
-                    for dependency in dependencies
-                    if dependency in failed_labels
-                ]
-                if unmet_dependencies:
-                    skip_reason = (
-                        'skipped_dependency'
-                        if blocked_dependencies
-                        else 'pending_dependency'
-                    )
-                    child_result = AgentRunResult(
-                        final_output=(
-                            'Skipped delegated subtask because dependencies were not satisfied: '
-                            + ', '.join(unmet_dependencies)
-                        ),
-                        turns=0,
-                        tool_calls=0,
-                        transcript=(),
-                        stop_reason=skip_reason,
-                    )
-                    summary = {
-                        'index': index,
-                        'label': subtask_label,
-                        'session_id': '',
-                        'turns': child_result.turns,
-                        'tool_calls': child_result.tool_calls,
-                        'stop_reason': skip_reason,
-                        'output_preview': self._preview_text(child_result.final_output, 220),
-                        'resume_used': False,
-                        'resumed_from_session_id': '',
-                        'depends_on': list(dependencies),
-                        'batch_index': batch_index,
-                    }
-                    child_summaries.append(summary)
-                    failed_children += 1
-                    batch_failed += 1
-                    batch_skipped += 1
-                    dependency_skips += 1
-                    failed_labels.add(subtask_label)
-                    if isinstance(max_failures, int) and failed_children > max_failures:
-                        stop_processing = True
-                        break
-                    if not continue_on_error:
-                        stop_processing = True
-                        break
-                    continue
-                # Use agent definition's system prompt if available
-                child_system_prompt = agent_def.system_prompt or self.custom_system_prompt
-                child_override_prompt = None
-                if agent_def.system_prompt:
-                    child_override_prompt = agent_def.system_prompt
-                else:
-                    child_override_prompt = self.override_system_prompt
-
-                # Inject critical system reminder if agent definition has one
-                child_append_prompt = self.append_system_prompt
-                if agent_def.critical_system_reminder:
-                    reminder = f'\n\n<system-reminder>\n{agent_def.critical_system_reminder}\n</system-reminder>'
-                    child_append_prompt = (
-                        (child_append_prompt or '') + reminder
-                    )
-
-                child_agent = LocalCodingAgent(
-                    model_config=child_model_config,
-                    runtime_config=replace(
-                        child_runtime_config,
-                        max_turns=subtask.get('max_turns', child_runtime_config.max_turns),
-                        disable_claude_md_discovery=agent_def.omit_claude_md,
-                    ),
-                    custom_system_prompt=child_system_prompt if not child_override_prompt else None,
-                    append_system_prompt=child_append_prompt,
-                    override_system_prompt=child_override_prompt,
-                    tool_registry=child_tools,
-                    agent_manager=self.agent_manager,
-                    parent_agent_id=self.managed_agent_id,
-                    managed_group_id=group_id,
-                    managed_child_index=index,
-                    managed_label=subtask_label,
-                )
-                if group_id is not None and child_agent.managed_agent_id is not None:
-                    self.agent_manager.register_group_child(
-                        group_id,
-                        child_agent.managed_agent_id,
-                        child_index=index,
-                    )
-                resume_session_id = subtask.get('resume_session_id')
-                child_prompt = str(subtask['prompt'])
-                if agent_def.initial_prompt and not (
-                    isinstance(resume_session_id, str) and resume_session_id
-                ):
-                    child_prompt = f'{agent_def.initial_prompt.strip()}\n\n{child_prompt}'.strip()
-                if delegate_preflight_messages:
-                    child_prompt = self._prepend_plugin_delegate_context(
-                        child_prompt,
-                        delegate_preflight_messages,
-                    )
-                if include_parent_context and prior_results:
-                    child_prompt = self._prepend_delegate_context(child_prompt, prior_results)
-                resume_used = False
-                if isinstance(resume_session_id, str) and resume_session_id:
-                    try:
-                        stored_child_session = load_agent_session(
-                            resume_session_id,
-                            directory=child_runtime_config.session_directory,
-                        )
-                    except OSError:
-                        child_result = AgentRunResult(
-                            final_output=f'Unable to load delegated session {resume_session_id}.',
-                            turns=0,
-                            tool_calls=0,
-                            transcript=(),
-                            stop_reason='resume_load_error',
-                            session_id=resume_session_id,
-                        )
-                        failed_children += 1
-                        batch_failed += 1
-                        summary = {
-                            'index': index,
-                            'label': subtask_label,
-                            'session_id': resume_session_id,
-                            'turns': child_result.turns,
-                            'tool_calls': child_result.tool_calls,
-                            'stop_reason': child_result.stop_reason or 'resume_load_error',
-                            'output_preview': self._preview_text(child_result.final_output, 220),
-                            'resume_used': True,
-                            'resumed_from_session_id': resume_session_id,
-                            'depends_on': list(dependencies),
-                            'batch_index': batch_index,
-                        }
-                        child_summaries.append(summary)
-                        prior_results.append(
-                            {
-                                'label': summary['label'],
-                                'output_preview': str(summary['output_preview']),
-                            }
-                        )
-                        failed_labels.add(subtask_label)
-                        if isinstance(max_failures, int) and failed_children > max_failures:
-                            stop_processing = True
-                            break
-                        if not continue_on_error:
-                            stop_processing = True
-                            break
-                        continue
-                    child_result = child_agent.resume(child_prompt, stored_child_session)
-                    resume_used = True
-                else:
-                    child_result = child_agent.run(child_prompt)
-                if group_id is not None and child_agent.managed_agent_id is not None:
-                    self.agent_manager.register_group_child(
-                        group_id,
-                        child_agent.managed_agent_id,
-                        child_index=index,
-                    )
-                summary = {
-                    'index': index,
-                    'label': subtask_label,
-                    'session_id': child_result.session_id or '',
-                    'turns': child_result.turns,
-                    'tool_calls': child_result.tool_calls,
-                    'stop_reason': child_result.stop_reason or 'stop',
-                    'output_preview': self._preview_text(child_result.final_output, 220),
-                    'resume_used': resume_used,
-                    'resumed_from_session_id': (
-                        str(resume_session_id)
-                        if isinstance(resume_session_id, str) and resume_session_id
-                        else ''
-                    ),
-                    'depends_on': list(dependencies),
-                    'batch_index': batch_index,
-                }
-                child_summaries.append(summary)
-                if child_result.session_id:
-                    child_session_ids.append(child_result.session_id)
-                prior_results.append(
-                    {
-                        'label': summary['label'],
-                        'output_preview': str(summary['output_preview']),
-                    }
-                )
-                if child_result.stop_reason in {'backend_error', 'budget_exceeded'}:
-                    failed_children += 1
-                    batch_failed += 1
-                    failed_labels.add(subtask_label)
-                    if isinstance(max_failures, int) and failed_children > max_failures:
-                        stop_processing = True
-                        break
-                    if not continue_on_error:
-                        stop_processing = True
-                        break
-                else:
-                    batch_completed += 1
-                    completed_labels.add(subtask_label)
-            batch_status = 'completed'
-            if batch_failed and batch_completed:
-                batch_status = 'partial'
-            elif batch_failed:
-                batch_status = 'failed'
-            batch_summaries.append(
-                {
-                    'batch_index': batch_index,
-                    'labels': batch_labels,
-                    'completed_children': batch_completed,
-                    'failed_children': batch_failed,
-                    'skipped_children': batch_skipped,
-                    'status': batch_status,
-                }
-            )
-        assert child_result is not None
-        completed_children = len(child_summaries) - failed_children
-        resumed_children = sum(
-            1 for summary in child_summaries if summary.get('resume_used')
-        )
-        group_status = 'completed'
-        if failed_children and completed_children:
-            group_status = 'partial'
-        elif failed_children:
-            group_status = 'failed'
-        delegate_after_messages = (
-            self.plugin_runtime.after_delegate_injections()
-            if self.plugin_runtime is not None
-            else ()
-        )
-        if group_id is not None and self.agent_manager is not None:
-            self.agent_manager.finish_group(
-                group_id,
-                status=group_status,
-                completed_children=completed_children,
-                failed_children=failed_children,
-                batch_count=len(batch_summaries),
-                max_batch_size=max((len(batch['labels']) for batch in batch_summaries), default=0),
-                dependency_skips=dependency_skips,
-            )
-        summary_lines = [
-            (
-                'Delegated agent completed the subtask.'
-                if len(child_summaries) == 1
-                else f'Delegated agent completed {len(child_summaries)} sequential subtasks.'
-            ),
-        ]
-        if group_id is not None:
-            summary_lines.append(f'group_id={group_id}')
-            summary_lines.append(f'group_status={group_status}')
-            summary_lines.append(f'resumed_children={resumed_children}')
-            summary_lines.append(f'strategy={strategy}')
-            summary_lines.append(f'batch_count={len(batch_summaries)}')
-            summary_lines.append(f'dependency_skips={dependency_skips}')
-            summary_lines.append('')
-        if delegate_preflight_messages:
-            summary_lines.append('Plugin delegate preflight:')
-            summary_lines.extend(f'- {message}' for message in delegate_preflight_messages)
-            summary_lines.append('')
-        for batch in batch_summaries:
-            summary_lines.append(
-                f"[batch {batch['batch_index']}] status={batch['status']} "
-                f"labels={','.join(batch['labels']) or '(none)'} "
-                f"completed={batch['completed_children']} failed={batch['failed_children']} "
-                f"skipped={batch['skipped_children']}"
-            )
-        if batch_summaries:
-            summary_lines.append('')
-        for summary in child_summaries:
-            summary_lines.extend(
-                [
-                    f"[{summary['label']}]",
-                    f"batch_index={summary['batch_index']}",
-                    f"session_id={summary['session_id']}",
-                    f"turns={summary['turns']}",
-                    f"tool_calls={summary['tool_calls']}",
-                    f"stop_reason={summary['stop_reason']}",
-                    f"resume_used={summary['resume_used']}",
-                    f"resumed_from_session_id={summary['resumed_from_session_id']}",
-                    f"depends_on={','.join(summary.get('depends_on', [])) or '(none)'}",
-                    f"output_preview={summary['output_preview']}",
-                    '',
-                ]
-            )
-        if delegate_after_messages:
-            summary_lines.append('Plugin delegate completion:')
-            summary_lines.extend(f'- {message}' for message in delegate_after_messages)
-            summary_lines.append('')
-        summary_lines.append('Final delegated output:')
-        summary_lines.append(child_result.final_output)
-        return ToolExecutionResult(
-            name=tool_name,
-            ok=True,
-            content='\n'.join(summary_lines).strip(),
-            metadata={
-                'action': tool_name,
-                'subagent_type': agent_def.agent_type,
-                'child_session_id': child_result.session_id,
-                'child_session_ids': child_session_ids,
-                'child_turns': child_result.turns,
-                'child_tool_calls': child_result.tool_calls,
-                'child_stop_reason': child_result.stop_reason,
-                'child_results': child_summaries,
-                'subtask_count': len(child_summaries),
-                'group_id': group_id,
-                'group_status': group_status,
-                'failed_children': failed_children,
-                'completed_children': completed_children,
-                'resumed_children': resumed_children,
-                'strategy': strategy,
-                'max_failures': max_failures,
-                'delegate_batches': batch_summaries,
-                'dependency_skips': dependency_skips,
-                'plugin_delegate_preflight_messages': list(delegate_preflight_messages),
-                'plugin_delegate_after_messages': list(delegate_after_messages),
-            },
-        )
-
-    def _normalize_delegate_subtasks(
-        self,
-        arguments: dict[str, object],
-    ) -> list[dict[str, object]]:
-        subtasks: list[dict[str, object]] = []
-        raw_subtasks = arguments.get('subtasks')
-        if isinstance(raw_subtasks, list):
-            for index, item in enumerate(raw_subtasks, start=1):
-                if isinstance(item, str) and item.strip():
-                    subtasks.append(
-                        {
-                            'prompt': item.strip(),
-                            'label': f'subtask_{index}',
-                            '_delegate_index': index,
-                        }
-                    )
-                    continue
-                if isinstance(item, dict):
-                    prompt = item.get('prompt')
-                    if not isinstance(prompt, str) or not prompt.strip():
-                        continue
-                    label = item.get('label')
-                    max_turns = item.get('max_turns')
-                    task: dict[str, object] = {
-                        'prompt': prompt.strip(),
-                        'label': label if isinstance(label, str) and label.strip() else f'subtask_{index}',
-                    }
-                    resume_session_id = item.get('resume_session_id')
-                    if resume_session_id is None:
-                        resume_session_id = item.get('session_id')
-                    if isinstance(resume_session_id, str) and resume_session_id.strip():
-                        task['resume_session_id'] = resume_session_id.strip()
-                    depends_on = item.get('depends_on')
-                    if isinstance(depends_on, list):
-                        task['depends_on'] = tuple(
-                            dependency.strip()
-                            for dependency in depends_on
-                            if isinstance(dependency, str) and dependency.strip()
-                        )
-                    if isinstance(max_turns, int) and not isinstance(max_turns, bool) and max_turns > 0:
-                        task['max_turns'] = max_turns
-                    task['_delegate_index'] = index
-                    subtasks.append(task)
-        prompt = arguments.get('prompt')
-        if isinstance(prompt, str) and prompt.strip():
-            if not subtasks:
-                task: dict[str, object] = {'prompt': prompt.strip(), 'label': 'subtask_1'}
-                resume_session_id = arguments.get('resume_session_id')
-                if resume_session_id is None:
-                    resume_session_id = arguments.get('session_id')
-                if isinstance(resume_session_id, str) and resume_session_id.strip():
-                    task['resume_session_id'] = resume_session_id.strip()
-                task['_delegate_index'] = 1
-                subtasks.append(task)
-        return [
-            {
-                **task,
-                '_delegate_index': int(task.get('_delegate_index', index)),
-            }
-            for index, task in enumerate(subtasks[:8], start=1)
-        ]
-
-    def _normalize_delegate_strategy(self, strategy: object) -> str:
-        if not isinstance(strategy, str) or not strategy.strip():
-            return 'serial'
-        normalized = strategy.strip().lower().replace('-', '_')
-        if normalized in {'graph', 'topological', 'dependency_graph', 'parallel', 'parallel_batches'}:
-            return 'topological'
-        return 'serial'
-
-    def _plan_delegate_batches(
-        self,
-        subtasks: list[dict[str, object]],
-        strategy: str,
-    ) -> list[list[dict[str, object]]]:
-        if strategy != 'topological':
-            return [subtasks]
-        remaining = list(subtasks)
-        scheduled_labels: set[str] = set()
-        known_labels = {
-            str(task.get('label'))
-            for task in subtasks
-            if isinstance(task.get('label'), str) and str(task.get('label')).strip()
-        }
-        batches: list[list[dict[str, object]]] = []
-        while remaining:
-            ready: list[dict[str, object]] = []
-            blocked: list[dict[str, object]] = []
-            for task in remaining:
-                dependencies = tuple(
-                    item
-                    for item in task.get('depends_on', ())
-                    if isinstance(item, str) and item
-                )
-                if any(dependency not in known_labels for dependency in dependencies):
-                    blocked.append(task)
-                    continue
-                if all(dependency in scheduled_labels for dependency in dependencies):
-                    ready.append(task)
-                else:
-                    blocked.append(task)
-            if not ready:
-                batches.append(blocked)
-                break
-            batches.append(
-                sorted(
-                    ready,
-                    key=lambda task: int(task.get('_delegate_index', 0)),
-                )
-            )
-            scheduled_labels.update(
-                str(task.get('label'))
-                for task in ready
-                if isinstance(task.get('label'), str) and str(task.get('label')).strip()
-            )
-            remaining = blocked
-        return batches
-
-    def _delegated_task_units(
-        self,
-        arguments: dict[str, object],
-    ) -> int:
-        subtasks = arguments.get('subtasks')
-        if isinstance(subtasks, list):
-            count = sum(
-                1
-                for item in subtasks
-                if (
-                    isinstance(item, str)
-                    and item.strip()
-                ) or (
-                    isinstance(item, dict)
-                    and isinstance(item.get('prompt'), str)
-                    and item.get('prompt', '').strip()
-                )
-            )
-            if count:
-                return count
-        return 1
-
-    def _prepend_delegate_context(
-        self,
-        prompt: str,
-        prior_results: list[dict[str, str]],
-    ) -> str:
-        lines = [
-            '<system-reminder>',
-            'Prior delegated subtask summaries:',
-        ]
-        for result in prior_results[-4:]:
-            lines.append(f"- {result['label']}: {result['output_preview']}")
-        lines.extend(['</system-reminder>', '', prompt])
-        return '\n'.join(lines)
-
-    def _prepend_plugin_delegate_context(
-        self,
-        prompt: str,
-        messages: tuple[str, ...],
-    ) -> str:
-        if not messages:
-            return prompt
-        lines = [
-            '<system-reminder>',
-            'Plugin delegate guidance:',
-        ]
-        lines.extend(f'- {message}' for message in messages)
-        lines.extend(['</system-reminder>', '', prompt])
-        return '\n'.join(lines)
+        return execute_delegate_agent(self, arguments, tool_name=tool_name)
 
     def _append_runtime_tool_followup_events(
         self,
@@ -3521,60 +2086,20 @@ class LocalCodingAgent:
                         'message_count': len(persist_messages),
                     }
                 )
-        previous_turns = 0
-        previous_tool_calls = 0
-        previous_budget_state: dict[str, object] = {}
-        existing_path = self.runtime_config.session_directory / f'{result.session_id}.json'
-        if existing_path.exists():
-            try:
-                previous = load_agent_session(
-                    result.session_id,
-                    directory=self.runtime_config.session_directory,
-                )
-            except OSError:
-                previous = None
-            if previous is not None:
-                previous_turns = previous.turns
-                previous_tool_calls = previous.tool_calls
-                if isinstance(previous.budget_state, dict):
-                    previous_budget_state = dict(previous.budget_state)
-        budget_state = {
-            'model_calls': int(previous_budget_state.get('model_calls', 0))
-            + max(result.turns, 0),
-            'session_turns': previous_turns + result.turns,
-            'tool_calls': previous_tool_calls + result.tool_calls,
-            'delegated_tasks': sum(
-                1 for entry in result.file_history if entry.get('action') in ('delegate_agent', 'Agent')
-            ),
-        }
-        stored = StoredAgentSession(
-            session_id=result.session_id,
-            model_config=serialize_model_config(self.model_config),
-            runtime_config=serialize_runtime_config(self.runtime_config),
-            system_prompt_parts=session.system_prompt_parts,
-            user_context=dict(session.user_context),
-            system_context=dict(session.system_context),
-            messages=session.transcript(),
-            turns=previous_turns + result.turns,
-            tool_calls=previous_tool_calls + result.tool_calls,
-            usage=result.usage.to_dict(),
-            total_cost_usd=result.total_cost_usd,
-            file_history=result.file_history,
-            budget_state=budget_state,
+        persisted_result, session_path = persist_agent_run(
+            session=session,
+            result=result,
+            model_config=self.model_config,
+            runtime_config=self.runtime_config,
             plugin_state=(
                 self.plugin_runtime.export_session_state()
                 if self.plugin_runtime is not None
                 else {}
             ),
-            scratchpad_directory=result.scratchpad_directory,
         )
-        path = save_agent_session(
-            stored,
-            directory=self.runtime_config.session_directory,
-        )
-        self.last_session_path = str(path)
+        self.last_session_path = session_path
         return replace(
-            result,
+            persisted_result,
             session_path=self.last_session_path,
             events=tuple(persist_events),
             transcript=session.transcript(),

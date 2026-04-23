@@ -8,6 +8,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.agent.agent_session import AgentMessage
+from src.agent.delegate_orchestrator import (
+    filter_tools_for_agent,
+    resolve_agent_definition,
+    resolve_child_model_config,
+)
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import (
@@ -47,8 +52,8 @@ class AgentRuntimeTests(unittest.TestCase):
                 model_config=ModelConfig(model='openai/gemma4:e4b'),
                 runtime_config=AgentRuntimeConfig(cwd=workspace),
             )
-            agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
-            child_model = agent._resolve_child_model_config({}, agent_def)
+            agent_def = resolve_agent_definition(agent, {'subagent_type': 'Explore'})
+            child_model = resolve_child_model_config(agent, {}, agent_def)
 
         self.assertEqual(child_model.model, 'openai/gemma4:e4b')
 
@@ -59,8 +64,8 @@ class AgentRuntimeTests(unittest.TestCase):
                 model_config=ModelConfig(model='anthropic/claude-sonnet-4'),
                 runtime_config=AgentRuntimeConfig(cwd=workspace),
             )
-            agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
-            child_model = agent._resolve_child_model_config({}, agent_def)
+            agent_def = resolve_agent_definition(agent, {'subagent_type': 'Explore'})
+            child_model = resolve_child_model_config(agent, {}, agent_def)
 
         self.assertEqual(child_model.model, 'anthropic/claude-haiku-4-5-20251001')
 
@@ -87,9 +92,9 @@ class AgentRuntimeTests(unittest.TestCase):
                     model_config=ModelConfig(model='parent-model'),
                     runtime_config=AgentRuntimeConfig(cwd=workspace),
                 )
-                agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
-                child_model = agent._resolve_child_model_config({}, agent_def)
-                child_tools = agent._filter_tools_for_agent(agent_def)
+                agent_def = resolve_agent_definition(agent, {'subagent_type': 'Explore'})
+                child_model = resolve_child_model_config(agent, {}, agent_def)
+                child_tools = filter_tools_for_agent(agent, agent_def)
             self.assertEqual(agent_def.source, 'projectSettings')
             self.assertEqual(agent_def.initial_prompt, 'Start with a repository scan.')
             self.assertEqual(child_model.model, 'child-model')
