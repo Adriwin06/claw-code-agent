@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib import parse, request
+
+from src.features.system.env_runtime import (
+    expand_env_vars,
+    has_unresolved_env_var,
+    load_workspace_env,
+)
 
 
 DEFAULT_SEARCH_STATE_DIR = Path('.port_sessions')
@@ -102,6 +107,7 @@ class SearchRuntime:
         cwd: Path,
         additional_working_directories: tuple[str, ...] = (),
     ) -> 'SearchRuntime':
+        load_workspace_env(cwd, additional_working_directories)
         state_path = (cwd.resolve() / DEFAULT_SEARCH_STATE_FILE).resolve()
         payload = _load_state_payload(state_path)
         web_search_enabled = _state_bool(
@@ -438,8 +444,8 @@ def _provider_from_payload(payload: Any, path: Path) -> SearchProviderProfile | 
     base_url = _optional_str(payload.get('baseUrl') or payload.get('base_url')) or _default_base_url(normalized_provider)
     if base_url is None:
         return None
-    expanded_base_url = _expand_env_vars(base_url)
-    if _has_unresolved_env_var(expanded_base_url):
+    expanded_base_url = expand_env_vars(base_url)
+    if has_unresolved_env_var(expanded_base_url):
         return None
     api_key_env = _optional_str(payload.get('apiKeyEnv') or payload.get('api_key_env')) or _default_api_env(normalized_provider)
     description = _optional_str(payload.get('description'))
@@ -583,18 +589,6 @@ def _optional_str(value: Any) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
-
-
-def _expand_env_vars(value: str) -> str:
-    return os.path.expandvars(value)
-
-
-def _has_unresolved_env_var(value: str) -> bool:
-    return bool(
-        re.search(r'\$\{[^}]+\}', value)
-        or re.search(r'(?<!\$)\$[A-Za-z_][A-Za-z0-9_]*', value)
-        or re.search(r'%[A-Za-z_][A-Za-z0-9_]*%', value)
-    )
 
 
 def _search_searxng(

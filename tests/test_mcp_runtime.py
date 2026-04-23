@@ -14,7 +14,7 @@ from unittest.mock import patch
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
-from src.features.integration.mcp_runtime import MCPRuntime
+from src.features.integration.mcp_runtime import MCPRuntime, MCPServerProfile
 from tests.test_helpers import make_urlopen_side_effect
 
 
@@ -381,6 +381,62 @@ class MCPRuntimeTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_streamable_http_server_url_can_load_from_workspace_dotenv(self) -> None:
+        server, thread, url, _state = self._start_fake_streamable_http_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                workspace = Path(tmp_dir)
+                manifest_path = workspace / '.claw-mcp.json'
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            'mcpServers': {
+                                'remote-http': {
+                                    'transport': 'streamable-http',
+                                    'url': '${MCP_TEST_URL}',
+                                }
+                            }
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                (workspace / '.env').write_text(
+                    f'MCP_TEST_URL="{url}"  # workspace override\n',
+                    encoding='utf-8',
+                )
+                with patch.dict(os.environ, {}, clear=True):
+                    runtime = MCPRuntime.from_workspace(workspace)
+                    self.assertEqual(len(runtime.servers), 1)
+                    self.assertEqual(runtime.servers[0].url, url)
+                    self.assertEqual(len(runtime.list_tools()), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_streamable_http_server_url_can_expand_default_when_env_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            manifest_path = workspace / '.claw-mcp.json'
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote-http': {
+                                'transport': 'streamable-http',
+                                'url': '${MCP_TEST_URL:-http://127.0.0.1:18000/mcp}',
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                runtime = MCPRuntime.from_workspace(workspace)
+
+        self.assertEqual(len(runtime.servers), 1)
+        self.assertEqual(runtime.servers[0].url, 'http://127.0.0.1:18000/mcp')
+
     def test_mcp_tools_execute_against_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -489,6 +545,24 @@ class MCPRuntimeTests(unittest.TestCase):
         self.assertFalse(list_result.ok)
         self.assertIn('Unknown MCP server: missing', list_result.content)
         self.assertIn('Unknown MCP server: missing', runtime.render_tool_index(server_name='missing'))
+
+    def test_render_tool_index_reports_named_server_connection_errors(self) -> None:
+        runtime = MCPRuntime(
+            servers=(
+                MCPServerProfile(
+                    name='sagemath',
+                    source_manifest='test',
+                    transport='streamable-http',
+                    url='http://127.0.0.1:18000/mcp',
+                ),
+            )
+        )
+
+        with patch.object(runtime, '_request_server', side_effect=OSError('connection refused')):
+            output = runtime.render_tool_index(server_name='sagemath')
+
+        self.assertIn('Unable to query MCP server sagemath', output)
+        self.assertIn('connection refused', output)
 
     def test_mcp_cli_subprocess_smoke_works_with_stdio_server(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

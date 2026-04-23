@@ -3,7 +3,7 @@
     {
       "name": "searxng",
       "provider": "searxng",
-      "baseUrl": "${SEARXNG_BASE_URL}",
+      "baseUrl": "${SEARXNG_BASE_URL:-http://127.0.0.1:8080}",
       "description": "Optional workspace web search provider for the web_search tool."
     }
   ]

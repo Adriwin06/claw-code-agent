@@ -410,8 +410,9 @@ python3 -m src.main mcp-tools --cwd .
 
 Optional web search setup:
 
+A local SearxNG endpoint at `http://127.0.0.1:8080` is used automatically. Set `SEARXNG_BASE_URL` only when you need a different endpoint, such as a container-accessible host URL.
+
 ```bash
-export SEARXNG_BASE_URL=http://127.0.0.1:8080
 python3 -m src.main search-status --cwd .
 python3 -m src.main search "latest python release" --cwd .
 ```
@@ -424,10 +425,12 @@ Notes:
 - `host.docker.internal` is prewired in `docker-compose.yml` so the container can reach host Ollama
 - set `HOST_WORKSPACE_DIR` to mount a different host folder into the container
 - set `AGENT_CWD` to choose the starting folder inside that mounted workspace
-- the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that activates the SageMath MCP server when `SAGEMATH_MCP_URL` is set
-- the repo includes a root-level [`.claw-search.json`](.claw-search.json) manifest that activates the `web_search` tool when `SEARXNG_BASE_URL` is set
+- workspace `.env` files are loaded automatically by the CLI and runtime integrations
+- the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that defaults SageMath to `http://127.0.0.1:18000/mcp` and can be overridden with `SAGEMATH_MCP_URL`
+- the repo includes a root-level [`.claw-search.json`](.claw-search.json) manifest that defaults `web_search` to `http://127.0.0.1:8080` and can be overridden with `SEARXNG_BASE_URL`
 - when you start SageMath in Compose, `claw-agent` can talk to it over the internal service URL `http://sagemath:8000/mcp`
 - from the host machine, the published port is `http://127.0.0.1:18000/mcp`
+- SearxNG does not require an API key, but it still requires a reachable search endpoint
 - for Dockerized agent runs that need a search provider on the host machine, prefer `SEARXNG_BASE_URL=http://host.docker.internal:8080`
 - set `AGENT_READ_ONLY=true` to force read-only mode; when it is true, the write/shell/unsafe flags are ignored
 - set `AGENT_ALLOW_WRITE`, `AGENT_ALLOW_SHELL`, and `AGENT_UNSAFE` as needed when `AGENT_READ_ONLY=false`

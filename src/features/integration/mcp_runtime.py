@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import subprocess
 import threading
 import time
@@ -12,6 +11,12 @@ from urllib import request as urllib_request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
+
+from src.features.system.env_runtime import (
+    expand_env_vars,
+    has_unresolved_env_var,
+    load_workspace_env,
+)
 
 
 MCP_PROTOCOL_VERSION = '2025-11-25'
@@ -72,6 +77,7 @@ class MCPRuntime:
         cwd: Path,
         additional_working_directories: tuple[str, ...] = (),
     ) -> 'MCPRuntime':
+        load_workspace_env(cwd, additional_working_directories)
         resources: list[MCPResource] = []
         servers: list[MCPServerProfile] = []
         for path in _discover_manifest_paths(cwd, additional_working_directories):
@@ -288,7 +294,12 @@ class MCPRuntime:
     ) -> str:
         if server_name and self.get_server(server_name) is None:
             return f'# MCP Tools\n\nUnknown MCP server: {server_name}'
-        tools = self.list_tools(query=query, server_name=server_name, limit=limit)
+        try:
+            tools = self.list_tools(query=query, server_name=server_name, limit=limit)
+        except OSError as exc:
+            if server_name:
+                return f'# MCP Tools\n\nUnable to query MCP server {server_name}: {exc}'
+            return f'# MCP Tools\n\nUnable to query MCP tools: {exc}'
         if not tools:
             return '# MCP Tools\n\nNo matching MCP tools discovered.'
         lines = ['# MCP Tools', '']
@@ -346,6 +357,8 @@ class MCPRuntime:
             try:
                 result = self._request_server(server, 'tools/list', {})
             except OSError:
+                if server_name:
+                    raise
                 continue
             for item in _extract_remote_tools(server, result):
                 discovered.append(item)
@@ -536,12 +549,12 @@ def _extract_server_profile(
             raw_url = payload.get('endpoint')
         if not isinstance(raw_url, str) or not raw_url.strip():
             return None
-        expanded_url = _expand_env_vars(raw_url.strip())
-        if _has_unresolved_env_var(expanded_url):
+        expanded_url = expand_env_vars(raw_url.strip())
+        if has_unresolved_env_var(expanded_url):
             return None
         headers = payload.get('headers')
         normalized_headers = {
-            key: _expand_env_vars(value)
+            key: expand_env_vars(value)
             for key, value in (headers.items() if isinstance(headers, dict) else [])
             if isinstance(key, str) and isinstance(value, str)
         }
@@ -1112,18 +1125,6 @@ def _normalize_transport(raw_transport: Any) -> str:
     if normalized in ('http', 'streamablehttp'):
         return 'streamable-http'
     return normalized
-
-
-def _expand_env_vars(value: str) -> str:
-    return os.path.expandvars(value)
-
-
-def _has_unresolved_env_var(value: str) -> bool:
-    return bool(
-        re.search(r'\$\{[^}]+\}', value)
-        or re.search(r'(?<!\$)\$[A-Za-z_][A-Za-z0-9_]*', value)
-        or re.search(r'%[A-Za-z_][A-Za-z0-9_]*%', value)
-    )
 
 
 def _parse_json_response_body(body: bytes, *, server_name: str) -> dict[str, Any]:
