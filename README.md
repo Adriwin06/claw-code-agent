@@ -435,7 +435,7 @@ Notes:
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
 - on Windows, [`launch-workspace.bat`](launch-workspace.bat) starts the agent without rebuilding the image every run; set `CLAW_REBUILD=1` only when you need a fresh image
-- set `CLAW_START_SAGEMATH=1` if you want the Windows launcher to start the SageMath sidecar before opening the agent
+- SageMath starts by default when using the workspace launchers; set `CLAW_START_SAGEMATH=0` to skip the sidecar
 
 ### Optional: Use LiteLLM Proxy
 

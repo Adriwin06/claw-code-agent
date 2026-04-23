@@ -33,6 +33,7 @@ class AgentPromptingTests(unittest.TestCase):
             )
 
         prompt = render_system_prompt(parts)
+        self.assertIn('If you are unsure about the exact tool name', prompt)
         self.assertIn('# System', prompt)
         self.assertIn('# Doing tasks', prompt)
         self.assertIn('# Using your tools', prompt)
@@ -147,6 +148,9 @@ class AgentPromptingTests(unittest.TestCase):
                 )
 
         prompt = render_system_prompt(parts)
+        self.assertIn('Configured MCP server names are not themselves top-level tool names.', prompt)
+        self.assertIn('mcp_list_tools', prompt)
+        self.assertIn('mcp_call_tool', prompt)
         self.assertIn('Server names from MCP manifests are exact.', prompt)
         self.assertIn('evaluate_expression does not accept separate variable bindings', prompt)
         self.assertIn('numeric=true', prompt)

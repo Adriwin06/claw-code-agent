@@ -391,7 +391,9 @@ class AgentTuiEventBridge:
                     merge_key='assistant',
                 )
             active_turn.assistant_status = (
-                'Ready' if result.stop_reason in {None, 'stop'} else 'Stopped'
+                'Ready'
+                if _friendly_stop_reason(result.stop_reason) == 'completed'
+                else 'Stopped'
             )
             active_turn.phase_label = 'Completed'
             active_turn.stop_reason = result.stop_reason

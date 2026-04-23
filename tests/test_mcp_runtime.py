@@ -800,3 +800,70 @@ class MCPRuntimeTests(unittest.TestCase):
         )
         self.assertIn('echo:agent-call', tool_message.get('content', ''))
 
+    def test_execute_tool_can_fall_back_to_unique_mcp_tool_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            server_path = self._write_fake_stdio_server(workspace)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote': {
+                                'command': sys.executable,
+                                'args': ['-u', str(server_path)],
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            runtime = MCPRuntime.from_workspace(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=default_tool_registry(),
+                mcp_runtime=runtime,
+            )
+
+            result = execute_tool(
+                default_tool_registry(),
+                'echo',
+                {'text': 'alias-call'},
+                context,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.metadata.get('action'), 'mcp_tool_alias')
+        self.assertEqual(result.metadata.get('server_name'), 'remote')
+        self.assertIn('echo:alias-call', result.content)
+
+    def test_execute_tool_explains_when_mcp_server_name_is_used_as_tool_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'sagemath': {
+                                'transport': 'streamable-http',
+                                'url': 'http://127.0.0.1:18000/mcp',
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            runtime = MCPRuntime.from_workspace(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=default_tool_registry(),
+                mcp_runtime=runtime,
+            )
+
+            result = execute_tool(default_tool_registry(), 'sagemath', {}, context)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.metadata.get('error_kind'), 'unknown_tool')
+        self.assertIn('configured MCP server, not a direct tool', result.content)
+        self.assertIn('mcp_list_tools', result.content)
+        self.assertIn('mcp_call_tool', result.content)
+

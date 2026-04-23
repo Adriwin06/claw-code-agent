@@ -176,6 +176,17 @@ def get_using_your_tools_section(enabled_tool_names: set[str]) -> str:
     items: list[str | list[str]] = [
         'Do not use the bash tool when a more specific dedicated tool is available. This is important for reviewability and safer execution.',
     ]
+    if 'list_available_tools' in enabled_tool_names or 'tool_search' in enabled_tool_names:
+        discovery_tools: list[str] = []
+        if 'list_available_tools' in enabled_tool_names:
+            discovery_tools.append('list_available_tools')
+        if 'tool_search' in enabled_tool_names:
+            discovery_tools.append('tool_search')
+        items.append(
+            'If you are unsure about the exact tool name, use '
+            + ' and '.join(discovery_tools)
+            + ' before guessing.'
+        )
     if 'read_file' in enabled_tool_names:
         items.append('To read files, prefer read_file instead of shell commands like cat or sed.')
     if 'edit_file' in enabled_tool_names:
@@ -262,6 +273,7 @@ def get_mcp_guidance_section(prompt_context: PromptContext) -> str:
         'Local MCP manifests may expose additional resources and transport-backed tools through the runtime.',
         'Use MCP resource tools when the task depends on manifest-backed external context or curated workspace resources.',
         'Use MCP transport tools when a configured MCP server exposes real callable tools that should stay outside the local Python tool registry.',
+        'Configured MCP server names are not themselves top-level tool names. Use mcp_list_tools to discover a server\'s tools, then call mcp_call_tool with both server and tool_name.',
         'Server names from MCP manifests are exact. When a tool call specifies server=..., use the configured server name exactly as shown in the MCP runtime summary.',
         'Treat MCP resource and tool summaries as discoverability hints and prefer reading a specific resource URI or calling a specific MCP tool before relying on its contents.',
     ]

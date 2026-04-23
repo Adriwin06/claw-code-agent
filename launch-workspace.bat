@@ -6,12 +6,13 @@ rem If this script is not inside the repository tree, set CLAW_CODE_AGENT_ROOT f
 rem Optional environment variables:
 rem   CLAW_AGENT_COMMAND=agent-tui|agent-chat|doctor|...
 rem   CLAW_REBUILD=1              rebuild the image before launching
-rem   CLAW_START_SAGEMATH=1       start the optional SageMath sidecar first
+rem   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
 
 set "WORKSPACE_DIR=%CD%"
 set "REPO_ROOT=%CLAW_CODE_AGENT_ROOT%"
 set "LAUNCH_AGENT_COMMAND=%CLAW_AGENT_COMMAND%"
 if not defined LAUNCH_AGENT_COMMAND set "LAUNCH_AGENT_COMMAND=agent-tui"
+if not defined CLAW_START_SAGEMATH set "CLAW_START_SAGEMATH=1"
 set "DOCKER_IMAGE=claw-code-agent-local"
 
 if not defined REPO_ROOT (

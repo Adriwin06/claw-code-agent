@@ -27,6 +27,11 @@ def _preview_multiline(text: str, *, max_chars: int = 220, max_lines: int = 4) -
 
 
 def _friendly_stop_reason(stop_reason: str | None) -> str:
-    if stop_reason in {None, '', 'stop'}:
+    if stop_reason is None:
         return 'completed'
-    return stop_reason
+    normalized = str(stop_reason).strip()
+    if not normalized:
+        return 'completed'
+    if normalized.lower() in {'stop', 'completed', 'complete', 'done', 'end_turn'}:
+        return 'completed'
+    return normalized

@@ -6,7 +6,7 @@ set -euo pipefail
 # Optional environment variables:
 #   CLAW_AGENT_COMMAND=agent-tui|agent-chat|doctor|...
 #   CLAW_REBUILD=1              rebuild the image before launching
-#   CLAW_START_SAGEMATH=1       start the optional SageMath sidecar first
+#   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
 
 bool_true() {
   case "${1:-}" in
@@ -121,6 +121,7 @@ find_repo_root() {
 WORKSPACE_DIR="$(pwd)"
 REPO_ROOT="${CLAW_CODE_AGENT_ROOT:-}"
 LAUNCH_AGENT_COMMAND="${CLAW_AGENT_COMMAND:-agent-tui}"
+CLAW_START_SAGEMATH="${CLAW_START_SAGEMATH:-1}"
 DOCKER_IMAGE="claw-code-agent-local"
 
 if docker compose version >/dev/null 2>&1; then

@@ -314,6 +314,31 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(bridge.turns[0].assistant_status, 'Ready')
         self.assertEqual(bridge.turns[0].entries[0].kind, 'assistant')
 
+    def test_event_bridge_treats_completed_alias_as_ready(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+
+        bridge.begin_prompt('Summarize the repo')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Completed alias.',
+                turns=1,
+                tool_calls=0,
+                transcript=(),
+                usage=UsageStats(input_tokens=3, output_tokens=2),
+                total_cost_usd=0.0,
+                stop_reason='completed',
+                session_id='session-3',
+            )
+        )
+
+        self.assertEqual(bridge.turns[0].assistant_status, 'Ready')
+        self.assertEqual(state.last_stop_reason, 'completed')
+
     def test_event_bridge_restore_history_populates_turns_and_activity(self) -> None:
         state = AgentTuiState(
             workspace='C:/workspace',

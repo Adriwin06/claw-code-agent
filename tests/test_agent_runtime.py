@@ -14,9 +14,12 @@ from src.agent.agent_types import (
     AgentRunResult,
     AgentPermissions,
     AgentRuntimeConfig,
+    AssistantTurn,
     BudgetConfig,
     ModelConfig,
     OutputSchemaConfig,
+    StreamEvent,
+    ToolCall,
     UsageStats,
 )
 from src.session.compact import CompactionResult
@@ -28,6 +31,7 @@ from src.session.session_store import (
 )
 from src.core.governance.token_budget import TokenBudgetSnapshot
 from tests.test_helpers import (
+    ScriptedLLMClient,
     make_recording_streaming_urlopen_side_effect,
     make_recording_urlopen_side_effect,
     make_streaming_urlopen_side_effect,
@@ -36,6 +40,30 @@ from tests.test_helpers import (
 
 
 class AgentRuntimeTests(unittest.TestCase):
+    def test_builtin_child_model_keeps_parent_model_on_non_claude_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='openai/gemma4:e4b'),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
+            child_model = agent._resolve_child_model_config({}, agent_def)
+
+        self.assertEqual(child_model.model, 'openai/gemma4:e4b')
+
+    def test_builtin_child_model_expands_claude_alias_for_anthropic_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='anthropic/claude-sonnet-4'),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            agent_def = agent._resolve_agent_definition({'subagent_type': 'Explore'})
+            child_model = agent._resolve_child_model_config({}, agent_def)
+
+        self.assertEqual(child_model.model, 'anthropic/claude-haiku-4-5-20251001')
+
     def test_custom_project_agent_is_resolved_for_child_agent_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as home_dir, tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -443,6 +471,115 @@ class AgentRuntimeTests(unittest.TestCase):
         mutation_totals = metadata.get('mutation_totals', {})
         self.assertGreaterEqual(mutation_totals.get('assistant_delta_append', 0), 2)
         self.assertEqual(mutation_totals.get('assistant_finalize', 0), 1)
+
+    def test_agent_stream_infers_stop_when_provider_omits_finish_reason(self) -> None:
+        responses = [
+            [
+                {'choices': [{'delta': {'content': 'Streaming '}, 'finish_reason': None}]},
+                {
+                    'choices': [{'delta': {'content': 'works.'}, 'finish_reason': None}],
+                    'usage': {'prompt_tokens': 14, 'completion_tokens': 5},
+                },
+            ]
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch(
+                'src.agent.agent_runtime.build_llm_client',
+                side_effect=make_streaming_urlopen_side_effect(responses),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        stream_model_responses=True,
+                    ),
+                )
+                result = agent.run('Say streaming works')
+        self.assertEqual(result.final_output, 'Streaming works.')
+        self.assertEqual(result.stop_reason, 'stop')
+
+    def test_agent_stream_continues_partial_response_when_finish_reason_is_omitted(self) -> None:
+        responses = [
+            [
+                {
+                    'choices': [
+                        {
+                            'delta': {
+                                'tool_calls': [
+                                    {
+                                        'index': 0,
+                                        'id': 'call_1',
+                                        'function': {
+                                            'name': 'read_file',
+                                            'arguments': '{"path": "hello.txt"}',
+                                        },
+                                    }
+                                ]
+                            },
+                            'finish_reason': None,
+                        }
+                    ],
+                    'usage': {'prompt_tokens': 8, 'completion_tokens': 3},
+                },
+            ],
+            [
+                {
+                    'choices': [
+                        {
+                            'delta': {
+                                'content': (
+                                    'I have read hello.txt. Next, I will analyze what could be '
+                                    'improved in the rest of the codebase.'
+                                )
+                            },
+                            'finish_reason': None,
+                        }
+                    ],
+                    'usage': {'prompt_tokens': 9, 'completion_tokens': 8},
+                },
+            ],
+            [
+                {
+                    'choices': [
+                        {
+                            'delta': {
+                                'content': 'The test workspace is minimal, so there is nothing else to improve.'
+                            },
+                            'finish_reason': None,
+                        }
+                    ],
+                    'usage': {'prompt_tokens': 6, 'completion_tokens': 6},
+                },
+            ],
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch(
+                'src.agent.agent_runtime.build_llm_client',
+                side_effect=make_streaming_urlopen_side_effect(responses),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        stream_model_responses=True,
+                    ),
+                )
+                result = agent.run('Analyze the codebase and tell me what could be improved.')
+        self.assertIn('I have read hello.txt.', result.final_output)
+        self.assertIn('there is nothing else to improve.', result.final_output)
+        self.assertTrue(
+            any(event.get('type') == 'continuation_request' for event in result.events)
+        )
+        self.assertEqual(result.tool_calls, 1)
 
     def test_agent_streams_tool_calls_and_reconstructs_arguments(self) -> None:
         responses = [
@@ -978,6 +1115,207 @@ class AgentRuntimeTests(unittest.TestCase):
                 for message in second_request_messages
             )
         )
+
+    def test_agent_continues_when_provider_uses_completed_finish_reason(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Reading the file first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ],
+                'usage': {'prompt_tokens': 8, 'completion_tokens': 3},
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': (
+                                'I have read hello.txt. Next, I will analyze what could be '
+                                'improved in the rest of the codebase.'
+                            ),
+                        },
+                        'finish_reason': 'completed',
+                    }
+                ],
+                'usage': {'prompt_tokens': 7, 'completion_tokens': 6},
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'The test workspace is minimal, so there is nothing else to improve.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ],
+                'usage': {'prompt_tokens': 5, 'completion_tokens': 4},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch(
+                'src.agent.agent_runtime.build_llm_client',
+                side_effect=make_urlopen_side_effect(responses),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze the codebase and tell me what could be improved.')
+        self.assertIn('I have read hello.txt.', result.final_output)
+        self.assertIn('there is nothing else to improve.', result.final_output)
+        self.assertTrue(
+            any(event.get('type') == 'continuation_request' for event in result.events)
+        )
+        self.assertEqual(result.tool_calls, 1)
+
+    def test_agent_stream_continues_when_backend_returns_raw_completed_finish_reason(self) -> None:
+        class RawCompletedStreamingClient(ScriptedLLMClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.stream_calls = 0
+
+            def complete(self, *args, **kwargs):  # type: ignore[override]
+                raise AssertionError('Streaming test should not use complete()')
+
+            def stream(self, *args, **kwargs):  # type: ignore[override]
+                self.stream_calls += 1
+                yield StreamEvent(type='message_start')
+                if self.stream_calls == 1:
+                    yield StreamEvent(
+                        type='tool_call_delta',
+                        tool_call_index=0,
+                        tool_call_id='call_1',
+                        tool_name='read_file',
+                        arguments_delta='{"path": "hello.txt"}',
+                    )
+                    yield StreamEvent(type='usage', usage=UsageStats(input_tokens=8, output_tokens=3))
+                    yield StreamEvent(type='message_stop', finish_reason='tool_calls')
+                    return
+                if self.stream_calls == 2:
+                    yield StreamEvent(
+                        type='content_delta',
+                        delta=(
+                            'I have read hello.txt. Next, I will analyze what could be '
+                            'improved in the rest of the codebase.'
+                        ),
+                    )
+                    yield StreamEvent(type='usage', usage=UsageStats(input_tokens=7, output_tokens=6))
+                    yield StreamEvent(type='message_stop', finish_reason='completed')
+                    return
+                if self.stream_calls == 3:
+                    yield StreamEvent(
+                        type='content_delta',
+                        delta='The test workspace is minimal, so there is nothing else to improve.',
+                    )
+                    yield StreamEvent(type='usage', usage=UsageStats(input_tokens=5, output_tokens=4))
+                    yield StreamEvent(type='message_stop', finish_reason='stop')
+                    return
+                raise AssertionError('Unexpected extra streaming model call')
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            client = RawCompletedStreamingClient()
+            with patch('src.agent.agent_runtime.build_llm_client', return_value=client):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(
+                        cwd=workspace,
+                        stream_model_responses=True,
+                    ),
+                )
+                result = agent.run('Analyze the codebase and tell me what could be improved.')
+        self.assertIn('I have read hello.txt.', result.final_output)
+        self.assertIn('there is nothing else to improve.', result.final_output)
+        self.assertTrue(
+            any(event.get('type') == 'continuation_request' for event in result.events)
+        )
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(client.stream_calls, 3)
+
+    def test_agent_normalizes_raw_completed_finish_reason_from_completion_client(self) -> None:
+        class RawCompletedClient(ScriptedLLMClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.complete_calls = 0
+
+            def complete(self, *args, **kwargs):  # type: ignore[override]
+                self.complete_calls += 1
+                if self.complete_calls == 1:
+                    return AssistantTurn(
+                        content='Reading the file first.',
+                        tool_calls=(
+                            ToolCall(
+                                id='call_1',
+                                name='read_file',
+                                arguments={'path': 'hello.txt'},
+                            ),
+                        ),
+                        finish_reason='tool_calls',
+                        usage=UsageStats(input_tokens=8, output_tokens=3),
+                    )
+                if self.complete_calls == 2:
+                    return AssistantTurn(
+                        content=(
+                            'I have read hello.txt. Next, I will analyze what could be '
+                            'improved in the rest of the codebase.'
+                        ),
+                        finish_reason='completed',
+                        usage=UsageStats(input_tokens=7, output_tokens=6),
+                    )
+                if self.complete_calls == 3:
+                    return AssistantTurn(
+                        content='The test workspace is minimal, so there is nothing else to improve.',
+                        finish_reason='stop',
+                        usage=UsageStats(input_tokens=5, output_tokens=4),
+                    )
+                raise AssertionError('Unexpected extra completion model call')
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            client = RawCompletedClient()
+            with patch('src.agent.agent_runtime.build_llm_client', return_value=client):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze the codebase and tell me what could be improved.')
+        self.assertIn('I have read hello.txt.', result.final_output)
+        self.assertIn('there is nothing else to improve.', result.final_output)
+        self.assertTrue(
+            any(event.get('type') == 'continuation_request' for event in result.events)
+        )
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(client.complete_calls, 3)
 
     def test_agent_records_file_history_for_write_tool(self) -> None:
         responses = [

@@ -29,6 +29,7 @@ from src.agent.agent_prompting import (
     build_system_prompt_parts,
     render_system_prompt,
 )
+from src.agent.prompt_constants import CLAUDE_MODEL_IDS
 from src.agent.agent_session import AgentSessionState
 from src.agent.agent_slash_commands import preprocess_slash_command
 from src.agent.agent_tools import (
@@ -52,7 +53,7 @@ from src.agent.agent_types import (
     UsageStats,
 )
 from src.llm import build_llm_client, resolve_llm_backend
-from src.llm.parsers import LLMBackendError
+from src.llm.parsers import LLMBackendError, coerce_finish_reason
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.integration.plugin_runtime import PluginRuntime
 from src.features.integration.remote_runtime import RemoteRuntime
@@ -1298,6 +1299,13 @@ class LocalCodingAgent:
                 tool_specs,
                 output_schema=self.runtime_config.output_schema,
             )
+            normalized_finish_reason = self._normalize_finish_reason(
+                turn.finish_reason,
+                has_tool_calls=bool(turn.tool_calls),
+                content=turn.content,
+            )
+            if normalized_finish_reason != turn.finish_reason:
+                turn = replace(turn, finish_reason=normalized_finish_reason)
             assistant_tool_calls = tuple(
                 {
                     'id': tool_call.id,
@@ -1316,7 +1324,7 @@ class LocalCodingAgent:
                 turn.content,
                 assistant_tool_calls,
                 message_id=f'assistant_{len(session.messages)}',
-                stop_reason=turn.finish_reason,
+                stop_reason=normalized_finish_reason,
                 usage=turn.usage,
             )
             return turn
@@ -1348,6 +1356,12 @@ class LocalCodingAgent:
             elif event.type == 'message_stop':
                 finish_reason = event.finish_reason
 
+        assistant_message = session.messages[assistant_index]
+        finish_reason = self._normalize_finish_reason(
+            finish_reason,
+            has_tool_calls=bool(assistant_message.tool_calls),
+            content=assistant_message.content,
+        )
         session.finalize_assistant(
             assistant_index,
             finish_reason=finish_reason,
@@ -1396,6 +1410,22 @@ class LocalCodingAgent:
             )
         return tuple(parsed)
 
+    def _normalize_finish_reason(
+        self,
+        finish_reason: str | None,
+        *,
+        has_tool_calls: bool,
+        content: str,
+    ) -> str | None:
+        normalized = coerce_finish_reason(finish_reason)
+        if normalized is not None:
+            return normalized
+        if has_tool_calls:
+            return 'tool_calls'
+        if content.strip():
+            return 'stop'
+        return None
+
     def _should_continue_response(
         self,
         turn: AssistantTurn,
@@ -1407,7 +1437,14 @@ class LocalCodingAgent:
     ) -> bool:
         if self._is_truncated_response(turn):
             return True
-        if turn.finish_reason != 'stop':
+        if (
+            self._normalize_finish_reason(
+                turn.finish_reason,
+                has_tool_calls=bool(turn.tool_calls),
+                content=turn.content,
+            )
+            != 'stop'
+        ):
             return False
         if tool_calls_so_far <= 0 or continuation_count != 1:
             return False
@@ -2370,9 +2407,32 @@ class LocalCodingAgent:
 
         # Agent definition model
         if agent_model and agent_model != 'inherit':
-            return replace(self.model_config, model=agent_model)
+            return replace(
+                self.model_config,
+                model=self._resolve_agent_model_override(agent_model),
+            )
 
         return self.model_config
+
+    def _resolve_agent_model_override(self, agent_model: str) -> str:
+        normalized = agent_model.strip()
+        if not normalized:
+            return self.model_config.model
+
+        canonical_claude_model = CLAUDE_MODEL_IDS.get(normalized.lower())
+        if canonical_claude_model is None:
+            return normalized
+
+        parent_model = self.model_config.model.strip()
+        if not parent_model:
+            return canonical_claude_model
+        if '/' not in parent_model:
+            return canonical_claude_model if 'claude' in parent_model.lower() else parent_model
+
+        provider, _ = parent_model.split('/', 1)
+        if provider.lower() == 'anthropic':
+            return f'{provider}/{canonical_claude_model}'
+        return parent_model
 
     def _filter_tools_for_agent(
         self,

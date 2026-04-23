@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -169,11 +170,7 @@ def execute_tool(
 ) -> ToolExecutionResult:
     tool = tool_registry.get(name)
     if tool is None:
-        return ToolExecutionResult(
-            name=name,
-            ok=False,
-            content=f'Unknown tool: {name}',
-        )
+        return _handle_unknown_tool(name, arguments, context)
     return tool.execute(arguments, context)
 
 
@@ -185,13 +182,10 @@ def execute_tool_streaming(
 ) -> Iterator[ToolStreamUpdate]:
     tool = tool_registry.get(name)
     if tool is None:
+        result = _handle_unknown_tool(name, arguments, context)
         yield ToolStreamUpdate(
             kind='result',
-            result=ToolExecutionResult(
-                name=name,
-                ok=False,
-                content=f'Unknown tool: {name}',
-            ),
+            result=result,
         )
         return
 
@@ -204,6 +198,96 @@ def execute_tool_streaming(
         yield from _stream_static_text_result(result)
         return
     yield ToolStreamUpdate(kind='result', result=result)
+
+
+def _handle_unknown_tool(
+    name: str,
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> ToolExecutionResult:
+    mcp_runtime = context.mcp_runtime
+    if mcp_runtime is not None:
+        matched_server = mcp_runtime.get_server(name)
+        if matched_server is None:
+            try:
+                content, metadata = mcp_runtime.call_tool(
+                    name,
+                    arguments=arguments,
+                    max_chars=context.max_output_chars,
+                )
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                return ToolExecutionResult(
+                    name=name,
+                    ok=False,
+                    content=f'Failed to call MCP tool alias {name}: {exc}',
+                    metadata={
+                        'action': 'mcp_tool_alias',
+                        'error_kind': 'tool_execution_error',
+                    },
+                )
+            else:
+                return ToolExecutionResult(
+                    name=name,
+                    ok=not bool(metadata.get('is_error')),
+                    content=content,
+                    metadata={
+                        'action': 'mcp_tool_alias',
+                        'server_name': metadata.get('server_name'),
+                        'tool_name': metadata.get('tool_name'),
+                        'mcp_is_error': metadata.get('is_error'),
+                    },
+                )
+
+    return ToolExecutionResult(
+        name=name,
+        ok=False,
+        content=_render_unknown_tool_message(name, context),
+        metadata={'error_kind': 'unknown_tool'},
+    )
+
+
+def _render_unknown_tool_message(name: str, context: ToolExecutionContext) -> str:
+    lines = [f'Unknown tool: {name}']
+    suggestions = _suggest_tool_names(name, context)
+    if suggestions:
+        lines.append('Closest available tools: ' + ', '.join(suggestions))
+
+    mcp_runtime = context.mcp_runtime
+    if mcp_runtime is not None:
+        matched_server = mcp_runtime.get_server(name)
+        if matched_server is not None:
+            lines.append(
+                f'`{matched_server.name}` is a configured MCP server, not a direct tool.'
+            )
+            lines.append(
+                'Use `mcp_list_tools` with `{"server": "'
+                + matched_server.name
+                + '"}` to discover its tools, then call `mcp_call_tool` with '
+                + '`{"server": "'
+                + matched_server.name
+                + '", "tool_name": "...", "arguments": {...}}`.'
+            )
+        elif mcp_runtime.servers:
+            lines.append(
+                'If you intended to use an MCP server tool, discover it with `mcp_list_tools` '
+                'and invoke it with `mcp_call_tool`.'
+            )
+
+    if not suggestions:
+        lines.append('Use `list_available_tools` if you are unsure which tools exist in this session.')
+    return '\n'.join(lines)
+
+
+def _suggest_tool_names(name: str, context: ToolExecutionContext) -> list[str]:
+    candidates = sorted((context.tool_registry or {}).keys())
+    suggestions = difflib.get_close_matches(name, candidates, n=5, cutoff=0.45)
+    if context.mcp_runtime is not None and context.mcp_runtime.get_server(name) is not None:
+        for candidate in ('mcp_list_tools', 'mcp_call_tool', 'list_available_tools'):
+            if candidate in candidates and candidate not in suggestions:
+                suggestions.append(candidate)
+    return suggestions[:5]
 
 
 def default_tool_registry() -> dict[str, AgentTool]:

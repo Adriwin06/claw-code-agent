@@ -132,8 +132,21 @@ def coerce_finish_reason(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
-        return value
-    return str(value)
+        normalized = value.strip()
+        if not normalized:
+            return None
+        lowered = normalized.lower()
+        aliases = {
+            'completed': 'stop',
+            'complete': 'stop',
+            'done': 'stop',
+            'end_turn': 'stop',
+            'tool_use': 'tool_calls',
+            'tool_call': 'tool_calls',
+            'tools': 'tool_calls',
+        }
+        return aliases.get(lowered, lowered)
+    return str(value).strip() or None
 
 
 def parse_tool_calls_from_message(
