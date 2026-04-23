@@ -64,6 +64,7 @@ from src.features.collaboration.team_runtime import TeamRuntime
 from src.features.system.tokenizer_runtime import describe_token_counter
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
+from src.agent.runtime_dependencies import AgentRuntimeDependencies
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
@@ -155,6 +156,7 @@ class LocalCodingAgent:
     managed_group_id: str | None = None
     managed_child_index: int | None = None
     managed_label: str | None = None
+    dependencies: AgentRuntimeDependencies | None = None
     plugin_runtime: PluginRuntime | None = None
     hook_policy_runtime: HookPolicyRuntime | None = None
     mcp_runtime: MCPRuntime | None = None
@@ -185,69 +187,42 @@ class LocalCodingAgent:
             self.tool_registry = default_tool_registry()
         if self.agent_manager is None:
             self.agent_manager = AgentManager()
-        if self.plugin_runtime is None:
-            self.plugin_runtime = PluginRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.hook_policy_runtime is None:
-            self.hook_policy_runtime = HookPolicyRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.mcp_runtime is None:
-            self.mcp_runtime = MCPRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.remote_runtime is None:
-            self.remote_runtime = RemoteRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.remote_trigger_runtime is None:
-            self.remote_trigger_runtime = RemoteTriggerRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.search_runtime is None:
-            self.search_runtime = SearchRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.account_runtime is None:
-            self.account_runtime = AccountRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.ask_user_runtime is None:
-            self.ask_user_runtime = AskUserRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.config_runtime is None:
-            self.config_runtime = ConfigRuntime.from_workspace(self.runtime_config.cwd)
-        if self.lsp_runtime is None:
-            self.lsp_runtime = LSPRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.plan_runtime is None:
-            self.plan_runtime = PlanRuntime.from_workspace(self.runtime_config.cwd)
-        if self.task_runtime is None:
-            self.task_runtime = TaskRuntime.from_workspace(self.runtime_config.cwd)
-        if self.team_runtime is None:
-            self.team_runtime = TeamRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.workflow_runtime is None:
-            self.workflow_runtime = WorkflowRuntime.from_workspace(
-                self.runtime_config.cwd,
-                tuple(str(path) for path in self.runtime_config.additional_working_directories),
-            )
-        if self.worktree_runtime is None:
-            self.worktree_runtime = WorktreeRuntime.from_workspace(self.runtime_config.cwd)
+        dependencies = self.dependencies or AgentRuntimeDependencies.from_runtime_config(
+            self.runtime_config
+        )
+        dependencies = dependencies.with_overrides(
+            plugin_runtime=self.plugin_runtime,
+            hook_policy_runtime=self.hook_policy_runtime,
+            mcp_runtime=self.mcp_runtime,
+            remote_runtime=self.remote_runtime,
+            remote_trigger_runtime=self.remote_trigger_runtime,
+            search_runtime=self.search_runtime,
+            account_runtime=self.account_runtime,
+            ask_user_runtime=self.ask_user_runtime,
+            config_runtime=self.config_runtime,
+            lsp_runtime=self.lsp_runtime,
+            plan_runtime=self.plan_runtime,
+            task_runtime=self.task_runtime,
+            team_runtime=self.team_runtime,
+            workflow_runtime=self.workflow_runtime,
+            worktree_runtime=self.worktree_runtime,
+        )
+        self.dependencies = dependencies
+        self.plugin_runtime = dependencies.plugin_runtime
+        self.hook_policy_runtime = dependencies.hook_policy_runtime
+        self.mcp_runtime = dependencies.mcp_runtime
+        self.remote_runtime = dependencies.remote_runtime
+        self.remote_trigger_runtime = dependencies.remote_trigger_runtime
+        self.search_runtime = dependencies.search_runtime
+        self.account_runtime = dependencies.account_runtime
+        self.ask_user_runtime = dependencies.ask_user_runtime
+        self.config_runtime = dependencies.config_runtime
+        self.lsp_runtime = dependencies.lsp_runtime
+        self.plan_runtime = dependencies.plan_runtime
+        self.task_runtime = dependencies.task_runtime
+        self.team_runtime = dependencies.team_runtime
+        self.workflow_runtime = dependencies.workflow_runtime
+        self.worktree_runtime = dependencies.worktree_runtime
         self.runtime_config = self._apply_hook_policy_budget_overrides(self.runtime_config)
         registry = dict(self.tool_registry)
         plugin_tools = self.plugin_runtime.register_tool_aliases(registry)
@@ -261,25 +236,13 @@ class LocalCodingAgent:
         self.client = build_llm_client(self.model_config, backend=self.llm_backend)
         self.tool_context = build_tool_context(
             self.runtime_config,
+            dependencies=self.dependencies,
             tool_registry=self.tool_registry,
             extra_env=(
                 self.hook_policy_runtime.safe_env()
                 if self.hook_policy_runtime is not None
                 else None
             ),
-            search_runtime=self.search_runtime,
-            account_runtime=self.account_runtime,
-            ask_user_runtime=self.ask_user_runtime,
-            config_runtime=self.config_runtime,
-            lsp_runtime=self.lsp_runtime,
-            mcp_runtime=self.mcp_runtime,
-            remote_runtime=self.remote_runtime,
-            remote_trigger_runtime=self.remote_trigger_runtime,
-            plan_runtime=self.plan_runtime,
-            task_runtime=self.task_runtime,
-            team_runtime=self.team_runtime,
-            workflow_runtime=self.workflow_runtime,
-            worktree_runtime=self.worktree_runtime,
         )
 
     def set_model(self, model: str) -> None:
@@ -300,6 +263,7 @@ class LocalCodingAgent:
             self.runtime_config,
             self.model_config,
             scratchpad_directory=scratchpad_directory,
+            dependencies=self.dependencies,
         )
 
     def build_system_prompt_parts(

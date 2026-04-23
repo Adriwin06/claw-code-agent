@@ -24,7 +24,7 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_cli_summary_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'summary'],
+            [sys.executable, '-m', 'src.main', 'dev', 'summary'],
             check=True,
             capture_output=True,
             text=True,
@@ -33,7 +33,7 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_parity_audit_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'parity-audit'],
+            [sys.executable, '-m', 'src.main', 'dev', 'parity-audit'],
             check=True,
             capture_output=True,
             text=True,
@@ -54,13 +54,13 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_commands_and_tools_cli_run(self) -> None:
         commands_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'commands', '--limit', '5', '--query', 'review'],
+            [sys.executable, '-m', 'src.main', 'dev', 'commands', '--limit', '5', '--query', 'review'],
             check=True,
             capture_output=True,
             text=True,
         )
         tools_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'tools', '--limit', '5', '--query', 'MCP'],
+            [sys.executable, '-m', 'src.main', 'dev', 'tools', '--limit', '5', '--query', 'MCP'],
             check=True,
             capture_output=True,
             text=True,
@@ -70,19 +70,19 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_route_and_show_entry_cli_run(self) -> None:
         route_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'route', 'review MCP tool', '--limit', '5'],
+            [sys.executable, '-m', 'src.main', 'dev', 'route', 'review MCP tool', '--limit', '5'],
             check=True,
             capture_output=True,
             text=True,
         )
         show_command = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'show-command', 'review'],
+            [sys.executable, '-m', 'src.main', 'dev', 'show-command', 'review'],
             check=True,
             capture_output=True,
             text=True,
         )
         show_tool = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'show-tool', 'MCPTool'],
+            [sys.executable, '-m', 'src.main', 'dev', 'show-tool', 'MCPTool'],
             check=True,
             capture_output=True,
             text=True,
@@ -93,7 +93,7 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_bootstrap_cli_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'bootstrap', 'review MCP tool', '--limit', '5'],
+            [sys.executable, '-m', 'src.main', 'dev', 'bootstrap', 'review MCP tool', '--limit', '5'],
             check=True,
             capture_output=True,
             text=True,
@@ -112,13 +112,13 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_exec_command_and_tool_cli_run(self) -> None:
         command_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'exec-command', 'review', 'inspect security review'],
+            [sys.executable, '-m', 'src.main', 'dev', 'exec-command', 'review', 'inspect security review'],
             check=True,
             capture_output=True,
             text=True,
         )
         tool_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'exec-tool', 'MCPTool', 'fetch resource list'],
+            [sys.executable, '-m', 'src.main', 'dev', 'exec-tool', 'MCPTool', 'fetch resource list'],
             check=True,
             capture_output=True,
             text=True,
@@ -128,19 +128,19 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_setup_report_and_registry_filters_run(self) -> None:
         setup_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'setup-report'],
+            [sys.executable, '-m', 'src.main', 'dev', 'setup-report'],
             check=True,
             capture_output=True,
             text=True,
         )
         command_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'commands', '--limit', '5', '--no-plugin-commands'],
+            [sys.executable, '-m', 'src.main', 'dev', 'commands', '--limit', '5', '--no-plugin-commands'],
             check=True,
             capture_output=True,
             text=True,
         )
         tool_result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'tools', '--limit', '5', '--simple-mode', '--no-mcp'],
+            [sys.executable, '-m', 'src.main', 'dev', 'tools', '--limit', '5', '--simple-mode', '--no-mcp'],
             check=True,
             capture_output=True,
             text=True,
@@ -155,7 +155,7 @@ class PortingWorkspaceTests(unittest.TestCase):
         session = PortRuntime().bootstrap_session('review MCP tool', limit=5)
         session_id = Path(session.persisted_session_path).stem
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'load-session', session_id],
+            [sys.executable, '-m', 'src.main', 'dev', 'load-session', session_id],
             check=True,
             capture_output=True,
             text=True,
@@ -165,7 +165,7 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_tool_permission_filtering_cli_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'tools', '--limit', '10', '--deny-prefix', 'mcp'],
+            [sys.executable, '-m', 'src.main', 'dev', 'tools', '--limit', '10', '--deny-prefix', 'mcp'],
             check=True,
             capture_output=True,
             text=True,
@@ -175,7 +175,7 @@ class PortingWorkspaceTests(unittest.TestCase):
 
     def test_turn_loop_cli_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'turn-loop', 'review MCP tool', '--max-turns', '2', '--structured-output'],
+            [sys.executable, '-m', 'src.main', 'dev', 'turn-loop', 'review MCP tool', '--max-turns', '2', '--structured-output'],
             check=True,
             capture_output=True,
             text=True,
@@ -184,16 +184,16 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('stop_reason=', result.stdout)
 
     def test_remote_mode_clis_run(self) -> None:
-        remote_result = subprocess.run([sys.executable, '-m', 'src.main', 'remote-mode', 'workspace'], check=True, capture_output=True, text=True)
-        ssh_result = subprocess.run([sys.executable, '-m', 'src.main', 'ssh-mode', 'workspace'], check=True, capture_output=True, text=True)
-        teleport_result = subprocess.run([sys.executable, '-m', 'src.main', 'teleport-mode', 'workspace'], check=True, capture_output=True, text=True)
+        remote_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'remote-mode', 'workspace'], check=True, capture_output=True, text=True)
+        ssh_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'ssh-mode', 'workspace'], check=True, capture_output=True, text=True)
+        teleport_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'teleport-mode', 'workspace'], check=True, capture_output=True, text=True)
         self.assertIn('mode=remote', remote_result.stdout)
         self.assertIn('mode=ssh', ssh_result.stdout)
         self.assertIn('mode=teleport', teleport_result.stdout)
 
     def test_flush_transcript_cli_runs(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'flush-transcript', 'review MCP tool'],
+            [sys.executable, '-m', 'src.main', 'dev', 'flush-transcript', 'review MCP tool'],
             check=True,
             capture_output=True,
             text=True,
@@ -201,14 +201,14 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('flushed=True', result.stdout)
 
     def test_command_graph_and_tool_pool_cli_run(self) -> None:
-        command_graph = subprocess.run([sys.executable, '-m', 'src.main', 'command-graph'], check=True, capture_output=True, text=True)
-        tool_pool = subprocess.run([sys.executable, '-m', 'src.main', 'tool-pool'], check=True, capture_output=True, text=True)
+        command_graph = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'command-graph'], check=True, capture_output=True, text=True)
+        tool_pool = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'tool-pool'], check=True, capture_output=True, text=True)
         self.assertIn('Command Graph', command_graph.stdout)
         self.assertIn('Tool Pool', tool_pool.stdout)
 
     def test_setup_report_mentions_deferred_init(self) -> None:
         result = subprocess.run(
-            [sys.executable, '-m', 'src.main', 'setup-report'],
+            [sys.executable, '-m', 'src.main', 'dev', 'setup-report'],
             check=True,
             capture_output=True,
             text=True,
@@ -226,9 +226,9 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('Mirrored tool', registry.tool('MCPTool').execute('fetch mcp resources'))
 
     def test_bootstrap_graph_and_direct_modes_run(self) -> None:
-        graph_result = subprocess.run([sys.executable, '-m', 'src.main', 'bootstrap-graph'], check=True, capture_output=True, text=True)
-        direct_result = subprocess.run([sys.executable, '-m', 'src.main', 'direct-connect-mode', 'workspace'], check=True, capture_output=True, text=True)
-        deep_link_result = subprocess.run([sys.executable, '-m', 'src.main', 'deep-link-mode', 'workspace'], check=True, capture_output=True, text=True)
+        graph_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'bootstrap-graph'], check=True, capture_output=True, text=True)
+        direct_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'direct-connect-mode', 'workspace'], check=True, capture_output=True, text=True)
+        deep_link_result = subprocess.run([sys.executable, '-m', 'src.main', 'dev', 'deep-link-mode', 'workspace'], check=True, capture_output=True, text=True)
         self.assertIn('Bootstrap Graph', graph_result.stdout)
         self.assertIn('mode=direct-connect', direct_result.stdout)
         self.assertIn('mode=deep-link', deep_link_result.stdout)

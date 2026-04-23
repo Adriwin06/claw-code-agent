@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.agent.agent_plugin_cache import load_plugin_cache_summary
 from src.features.system.account_runtime import AccountRuntime
@@ -25,6 +26,9 @@ from src.features.collaboration.team_runtime import TeamRuntime
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
 from src.agent.agent_types import AgentRuntimeConfig
+
+if TYPE_CHECKING:
+    from src.agent.runtime_dependencies import AgentRuntimeDependencies
 
 MAX_STATUS_CHARS = 2000
 MAX_MEMORY_CHARACTER_COUNT = 40000
@@ -72,6 +76,7 @@ def build_context_snapshot(
     runtime_config: AgentRuntimeConfig,
     *,
     scratchpad_directory: Path | None = None,
+    dependencies: 'AgentRuntimeDependencies | None' = None,
 ) -> AgentContextSnapshot:
     cwd = runtime_config.cwd.resolve()
     additional_dirs = tuple(
@@ -94,6 +99,7 @@ def build_context_snapshot(
             additional_dirs,
             runtime_config.disable_claude_md_discovery,
             scratchpad_directory=scratchpad_directory,
+            dependencies=dependencies,
         ),
         system_context=get_system_context(cwd, scratchpad_directory=scratchpad_directory),
     )
@@ -117,10 +123,19 @@ def get_user_context(
     additional_working_directories: tuple[str, ...] = (),
     disable_claude_md_discovery: bool = False,
     scratchpad_directory: Path | None = None,
+    dependencies: 'AgentRuntimeDependencies | None' = None,
 ) -> dict[str, str]:
     normalized_dirs = tuple(
         str(Path(path).resolve()) for path in additional_working_directories
     )
+    if dependencies is not None:
+        return _build_user_context(
+            Path(cwd).resolve(),
+            normalized_dirs,
+            disable_claude_md_discovery,
+            str(scratchpad_directory.resolve()) if scratchpad_directory is not None else '',
+            dependencies=dependencies,
+        )
     return dict(
         _get_user_context_cached(
             str(cwd.resolve()),
@@ -191,6 +206,22 @@ def _get_user_context_cached(
     disable_claude_md_discovery: bool,
     scratchpad_directory: str,
 ) -> dict[str, str]:
+    return _build_user_context(
+        Path(cwd),
+        additional_working_directories,
+        disable_claude_md_discovery,
+        scratchpad_directory,
+    )
+
+
+def _build_user_context(
+    cwd: Path,
+    additional_working_directories: tuple[str, ...],
+    disable_claude_md_discovery: bool,
+    scratchpad_directory: str,
+    *,
+    dependencies: 'AgentRuntimeDependencies | None' = None,
+) -> dict[str, str]:
     context: dict[str, str] = {
         'currentDate': f"Today's date is {date.today().isoformat()}.",
     }
@@ -208,10 +239,18 @@ def _get_user_context_cached(
     plugin_cache = load_plugin_cache_summary(Path(cwd), additional_working_directories)
     if plugin_cache:
         context['pluginCache'] = plugin_cache
-    plugin_runtime = PluginRuntime.from_workspace(Path(cwd), additional_working_directories)
+    plugin_runtime = (
+        dependencies.plugin_runtime
+        if dependencies is not None
+        else PluginRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if plugin_runtime.manifests:
         context['pluginRuntime'] = plugin_runtime.render_summary()
-    hook_policy_runtime = HookPolicyRuntime.from_workspace(Path(cwd), additional_working_directories)
+    hook_policy_runtime = (
+        dependencies.hook_policy_runtime
+        if dependencies is not None
+        else HookPolicyRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if hook_policy_runtime.manifests:
         context['hookPolicy'] = hook_policy_runtime.render_summary()
         managed_settings = hook_policy_runtime.managed_settings()
@@ -231,46 +270,98 @@ def _get_user_context_cached(
             if hook_policy_runtime.is_trusted()
             else 'Workspace trust mode: untrusted'
         )
-    mcp_runtime = MCPRuntime.from_workspace(Path(cwd), additional_working_directories)
+    mcp_runtime = (
+        dependencies.mcp_runtime
+        if dependencies is not None
+        else MCPRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if mcp_runtime.resources or mcp_runtime.servers:
         context['mcpRuntime'] = mcp_runtime.render_summary()
-    remote_runtime = RemoteRuntime.from_workspace(Path(cwd), additional_working_directories)
+    remote_runtime = (
+        dependencies.remote_runtime
+        if dependencies is not None
+        else RemoteRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if remote_runtime.has_remote_config():
         context['remoteRuntime'] = remote_runtime.render_summary()
-    remote_trigger_runtime = RemoteTriggerRuntime.from_workspace(
-        Path(cwd),
-        additional_working_directories,
+    remote_trigger_runtime = (
+        dependencies.remote_trigger_runtime
+        if dependencies is not None
+        else RemoteTriggerRuntime.from_workspace(
+            Path(cwd),
+            additional_working_directories,
+        )
     )
     if remote_trigger_runtime.has_state():
         context['remoteTriggerRuntime'] = remote_trigger_runtime.render_summary()
-    search_runtime = SearchRuntime.from_workspace(Path(cwd), additional_working_directories)
+    search_runtime = (
+        dependencies.search_runtime
+        if dependencies is not None
+        else SearchRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if search_runtime.has_search_runtime():
         context['searchRuntime'] = search_runtime.render_summary()
-    account_runtime = AccountRuntime.from_workspace(Path(cwd), additional_working_directories)
+    account_runtime = (
+        dependencies.account_runtime
+        if dependencies is not None
+        else AccountRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if account_runtime.has_account_state():
         context['accountRuntime'] = account_runtime.render_summary()
-    ask_user_runtime = AskUserRuntime.from_workspace(Path(cwd), additional_working_directories)
+    ask_user_runtime = (
+        dependencies.ask_user_runtime
+        if dependencies is not None
+        else AskUserRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if ask_user_runtime.has_state():
         context['askUserRuntime'] = ask_user_runtime.render_summary()
-    config_runtime = ConfigRuntime.from_workspace(Path(cwd))
+    config_runtime = (
+        dependencies.config_runtime
+        if dependencies is not None
+        else ConfigRuntime.from_workspace(Path(cwd))
+    )
     if config_runtime.has_config():
         context['configRuntime'] = config_runtime.render_summary()
-    lsp_runtime = LSPRuntime.from_workspace(Path(cwd), additional_working_directories)
+    lsp_runtime = (
+        dependencies.lsp_runtime
+        if dependencies is not None
+        else LSPRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if lsp_runtime.has_lsp_support():
         context['lspRuntime'] = lsp_runtime.render_summary()
-    plan_runtime = PlanRuntime.from_workspace(Path(cwd))
+    plan_runtime = (
+        dependencies.plan_runtime
+        if dependencies is not None
+        else PlanRuntime.from_workspace(Path(cwd))
+    )
     if plan_runtime.steps:
         context['planRuntime'] = plan_runtime.render_summary()
-    task_runtime = TaskRuntime.from_workspace(Path(cwd))
+    task_runtime = (
+        dependencies.task_runtime
+        if dependencies is not None
+        else TaskRuntime.from_workspace(Path(cwd))
+    )
     if task_runtime.tasks:
         context['taskRuntime'] = task_runtime.render_summary()
-    team_runtime = TeamRuntime.from_workspace(Path(cwd), additional_working_directories)
+    team_runtime = (
+        dependencies.team_runtime
+        if dependencies is not None
+        else TeamRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if team_runtime.has_team_state():
         context['teamRuntime'] = team_runtime.render_summary()
-    workflow_runtime = WorkflowRuntime.from_workspace(Path(cwd), additional_working_directories)
+    workflow_runtime = (
+        dependencies.workflow_runtime
+        if dependencies is not None
+        else WorkflowRuntime.from_workspace(Path(cwd), additional_working_directories)
+    )
     if workflow_runtime.has_workflows():
         context['workflowRuntime'] = workflow_runtime.render_summary()
-    worktree_runtime = WorktreeRuntime.from_workspace(Path(cwd))
+    worktree_runtime = (
+        dependencies.worktree_runtime
+        if dependencies is not None
+        else WorktreeRuntime.from_workspace(Path(cwd))
+    )
     if worktree_runtime.repo_root is not None or worktree_runtime.has_state():
         context['worktreeRuntime'] = worktree_runtime.render_summary()
     return context

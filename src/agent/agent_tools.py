@@ -4,9 +4,12 @@ import difflib
 import hashlib
 import json
 import os
+import queue
 import re
-import selectors
+import shlex
+import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Union
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
 
 if TYPE_CHECKING:
+    from src.agent.runtime_dependencies import AgentRuntimeDependencies
     from src.features.system.account_runtime import AccountRuntime
     from src.features.collaboration.ask_user_runtime import AskUserRuntime
     from src.features.system.config_runtime import ConfigRuntime
@@ -123,6 +127,7 @@ class ToolStreamUpdate:
 def build_tool_context(
     config: AgentRuntimeConfig,
     *,
+    dependencies: 'AgentRuntimeDependencies | None' = None,
     extra_env: dict[str, str] | None = None,
     tool_registry: dict[str, AgentTool] | None = None,
     search_runtime: 'SearchRuntime | None' = None,
@@ -139,6 +144,22 @@ def build_tool_context(
     workflow_runtime: 'WorkflowRuntime | None' = None,
     worktree_runtime: 'WorktreeRuntime | None' = None,
 ) -> ToolExecutionContext:
+    if dependencies is not None:
+        search_runtime = search_runtime or dependencies.search_runtime
+        account_runtime = account_runtime or dependencies.account_runtime
+        ask_user_runtime = ask_user_runtime or dependencies.ask_user_runtime
+        config_runtime = config_runtime or dependencies.config_runtime
+        lsp_runtime = lsp_runtime or dependencies.lsp_runtime
+        mcp_runtime = mcp_runtime or dependencies.mcp_runtime
+        remote_runtime = remote_runtime or dependencies.remote_runtime
+        remote_trigger_runtime = (
+            remote_trigger_runtime or dependencies.remote_trigger_runtime
+        )
+        plan_runtime = plan_runtime or dependencies.plan_runtime
+        task_runtime = task_runtime or dependencies.task_runtime
+        team_runtime = team_runtime or dependencies.team_runtime
+        workflow_runtime = workflow_runtime or dependencies.workflow_runtime
+        worktree_runtime = worktree_runtime or dependencies.worktree_runtime
     return ToolExecutionContext(
         root=config.cwd.resolve(),
         command_timeout_seconds=config.command_timeout_seconds,
@@ -1692,11 +1713,15 @@ def _grep_search(arguments: dict[str, Any], context: ToolExecutionContext) -> st
 def _run_bash(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     command = _require_string(arguments, 'command')
     _ensure_shell_allowed(command, context)
-    completed = subprocess.run(
+    bash_command, working_directory = _build_bash_invocation(
         command,
-        shell=True,
-        executable='/bin/bash',
-        cwd=context.root,
+        context.root,
+        extra_env=context.extra_env,
+    )
+    completed = subprocess.run(
+        bash_command,
+        shell=False,
+        cwd=working_directory,
         capture_output=True,
         text=True,
         timeout=context.command_timeout_seconds,
@@ -3017,11 +3042,15 @@ def _stream_bash(
     try:
         command = _require_string(arguments, 'command')
         _ensure_shell_allowed(command, context)
-        process = subprocess.Popen(
+        bash_command, working_directory = _build_bash_invocation(
             command,
-            shell=True,
-            executable='/bin/bash',
-            cwd=context.root,
+            context.root,
+            extra_env=context.extra_env,
+        )
+        process = subprocess.Popen(
+            bash_command,
+            shell=False,
+            cwd=working_directory,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -3035,19 +3064,28 @@ def _stream_bash(
         )
         return
 
-    selector = selectors.DefaultSelector()
+    stream_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
+    reader_threads: list[threading.Thread] = []
+    stream_count = 0
     if process.stdout is not None:
-        selector.register(process.stdout, selectors.EVENT_READ, data='stdout')
+        stream_count += 1
+        reader_threads.append(
+            _start_stream_reader(process.stdout, 'stdout', stream_queue)
+        )
     if process.stderr is not None:
-        selector.register(process.stderr, selectors.EVENT_READ, data='stderr')
+        stream_count += 1
+        reader_threads.append(
+            _start_stream_reader(process.stderr, 'stderr', stream_queue)
+        )
 
     deadline = time.monotonic() + context.command_timeout_seconds
     timeout_error: str | None = None
+    closed_streams = 0
 
     try:
-        while selector.get_map():
+        while closed_streams < stream_count:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timeout_error = (
@@ -3055,37 +3093,34 @@ def _stream_bash(
                 )
                 process.kill()
                 break
-            events = selector.select(timeout=min(remaining, 0.1))
-            if not events and process.poll() is not None:
-                _drain_registered_streams(selector, stdout_chunks, stderr_chunks)
-                break
-            for key, _ in events:
-                stream_name = str(key.data)
-                line = key.fileobj.readline()
-                if line == '':
-                    try:
-                        selector.unregister(key.fileobj)
-                    except (KeyError, ValueError, OSError):
-                        pass
-                    try:
-                        key.fileobj.close()
-                    except OSError:
-                        pass
-                    continue
-                if stream_name == 'stdout':
-                    stdout_chunks.append(line)
-                else:
-                    stderr_chunks.append(line)
-                yield ToolStreamUpdate(
-                    kind='delta',
-                    content=line,
-                    stream=stream_name,
-                )
+            try:
+                stream_name, line = stream_queue.get(timeout=min(remaining, 0.1))
+            except queue.Empty:
+                if process.poll() is not None:
+                    break
+                continue
+            if line is None:
+                closed_streams += 1
+                continue
+            if stream_name == 'stdout':
+                stdout_chunks.append(line)
+            else:
+                stderr_chunks.append(line)
+            yield ToolStreamUpdate(
+                kind='delta',
+                content=line,
+                stream=stream_name,
+            )
     finally:
-        try:
-            selector.close()
-        except OSError:
-            pass
+        for thread in reader_threads:
+            thread.join(timeout=0.2)
+        for stream in (process.stdout, process.stderr):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except OSError:
+                pass
 
     exit_code = process.wait()
     if timeout_error is not None:
@@ -3389,40 +3424,6 @@ def _plan_mutation_metadata(
     return payload
 
 
-def _drain_registered_streams(
-    selector: selectors.BaseSelector,
-    stdout_chunks: list[str],
-    stderr_chunks: list[str],
-) -> None:
-    for key in list(selector.get_map().values()):
-        try:
-            remainder = key.fileobj.read()
-        except OSError:
-            remainder = ''
-        if not remainder:
-            try:
-                selector.unregister(key.fileobj)
-            except (KeyError, ValueError, OSError):
-                pass
-            try:
-                key.fileobj.close()
-            except OSError:
-                pass
-            continue
-        if key.data == 'stdout':
-            stdout_chunks.append(remainder)
-        else:
-            stderr_chunks.append(remainder)
-        try:
-            selector.unregister(key.fileobj)
-        except (KeyError, ValueError, OSError):
-            pass
-        try:
-            key.fileobj.close()
-        except OSError:
-            pass
-
-
 _SENSITIVE_ENV_KEYWORDS = (
     'SECRET',
     'TOKEN',
@@ -3448,6 +3449,87 @@ def _build_subprocess_env(context: ToolExecutionContext) -> dict[str, str]:
     }
     env.update(context.extra_env)
     return env
+
+
+def _build_bash_invocation(
+    command: str,
+    cwd: Path,
+    *,
+    extra_env: dict[str, str],
+) -> tuple[list[str], Path | None]:
+    executable = _resolve_bash_executable()
+    script_lines: list[str] = []
+    if _is_wsl_bash(executable):
+        wsl_cwd = _to_wsl_path(cwd)
+        script_lines.append(f'cd {shlex.quote(wsl_cwd)}')
+        working_directory = None
+        command = _materialize_bash_env_references(command, extra_env)
+    else:
+        working_directory = cwd
+    for key, value in sorted(extra_env.items()):
+        script_lines.append(f'export {key}={shlex.quote(value)}')
+    script_lines.append(command)
+    return [executable, '-lc', '; '.join(script_lines)], working_directory
+
+
+def _resolve_bash_executable() -> str:
+    resolved = shutil.which('bash')
+    if isinstance(resolved, str) and resolved.strip():
+        return resolved
+    if os.path.exists('/bin/bash'):
+        return '/bin/bash'
+    raise ToolExecutionError('bash executable was not found on this system')
+
+
+def _is_wsl_bash(executable: str) -> bool:
+    normalized = executable.replace('/', '\\').lower()
+    return normalized.endswith('\\bash.exe') and (
+        '\\windows\\system32\\' in normalized or '\\windowsapps\\' in normalized
+    )
+
+
+def _to_wsl_path(path: Path) -> str:
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(':').lower()
+    if drive:
+        tail = resolved.as_posix().split(':', 1)[1].lstrip('/')
+        return f'/mnt/{drive}/{tail}'
+    return resolved.as_posix()
+
+
+def _materialize_bash_env_references(
+    command: str,
+    extra_env: dict[str, str],
+) -> str:
+    rendered = command
+    for key, value in sorted(extra_env.items(), key=lambda item: len(item[0]), reverse=True):
+        rendered = re.sub(rf'\$\{{{re.escape(key)}\}}', value, rendered)
+        rendered = re.sub(rf'\${re.escape(key)}\b', value, rendered)
+    return rendered
+
+
+def _start_stream_reader(
+    stream,
+    stream_name: str,
+    stream_queue: 'queue.Queue[tuple[str, str | None]]',
+) -> threading.Thread:
+    def _pump() -> None:
+        try:
+            while True:
+                line = stream.readline()
+                if line == '':
+                    break
+                stream_queue.put((stream_name, line))
+        finally:
+            stream_queue.put((stream_name, None))
+
+    thread = threading.Thread(
+        target=_pump,
+        daemon=True,
+        name=f'bash-{stream_name}-reader',
+    )
+    thread.start()
+    return thread
 
 
 def _stream_static_text_result(

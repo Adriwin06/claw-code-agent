@@ -735,10 +735,10 @@ python3 -m src.main agent "/agents show reviewer" --cwd .
 ### Utility Commands
 
 ```bash
-python3 -m src.main summary            # Workspace summary
-python3 -m src.main manifest           # Workspace manifest
-python3 -m src.main commands --limit 10 # Command inventory
-python3 -m src.main tools --limit 10    # Tool inventory
+python3 -m src.main dev summary             # Workspace summary
+python3 -m src.main dev manifest            # Workspace manifest
+python3 -m src.main dev commands --limit 10 # Command inventory
+python3 -m src.main dev tools --limit 10    # Tool inventory
 ```
 
 ---

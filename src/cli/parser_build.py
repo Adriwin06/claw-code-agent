@@ -142,7 +142,6 @@ def _hide_suppressed_subparser_actions(subparsers) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Local coding agent with runtime and developer utilities')
     subparsers = parser.add_subparsers(dest='command', required=True)
-    _add_internal_surface_parsers(subparsers, hidden=True)
 
     doctor_parser = subparsers.add_parser(
         'doctor',

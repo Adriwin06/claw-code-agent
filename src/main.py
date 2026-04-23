@@ -27,10 +27,11 @@ def _detect_workspace_cwd(argv: Sequence[str]) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv_list = list(argv) if argv is not None else sys.argv[1:]
-    load_workspace_env(_detect_workspace_cwd(argv_list))
+    detected_cwd = _detect_workspace_cwd(argv_list)
+    load_workspace_env(detected_cwd)
     parser = build_parser()
     args = parser.parse_args(argv_list)
-    load_workspace_env(Path(args.cwd).resolve())
+    load_workspace_env(Path(getattr(args, 'cwd', detected_cwd)).resolve())
     return dispatch_main_command(args, parser=parser)
 
 

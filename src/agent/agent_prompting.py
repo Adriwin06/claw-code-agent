@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.agent.agent_context import build_context_snapshot
 from src.agent.agent_tools import AgentTool
 from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
 from src.agent.builtin_agents import AgentDefinition, format_agent_listing
+
+if TYPE_CHECKING:
+    from src.agent.runtime_dependencies import AgentRuntimeDependencies
 
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
@@ -32,6 +36,7 @@ def build_prompt_context(
     model_config: ModelConfig,
     additional_working_directories: tuple[str, ...] = (),
     scratchpad_directory: Path | None = None,
+    dependencies: 'AgentRuntimeDependencies | None' = None,
 ) -> PromptContext:
     merged_directories = tuple(runtime_config.additional_working_directories)
     for raw_path in additional_working_directories:
@@ -45,6 +50,7 @@ def build_prompt_context(
     snapshot = build_context_snapshot(
         context_runtime,
         scratchpad_directory=scratchpad_directory,
+        dependencies=dependencies,
     )
     return PromptContext(
         cwd=snapshot.cwd,

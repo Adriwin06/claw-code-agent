@@ -136,57 +136,57 @@ These commands do not depend on the live model backend.
 ### 3.1 Summary and audit commands
 
 ```bash
-python3 -m src.main summary
-python3 -m src.main manifest
-python3 -m src.main parity-audit
-python3 -m src.main setup-report
-python3 -m src.main command-graph
-python3 -m src.main tool-pool
-python3 -m src.main bootstrap-graph
+python3 -m src.main dev summary
+python3 -m src.main dev manifest
+python3 -m src.main dev parity-audit
+python3 -m src.main dev setup-report
+python3 -m src.main dev command-graph
+python3 -m src.main dev tool-pool
+python3 -m src.main dev bootstrap-graph
 ```
 
 ### 3.2 Inventory indexes
 
 ```bash
-python3 -m src.main subsystems --limit 20
-python3 -m src.main commands --limit 10 --query review
-python3 -m src.main commands --limit 10 --no-plugin-commands
-python3 -m src.main commands --limit 10 --no-skill-commands
-python3 -m src.main tools --limit 10 --query MCP
-python3 -m src.main tools --limit 10 --simple-mode
-python3 -m src.main tools --limit 10 --no-mcp
-python3 -m src.main tools --limit 10 --deny-prefix mcp
-python3 -m src.main tools --limit 10 --deny-tool BashTool
+python3 -m src.main dev subsystems --limit 20
+python3 -m src.main dev commands --limit 10 --query review
+python3 -m src.main dev commands --limit 10 --no-plugin-commands
+python3 -m src.main dev commands --limit 10 --no-skill-commands
+python3 -m src.main dev tools --limit 10 --query MCP
+python3 -m src.main dev tools --limit 10 --simple-mode
+python3 -m src.main dev tools --limit 10 --no-mcp
+python3 -m src.main dev tools --limit 10 --deny-prefix mcp
+python3 -m src.main dev tools --limit 10 --deny-tool BashTool
 ```
 
 ### 3.3 Show exact mirrored entries
 
 ```bash
-python3 -m src.main show-command review
-python3 -m src.main show-tool MCPTool
+python3 -m src.main dev show-command review
+python3 -m src.main dev show-tool MCPTool
 ```
 
 ### 3.4 Route and bootstrap reports
 
 ```bash
-python3 -m src.main route "review MCP tool" --limit 5
-python3 -m src.main bootstrap "review MCP tool" --limit 5
-python3 -m src.main turn-loop "review MCP tool" --limit 5 --max-turns 2
-python3 -m src.main turn-loop "review MCP tool" --limit 5 --max-turns 2 --structured-output
+python3 -m src.main dev route "review MCP tool" --limit 5
+python3 -m src.main dev bootstrap "review MCP tool" --limit 5
+python3 -m src.main dev turn-loop "review MCP tool" --limit 5 --max-turns 2
+python3 -m src.main dev turn-loop "review MCP tool" --limit 5 --max-turns 2 --structured-output
 ```
 
 ### 3.5 Mirrored execution shims
 
 ```bash
-python3 -m src.main exec-command review "inspect security review"
-python3 -m src.main exec-tool MCPTool "fetch resource list"
+python3 -m src.main dev exec-command review "inspect security review"
+python3 -m src.main dev exec-tool MCPTool "fetch resource list"
 ```
 
 ### 3.6 Flush and load mirrored sessions
 
 ```bash
-python3 -m src.main flush-transcript "temporary mirrored transcript"
-python3 -m src.main load-session <session-id>
+python3 -m src.main dev flush-transcript "temporary mirrored transcript"
+python3 -m src.main dev load-session <session-id>
 ```
 
 ## 4. Prepare Local Test Workspaces
@@ -1850,12 +1850,12 @@ Look for:
 ### 20.5 Query-engine style helper commands
 
 ```bash
-python3 -m src.main summary
-python3 -m src.main manifest
-python3 -m src.main route "inspect the runtime and tools" --limit 10
-python3 -m src.main bootstrap "inspect the runtime and tools" --limit 10
-python3 -m src.main turn-loop "inspect the runtime and tools" --limit 5 --max-turns 3
-python3 -m src.main turn-loop "inspect the runtime and tools" --limit 5 --max-turns 3 --structured-output
+python3 -m src.main dev summary
+python3 -m src.main dev manifest
+python3 -m src.main dev route "inspect the runtime and tools" --limit 10
+python3 -m src.main dev bootstrap "inspect the runtime and tools" --limit 10
+python3 -m src.main dev turn-loop "inspect the runtime and tools" --limit 5 --max-turns 3
+python3 -m src.main dev turn-loop "inspect the runtime and tools" --limit 5 --max-turns 3 --structured-output
 ```
 
 ## 21. Maintenance Rules

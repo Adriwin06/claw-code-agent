@@ -123,17 +123,23 @@ class PortRuntime:
         command_execs = tuple(registry.command(match.name).execute(prompt) for match in matches if match.kind == 'command' and registry.command(match.name))
         tool_execs = tuple(registry.tool(match.name).execute(prompt) for match in matches if match.kind == 'tool' and registry.tool(match.name))
         denials = tuple(self._infer_permission_denials(matches))
-        stream_events = tuple(engine.stream_submit_message(
-            prompt,
-            matched_commands=tuple(match.name for match in matches if match.kind == 'command'),
-            matched_tools=tuple(match.name for match in matches if match.kind == 'tool'),
-            denied_tools=denials,
-        ))
+        matched_commands = tuple(match.name for match in matches if match.kind == 'command')
+        matched_tools = tuple(match.name for match in matches if match.kind == 'tool')
         turn_result = engine.submit_message(
             prompt,
-            matched_commands=tuple(match.name for match in matches if match.kind == 'command'),
-            matched_tools=tuple(match.name for match in matches if match.kind == 'tool'),
+            matched_commands=matched_commands,
+            matched_tools=matched_tools,
             denied_tools=denials,
+        )
+        stream_events = tuple(
+            self._bootstrap_stream_events(
+                engine=engine,
+                prompt=prompt,
+                matched_commands=matched_commands,
+                matched_tools=matched_tools,
+                denied_tools=denials,
+                turn_result=turn_result,
+            )
         )
         persisted_session_path = engine.persist_session()
         history.add('routing', f'matches={len(matches)} for prompt={prompt!r}')
@@ -176,6 +182,37 @@ class PortRuntime:
             if match.kind == 'tool' and 'bash' in match.name.lower():
                 denials.append(PermissionDenial(tool_name=match.name, reason='destructive shell execution remains gated in the Python port'))
         return denials
+
+    def _bootstrap_stream_events(
+        self,
+        *,
+        engine: QueryEnginePort,
+        prompt: str,
+        matched_commands: tuple[str, ...],
+        matched_tools: tuple[str, ...],
+        denied_tools: tuple[PermissionDenial, ...],
+        turn_result: TurnResult,
+    ):
+        yield {'type': 'message_start', 'session_id': engine.session_id, 'prompt': prompt}
+        if matched_commands:
+            yield {'type': 'command_match', 'commands': matched_commands}
+        if matched_tools:
+            yield {'type': 'tool_match', 'tools': matched_tools}
+        if denied_tools:
+            yield {
+                'type': 'permission_denial',
+                'denials': [denial.tool_name for denial in denied_tools],
+            }
+        yield {'type': 'message_delta', 'text': turn_result.output}
+        yield {
+            'type': 'message_stop',
+            'usage': {
+                'input_tokens': turn_result.usage.input_tokens,
+                'output_tokens': turn_result.usage.output_tokens,
+            },
+            'stop_reason': turn_result.stop_reason,
+            'transcript_size': len(engine.transcript_store.entries),
+        }
 
     def _collect_matches(self, tokens: set[str], modules: tuple[PortingModule, ...], kind: str) -> list[RoutedMatch]:
         matches: list[RoutedMatch] = []
