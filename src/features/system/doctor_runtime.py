@@ -10,7 +10,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.agent.models.types import AgentRuntimeConfig, ModelConfig
 
 
 @dataclass(frozen=True)

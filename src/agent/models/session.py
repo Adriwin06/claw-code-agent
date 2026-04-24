@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from src.agent.agent_types import UsageStats
+from src.agent.models.types import UsageStats
 
 JSONDict = dict[str, Any]
 MAX_MUTATION_HISTORY = 8

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from src.agent.agent_types import ModelConfig
+from src.agent.models.types import ModelConfig
 from .litellm_backend import LiteLLMClient
 from .parsers import LLMBackendError
 

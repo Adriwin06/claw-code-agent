@@ -20,12 +20,12 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from src.agent.agent_context_usage import estimate_tokens
-from src.agent.agent_types import UsageStats
-from src.agent.agent_session import AgentMessage
+from src.agent.context.usage import estimate_tokens
+from src.agent.models.types import UsageStats
+from src.agent.models.session import AgentMessage
 
 if TYPE_CHECKING:
-    from src.agent.agent_runtime import LocalCodingAgent
+    from src.agent.runtime.agent import LocalCodingAgent
 
 # ---------------------------------------------------------------------------
 # Constants

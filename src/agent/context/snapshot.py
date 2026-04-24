@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.agent.agent_plugin_cache import load_plugin_cache_summary
+from src.agent.plugins.cache import load_plugin_cache_summary
 from src.features.system.account_runtime import AccountRuntime
 from src.features.collaboration.ask_user_runtime import AskUserRuntime
 from src.features.system.config_runtime import ConfigRuntime
@@ -25,10 +25,10 @@ from src.features.orchestration.task_runtime import TaskRuntime
 from src.features.collaboration.team_runtime import TeamRuntime
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
-from src.agent.agent_types import AgentRuntimeConfig
+from src.agent.models.types import AgentRuntimeConfig
 
 if TYPE_CHECKING:
-    from src.agent.runtime_dependencies import AgentRuntimeDependencies
+    from src.agent.runtime.dependencies import AgentRuntimeDependencies
 
 MAX_STATUS_CHARS = 2000
 MAX_MEMORY_CHARACTER_COUNT = 40000

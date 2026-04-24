@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src.agent.agent_runtime import LocalCodingAgent
-from src.agent.agent_types import (
+from src.agent.runtime.agent import LocalCodingAgent
+from src.agent.models.types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,

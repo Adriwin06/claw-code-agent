@@ -4,13 +4,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.agent.agent_context import build_context_snapshot
-from src.agent.agent_tools import AgentTool
-from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
-from src.agent.builtin_agents import AgentDefinition, format_agent_listing
+from src.agent.tools.execution import AgentTool
+from src.agent.models.types import AgentRuntimeConfig, ModelConfig
+from src.agent.profiles.builtin import AgentDefinition, format_agent_listing
+from src.agent.context.snapshot import build_context_snapshot
 
 if TYPE_CHECKING:
-    from src.agent.runtime_dependencies import AgentRuntimeDependencies
+    from src.agent.runtime.dependencies import AgentRuntimeDependencies
 
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 

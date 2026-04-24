@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_types import AgentRunResult, UsageStats
+from src.agent.models.session import AgentSessionState
+from src.agent.models.types import AgentRunResult, UsageStats
 
 
 JSONDict = dict[str, object]

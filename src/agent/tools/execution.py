@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Union
 
-from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
+from src.agent.models.types import AgentPermissions, AgentRuntimeConfig, ToolExecutionResult
 
 if TYPE_CHECKING:
-    from src.agent.runtime_dependencies import AgentRuntimeDependencies
+    from src.agent.runtime.dependencies import AgentRuntimeDependencies
     from src.features.system.account_runtime import AccountRuntime
     from src.features.collaboration.ask_user_runtime import AskUserRuntime
     from src.features.system.config_runtime import ConfigRuntime

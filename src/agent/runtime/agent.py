@@ -8,13 +8,13 @@ from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from src.features.system.account_runtime import AccountRuntime
-from src.agent.agent_manager import AgentManager
-from src.agent.agent_context import clear_context_caches
-from src.agent.agent_context import render_context_report as render_agent_context_report
-from src.agent.agent_context_usage import collect_context_usage, format_context_usage
+from src.agent.runtime.manager import AgentManager
+from src.agent.context.snapshot import clear_context_caches
+from src.agent.context.snapshot import render_context_report as render_agent_context_report
+from src.agent.context.usage import collect_context_usage, format_context_usage
 from src.session.compact import compact_conversation
 from src.features.collaboration.ask_user_runtime import AskUserRuntime
-from src.agent.agent_registry import (
+from src.agent.profiles.registry import (
     load_agent_registry,
     render_agent_detail,
     render_agents_report,
@@ -23,16 +23,16 @@ from src.features.system.config_runtime import ConfigRuntime
 from src.features.system.hook_policy import HookPolicyRuntime
 from src.features.integration.lsp_runtime import LSPRuntime
 from src.features.integration.mcp_runtime import MCPRuntime
-from src.agent.agent_prompting import (
+from src.agent.context.prompting import (
     build_prompt_context,
     build_system_prompt_parts,
     render_system_prompt,
 )
-from src.agent.model_turn_runner import (
+from src.agent.runtime.model_turn import (
     normalize_finish_reason,
     query_model_turn,
 )
-from src.agent.prompt_pressure import (
+from src.agent.context.pressure import (
     build_prompt_length_error,
     can_auto_compact_with_summary,
     check_token_budget,
@@ -42,30 +42,30 @@ from src.agent.prompt_pressure import (
     reduce_context_pressure,
     snip_session_pass,
 )
-from src.agent.run_state import (
+from src.agent.runtime.state import (
     BudgetDecision,
     PromptPreflightResult,
     PromptRunState,
     TurnLoopDirective,
     build_run_result,
 )
-from src.agent.delegate_orchestrator import (
+from src.agent.runtime.delegation import (
     delegated_task_units,
     execute_delegate_agent,
 )
-from src.agent.tool_call_runner import (
+from src.agent.runtime.tool_calls import (
     ToolCallExecutionHooks,
     execute_runtime_tool_call,
 )
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_slash_commands import preprocess_slash_command
-from src.agent.agent_tools import (
+from src.agent.models.session import AgentSessionState
+from src.agent.commands.slash import preprocess_slash_command
+from src.agent.tools.execution import (
     AgentTool,
     build_tool_context,
     default_tool_registry,
 )
 from src.agent.tools.registry import build_effective_tool_registry
-from src.agent.agent_types import (
+from src.agent.models.types import (
     AgentRunResult,
     AgentRuntimeConfig,
     AssistantTurn,
@@ -88,15 +88,15 @@ from src.features.collaboration.team_runtime import TeamRuntime
 from src.features.system.tokenizer_runtime import describe_token_counter
 from src.features.orchestration.workflow_runtime import WorkflowRuntime
 from src.features.orchestration.worktree_runtime import WorktreeRuntime
-from src.agent.runtime_dependencies import AgentRuntimeDependencies
-from src.agent.session_persistence import persist_agent_run
+from src.agent.runtime.dependencies import AgentRuntimeDependencies
+from src.agent.runtime.persistence import persist_agent_run
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,
     usage_from_payload,
 )
 from src.core.governance.token_budget import calculate_token_budget, format_token_budget
-from src.agent.builtin_agents import AgentDefinition
+from src.agent.profiles.builtin import AgentDefinition
 from src.session.microcompact import microcompact_messages as _microcompact_messages
 
 
@@ -954,7 +954,7 @@ class LocalCodingAgent:
             != 'stop'
         ):
             return False
-        if tool_calls_so_far <= 0 or continuation_count != 1:
+        if tool_calls_so_far <= 0:
             return False
         prompt_text = prompt.lower()
         if not any(
@@ -971,7 +971,12 @@ class LocalCodingAgent:
             )
         ):
             return False
-        response_text = (current_response or turn.content or '').strip()
+        latest_response = (turn.content or '').strip()
+        response_text = (current_response or latest_response).strip()
+        if self._looks_like_unfinished_working_response(latest_response):
+            return continuation_count <= 2
+        if continuation_count != 1:
+            return False
         if len(response_text) >= 900:
             return False
         lowered_response = response_text.lower()
@@ -992,6 +997,38 @@ class LocalCodingAgent:
         if response_text.endswith('?'):
             return False
         return True
+
+    def _looks_like_unfinished_working_response(self, response_text: str) -> bool:
+        lowered = response_text.lower()
+        tail = lowered[-900:]
+        explicit_markers = (
+            'incomplete response',
+            'i apologize for the incomplete',
+            'i will now',
+            'i will proceed',
+            "i'll proceed",
+            'i will continue',
+            "i'll continue",
+            'next, i will',
+            'now, i will',
+            'after that, i will',
+            'then, i will',
+        )
+        if any(marker in tail for marker in explicit_markers):
+            return True
+        action_markers = (
+            'perform a web search',
+            'run a web search',
+            'test the web search',
+            'test the search',
+            'call the tool',
+            'use the tool',
+            'inspect the file',
+            'read the file',
+            'list the files',
+            'evaluate ',
+        )
+        return any(marker in tail for marker in action_markers)
 
     def _is_truncated_response(self, turn: AssistantTurn) -> bool:
         return turn.finish_reason in {'length', 'max_tokens'}
@@ -1397,7 +1434,7 @@ class LocalCodingAgent:
                 '</system-reminder>',
             ]
         )
-        from src.agent.agent_session import AgentMessage
+        from src.agent.models.session import AgentMessage
 
         nested_compaction_count = sum(
             1 for message in messages if message.metadata.get('kind') == 'compact_boundary'
@@ -1508,8 +1545,8 @@ class LocalCodingAgent:
 
         Checks bundled skills first, then falls back to slash commands.
         """
-        from src.agent.agent_slash_commands import find_slash_command, get_slash_command_specs
-        from src.agent.bundled_skills import find_bundled_skill, get_bundled_skills
+        from src.agent.commands.slash import find_slash_command, get_slash_command_specs
+        from src.agent.skills.bundled import find_bundled_skill, get_bundled_skills
 
         skill_name = arguments.get('skill')
         if not isinstance(skill_name, str) or not skill_name.strip():

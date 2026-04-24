@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.runtime.agent import LocalCodingAgent
 from src.core.catalog.catalog_runtime import (
     PermissionDenial,
     PortManifest,

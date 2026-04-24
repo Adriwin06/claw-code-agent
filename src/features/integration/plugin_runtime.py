@@ -181,7 +181,7 @@ class PluginRuntime:
         self,
         base_registry: dict[str, Any],
     ) -> dict[str, Any]:
-        from src.agent.agent_tools import AgentTool
+        from src.agent.tools.execution import AgentTool
 
         aliases: dict[str, AgentTool] = {}
         for manifest in self.manifests:
@@ -204,7 +204,7 @@ class PluginRuntime:
         self,
         base_registry: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        from src.agent.agent_tools import AgentTool
+        from src.agent.tools.execution import AgentTool
 
         tools: dict[str, AgentTool] = {}
         occupied = set(base_registry or {})

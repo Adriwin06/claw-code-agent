@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from src.agent.agent_runtime import LocalCodingAgent
+    from src.agent.runtime.agent import LocalCodingAgent
 
 
 @dataclass(frozen=True)

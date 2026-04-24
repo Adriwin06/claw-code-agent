@@ -28,7 +28,7 @@ const steps = [
     id: "prompt-entry",
     phase: "prompt",
     title: "Prompt enters LocalCodingAgent",
-    source: "src/agent/agent_runtime.py:421",
+    source: "src/agent/runtime/agent.py:421",
     modes: ["new", "resume", "slash", "tool"],
     summary:
       "run() creates a session id and scratchpad. resume() restores a persisted AgentSessionState, file history, compaction replay, and plugin session state before re-entering _run_prompt().",
@@ -41,7 +41,7 @@ const steps = [
     id: "slash-command",
     phase: "prompt",
     title: "Slash command preprocessing",
-    source: "src/agent/agent_runtime.py:489",
+    source: "src/agent/runtime/agent.py:489",
     modes: ["new", "resume", "slash"],
     summary:
       "preprocess_slash_command() can handle local commands before the LLM is contacted. If it is handled and should_query is false, the run returns immediately.",
@@ -54,7 +54,7 @@ const steps = [
     id: "before-hooks",
     phase: "prompt",
     title: "Before-prompt hooks rewrite the prompt",
-    source: "src/agent/agent_runtime.py:510",
+    source: "src/agent/runtime/agent.py:510",
     modes: ["new", "resume", "tool"],
     summary:
       "Hook policy messages, plugin before-prompt messages, and resume hooks can wrap the user prompt in system-reminder blocks before it is appended.",
@@ -67,7 +67,7 @@ const steps = [
     id: "managed-agent",
     phase: "prompt",
     title: "Managed agent run is recorded",
-    source: "src/agent/agent_runtime.py:519",
+    source: "src/agent/runtime/agent.py:519",
     modes: ["new", "resume", "tool"],
     summary:
       "AgentManager.start_agent() records the prompt, parent/child metadata, group id, label, and resume source so later reports can show the active run.",
@@ -80,7 +80,7 @@ const steps = [
     id: "build-session",
     phase: "context",
     title: "Session and prompt context are built",
-    source: "src/agent/agent_runtime.py:296",
+    source: "src/agent/runtime/agent.py:296",
     modes: ["new"],
     summary:
       "build_session() calls build_prompt_context(), then build_system_prompt_parts(), then creates AgentSessionState with system prompt parts plus captured user and system context dictionaries.",
@@ -93,7 +93,7 @@ const steps = [
     id: "resume-session",
     phase: "context",
     title: "Persisted session is hydrated",
-    source: "src/agent/agent_runtime.py:445",
+    source: "src/agent/runtime/agent.py:445",
     modes: ["resume"],
     summary:
       "resume() reconstructs AgentSessionState from stored system prompt parts, stored context dictionaries, and stored messages, then appends file history and compaction replay when needed.",
@@ -106,7 +106,7 @@ const steps = [
     id: "context-snapshot",
     phase: "context",
     title: "AgentContextSnapshot captures environment",
-    source: "src/agent/agent_context.py:64",
+    source: "src/agent/context/snapshot.py:75",
     modes: ["new"],
     summary:
       "build_context_snapshot() resolves cwd, shell, platform, OS version, current date, git repo/worktree flags, scratchpad directory, additional working directories, user context, and system context.",
@@ -119,7 +119,7 @@ const steps = [
     id: "user-context",
     phase: "context",
     title: "User context sources are gathered",
-    source: "src/agent/agent_context.py:222",
+    source: "src/agent/context/snapshot.py:217",
     modes: ["new"],
     summary:
       "_build_user_context() injects current date, scratchpad guidance, CLAUDE.md memory, plugin cache/runtime, hook policy, MCP, remote, triggers, search, account, ask-user, config, LSP, plan, tasks, team, workflow, and worktree summaries when present.",
@@ -140,7 +140,7 @@ const steps = [
     id: "system-context",
     phase: "context",
     title: "System context is gathered",
-    source: "src/agent/agent_context.py:157",
+    source: "src/agent/context/snapshot.py:189",
     modes: ["new"],
     summary:
       "_get_system_context_cached() adds git status, optional cache breaker, and scratchpad directory. Git status includes branch, default branch, user, short status, and recent commits.",
@@ -153,7 +153,7 @@ const steps = [
     id: "prompt-parts",
     phase: "context",
     title: "System prompt parts are assembled",
-    source: "src/agent/agent_prompting.py:66",
+    source: "src/agent/context/prompting.py:81",
     modes: ["new"],
     summary:
       "build_system_prompt_parts() combines default instruction sections, tool-aware guidance, agent guidance, runtime-specific guidance, and environment info. override_system_prompt replaces this list, while append_system_prompt adds to it.",
@@ -179,7 +179,7 @@ const steps = [
     id: "append-user",
     phase: "prompt",
     title: "Effective prompt becomes a user message",
-    source: "src/agent/agent_runtime.py:532",
+    source: "src/agent/runtime/agent.py:532",
     modes: ["new", "resume", "tool"],
     summary:
       "The effective prompt is appended to the session after local slash handling and hook rewrites. This is the first message of the new turn that the LLM sees.",
@@ -192,7 +192,7 @@ const steps = [
     id: "run-state",
     phase: "budget",
     title: "PromptRunState initializes counters",
-    source: "src/agent/agent_runtime.py:701",
+    source: "src/agent/runtime/agent.py:701",
     modes: ["new", "resume", "tool"],
     summary:
       "_build_prompt_run_state() tracks starting usage, cost, previous tool calls, delegated tasks, file history, model calls, stream events, and turn index.",
@@ -205,7 +205,7 @@ const steps = [
     id: "pressure-passes",
     phase: "budget",
     title: "Context pressure passes run before each model call",
-    source: "src/agent/agent_runtime.py:553",
+    source: "src/agent/runtime/agent.py:553",
     modes: ["new", "resume", "tool"],
     summary:
       "Each loop can run microcompact, auto-snip, and auto-compact before the prompt-length preflight. These passes replace old messages with compact reminders when thresholds require it.",
@@ -218,7 +218,7 @@ const steps = [
     id: "prompt-preflight",
     phase: "budget",
     title: "Token budget preflight checks the next request",
-    source: "src/agent/prompt_pressure.py:15",
+    source: "src/agent/context/pressure.py:13",
     modes: ["new", "resume", "tool"],
     summary:
       "preflight_prompt_length() calculates projected prompt tokens. If over limits, it tries heuristic pressure reduction and optional summary compaction before blocking a too-long model call.",
@@ -231,7 +231,7 @@ const steps = [
     id: "model-request",
     phase: "model",
     title: "Model request is formed",
-    source: "src/agent/model_turn_runner.py:15",
+    source: "src/agent/runtime/model_turn.py:15",
     modes: ["new", "resume", "tool"],
     summary:
       "query_model_turn() sends session.to_openai_messages(), tool specs, stream setting, and optional output schema to the LLM client. Streaming responses update the assistant message as deltas arrive.",
@@ -244,7 +244,7 @@ const steps = [
     id: "assistant-turn",
     phase: "model",
     title: "Assistant turn is normalized",
-    source: "src/agent/agent_runtime.py:814",
+    source: "src/agent/runtime/agent.py:814",
     modes: ["new", "resume", "tool"],
     summary:
       "_process_model_turn() accumulates usage and cost, checks budgets again, and chooses either final assistant output, continuation, or tool execution.",
@@ -257,7 +257,7 @@ const steps = [
     id: "tool-execution",
     phase: "tools",
     title: "Tool calls are executed",
-    source: "src/agent/tool_call_runner.py:37",
+    source: "src/agent/runtime/tool_calls.py:38",
     modes: ["tool", "new", "resume"],
     summary:
       "execute_runtime_tool_call() creates a tool message, emits tool_start, applies plugin and hook-policy preflight or block checks, streams tool output, finalizes the tool result, and records events.",
@@ -270,7 +270,7 @@ const steps = [
     id: "runtime-refresh",
     phase: "tools",
     title: "Runtime views refresh after state-changing tools",
-    source: "src/agent/agent_runtime.py:2860",
+    source: "src/agent/runtime/agent.py:2860",
     modes: ["tool", "new", "resume"],
     summary:
       "_refresh_runtime_views_for_tool_result() reloads search, remote, account, config, task, plan, team, workflow, or worktree runtime state after tools that mutate them.",
@@ -283,7 +283,7 @@ const steps = [
     id: "follow-up-context",
     phase: "tools",
     title: "Tool result becomes follow-up context",
-    source: "src/agent/tool_call_runner.py:214",
+    source: "src/agent/runtime/tool_calls.py:214",
     modes: ["tool", "new", "resume"],
     summary:
       "The finalized tool result is serialized into the session as a tool message. Plugin or hook-policy runtime messages can also be appended as user messages before the next loop.",
@@ -296,7 +296,7 @@ const steps = [
     id: "finish-or-loop",
     phase: "model",
     title: "Run loops or finalizes",
-    source: "src/agent/agent_runtime.py:683",
+    source: "src/agent/runtime/agent.py:683",
     modes: ["new", "resume", "tool"],
     summary:
       "If there are tool calls, the loop continues with richer context. If there are none, assistant output is finalized, after-turn hooks can add events, and the session is persisted.",
@@ -309,7 +309,7 @@ const steps = [
     id: "persist-session",
     phase: "tools",
     title: "Session persistence saves the run",
-    source: "src/agent/agent_runtime.py:2063",
+    source: "src/agent/runtime/agent.py:2063",
     modes: ["new", "resume", "tool"],
     summary:
       "_persist_session() writes the transcript, system prompt parts, context dictionaries, messages, file history, usage, cost, and plugin state so resume() can rebuild the next prompt path.",
@@ -431,15 +431,15 @@ const eventLanes = [
 
 const modules = [
   {
-    file: "src/agent/agent_runtime.py",
+    file: "src/agent/runtime/agent.py",
     role: "Owns the turn loop, resume path, runtime refresh, budget checks, persistence, and final AgentRunResult assembly.",
   },
   {
-    file: "src/agent/agent_context.py",
+    file: "src/agent/context/snapshot.py",
     role: "Builds the source dictionaries that become user_context and system_context for the session.",
   },
   {
-    file: "src/agent/agent_prompting.py",
+    file: "src/agent/context/prompting.py",
     role: "Turns PromptContext and enabled tools into ordered system prompt sections.",
   },
   {
@@ -447,16 +447,28 @@ const modules = [
     role: "Defines built-in tool schemas and centralizes plugin-expanded tool registry construction.",
   },
   {
-    file: "src/agent/tool_call_runner.py",
+    file: "src/agent/runtime/tool_calls.py",
     role: "Executes model-requested tools and writes tool messages, stream events, and plugin or policy follow-up context.",
   },
   {
-    file: "src/agent/prompt_pressure.py",
+    file: "src/agent/context/pressure.py",
     role: "Runs token budget preflight, snipping, compaction, and prompt-too-long recovery.",
   },
   {
-    file: "src/agent/model_turn_runner.py",
+    file: "src/agent/runtime/model_turn.py",
     role: "Converts session messages and tool specs into non-streaming or streaming LLM calls.",
+  },
+  {
+    file: "src/agent/models/session.py",
+    role: "Defines AgentSessionState and message mutation history used by the turn loop and persistence layer.",
+  },
+  {
+    file: "src/agent/commands/slash.py",
+    role: "Parses slash commands and routes local commands before the model path is entered.",
+  },
+  {
+    file: "src/agent/profiles/registry.py",
+    role: "Loads built-in and workspace-defined subagent profiles for prompt guidance and delegation.",
   },
   {
     file: "src/session/session_store.py",

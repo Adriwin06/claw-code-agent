@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from src.agent.agent_slash_commands import find_slash_command
-from src.agent.agent_runtime import LocalCodingAgent
-from src.agent.agent_types import AgentRunResult
+from src.agent.commands.slash import find_slash_command
+from src.agent.runtime.agent import LocalCodingAgent
+from src.agent.models.types import AgentRunResult
 from src.session.session_store import StoredAgentSession, load_agent_session
 from .ui.conversation import (
     ActivityItem,
@@ -394,6 +394,7 @@ def run_agent_tui(
             self._state_busy: bool = False
             self._spinner_index: int = 0
             self._collapsed_sections: dict[str, bool] = {}
+            self._render_signature: tuple[object, ...] | None = None
 
         def set_data(
             self,
@@ -407,6 +408,19 @@ def run_agent_tui(
             spinner_index: int,
             collapsed_sections: dict[str, bool],
         ) -> None:
+            render_signature = (
+                conversation_id,
+                turns,
+                selected_turn_id,
+                phase,
+                phase_detail,
+                busy,
+                spinner_index,
+                tuple(sorted(collapsed_sections.items())),
+            )
+            if render_signature == self._render_signature:
+                return
+            self._render_signature = render_signature
             self._conversation_id = conversation_id
             self._turns = turns
             self._selected_turn_id = selected_turn_id
@@ -660,6 +674,9 @@ def run_agent_tui(
             self._activity_items: tuple[ActivityItem, ...] = ()
             self._selected_turn_id: str | None = None
             self._auto_follow = True
+            self._follow_scroll_pending = False
+            self._restore_scroll_pending = False
+            self._restore_scroll_y: float | None = None
             self._spinner_index = 0
             self._collapsed_sections: dict[str, bool] = {}
             self._restored_session: StoredAgentSession | None = None
@@ -702,7 +719,7 @@ def run_agent_tui(
             yield Footer()
 
         def on_mount(self) -> None:
-            self.set_interval(0.12, self._tick_spinner)
+            self.set_interval(0.25, self._tick_spinner)
             self._set_command_picker_visible(False)
             if self._restored_session is not None:
                 restored_turns = restore_conversation_turns(self._restored_session.messages)
@@ -867,7 +884,7 @@ def run_agent_tui(
             self._auto_follow = not self._auto_follow
             self._refresh_details_panel()
             if self._auto_follow:
-                self._scroll_conversation_to_end()
+                self._schedule_conversation_scroll_to_end()
 
         def action_focus_history(self) -> None:
             self.query_one('#history-list', OptionList).focus()
@@ -1029,8 +1046,6 @@ def run_agent_tui(
                 self._set_command_picker_visible(False)
             self._refresh_details_panel()
             self._refresh_conversation_view()
-            if self._auto_follow and state.busy:
-                self._scroll_conversation_to_end()
 
         def _handle_turns_change(self, turns: tuple[ConversationTurn, ...]) -> None:
             self._conversation_turns = turns
@@ -1042,8 +1057,6 @@ def run_agent_tui(
             self._refresh_conversation_view()
             self._refresh_history_list()
             self._refresh_details_panel()
-            if self._auto_follow:
-                self._scroll_conversation_to_end()
 
         def _handle_history_change(
             self,
@@ -1142,6 +1155,12 @@ def run_agent_tui(
         def _refresh_conversation_view(self) -> None:
             scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
             previous_scroll_y = getattr(scroll_container, 'scroll_y', 0.0)
+            last_turn_id = (
+                self._conversation_turns[-1].turn_id if self._conversation_turns else None
+            )
+            selected_latest_turn = (
+                self._selected_turn_id is None or self._selected_turn_id == last_turn_id
+            )
             conversation = self.query_one('#conversation-feed', ConversationFeed)
             conversation.set_data(
                 conversation_id=self._active_conversation_id,
@@ -1154,13 +1173,10 @@ def run_agent_tui(
                 collapsed_sections=self._collapsed_sections,
             )
             scroll_container.refresh(layout=True)
-            if self._auto_follow and self._state.busy:
-                self._scroll_conversation_to_end()
+            if self._auto_follow and selected_latest_turn:
+                self._schedule_conversation_scroll_to_end()
                 return
-            try:
-                scroll_container.scroll_to(y=previous_scroll_y, animate=False)
-            except Exception:
-                return
+            self._schedule_conversation_scroll_restore(previous_scroll_y)
 
         def _refresh_history_list(self) -> None:
             option_list = self.query_one('#history-list', OptionList)
@@ -1201,10 +1217,51 @@ def run_agent_tui(
             )
 
         def _scroll_conversation_to_end(self) -> None:
+            self._follow_scroll_pending = False
             container = self.query_one('#conversation-scroll', VerticalScroll)
             try:
-                container.scroll_end(animate=False)
+                container.scroll_end(animate=False, immediate=True)
+            except TypeError:
+                try:
+                    container.scroll_end(animate=False)
+                except AttributeError:
+                    return
             except AttributeError:
+                return
+
+        def _schedule_conversation_scroll_to_end(self) -> None:
+            self._restore_scroll_y = None
+            if self._follow_scroll_pending:
+                return
+            self._follow_scroll_pending = True
+            self.call_after_refresh(self._scroll_conversation_to_end)
+
+        def _schedule_conversation_scroll_restore(self, scroll_y: float) -> None:
+            if self._follow_scroll_pending:
+                return
+            self._restore_scroll_y = scroll_y
+            if self._restore_scroll_pending:
+                return
+            self._restore_scroll_pending = True
+            self.call_after_refresh(self._restore_conversation_scroll)
+
+        def _restore_conversation_scroll(self) -> None:
+            self._restore_scroll_pending = False
+            if self._follow_scroll_pending:
+                return
+            scroll_y = self._restore_scroll_y
+            self._restore_scroll_y = None
+            if scroll_y is None:
+                return
+            container = self.query_one('#conversation-scroll', VerticalScroll)
+            try:
+                container.scroll_to(y=scroll_y, animate=False, immediate=True)
+            except TypeError:
+                try:
+                    container.scroll_to(y=scroll_y, animate=False)
+                except Exception:
+                    return
+            except Exception:
                 return
 
         def _tick_spinner(self) -> None:

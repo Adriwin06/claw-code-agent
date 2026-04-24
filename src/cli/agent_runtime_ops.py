@@ -6,8 +6,8 @@ from pathlib import Path
 import sys
 from typing import Callable, TextIO
 
-from src.agent.agent_runtime import LocalCodingAgent
-from src.agent.agent_types import (
+from src.agent.runtime.agent import LocalCodingAgent
+from src.agent.models.types import (
     AgentPermissions,
     BudgetConfig,
     ModelPricing,

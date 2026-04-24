@@ -3,20 +3,20 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from src.agent.agent_tools import AgentTool
-from src.agent.agent_types import (
+from src.agent.tools.execution import AgentTool
+from src.agent.models.types import (
     AgentPermissions,
     AgentRunResult,
     ModelConfig,
     ToolExecutionResult,
 )
-from src.agent.builtin_agents import (
+from src.agent.profiles.builtin import (
     ALL_AGENT_DISALLOWED_TOOLS,
     GENERAL_PURPOSE_AGENT,
     AgentDefinition,
 )
-from src.agent.prompt_constants import CLAUDE_MODEL_IDS
-from src.agent.agent_registry import find_agent_definition
+from src.agent.context.constants import CLAUDE_MODEL_IDS
+from src.agent.profiles.registry import find_agent_definition
 from src.session.session_store import load_agent_session
 
 

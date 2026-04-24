@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
-from src.agent.agent_types import AgentRunResult
+from src.agent.models.types import AgentRunResult
 from src.ui.conversation import (
     ActivityItem,
     ConversationEntry,

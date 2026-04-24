@@ -4,8 +4,8 @@ import json
 from dataclasses import replace
 from typing import Any, Callable
 
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_types import AssistantTurn, OutputSchemaConfig, ToolCall, UsageStats
+from src.agent.models.session import AgentSessionState
+from src.agent.models.types import AssistantTurn, OutputSchemaConfig, ToolCall, UsageStats
 from src.llm.parsers import LLMBackendError, coerce_finish_reason
 
 

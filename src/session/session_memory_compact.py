@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.agent.agent_context_usage import estimate_tokens
-from src.agent.agent_session import AgentMessage
+from src.agent.context.usage import estimate_tokens
+from src.agent.models.session import AgentMessage
 
 if TYPE_CHECKING:
     from src.session.compact import CompactionResult

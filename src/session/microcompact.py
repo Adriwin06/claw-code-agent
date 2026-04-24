@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.agent_context_usage import estimate_tokens
-from src.agent.agent_session import AgentMessage
+from src.agent.context.usage import estimate_tokens
+from src.agent.models.session import AgentMessage
 
 # ---------------------------------------------------------------------------
 # Constants

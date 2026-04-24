@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterator
 
-from src.agent.agent_types import (
+from src.agent.models.types import (
     OutputSchemaConfig,
     StreamEvent,
     ToolCall,

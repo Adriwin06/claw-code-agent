@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_types import BudgetConfig, UsageStats
-from src.agent.run_state import PromptPreflightResult
+from src.agent.models.session import AgentSessionState
+from src.agent.models.types import BudgetConfig, UsageStats
+from src.agent.context.usage import collect_context_usage, estimate_tokens
+from src.agent.runtime.state import PromptPreflightResult
 from src.core.governance.token_budget import calculate_token_budget
-from src.agent.agent_context_usage import collect_context_usage, estimate_tokens
 from src.session.compact import MAX_COMPACT_FAILURES, compact_conversation
 
 

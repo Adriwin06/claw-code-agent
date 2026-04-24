@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from src.agent.agent_types import AgentRuntimeConfig
+from src.agent.models.types import AgentRuntimeConfig
 from src.features.system.account_runtime import AccountRuntime
 from src.features.collaboration.ask_user_runtime import AskUserRuntime
 from src.features.system.config_runtime import ConfigRuntime

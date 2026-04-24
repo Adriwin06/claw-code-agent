@@ -4,8 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_types import AgentRunResult, ModelConfig, AgentRuntimeConfig
+from src.agent.models.session import AgentSessionState
+from src.agent.models.types import AgentRunResult, ModelConfig, AgentRuntimeConfig
 from src.session.session_store import (
     StoredAgentSession,
     load_agent_session,

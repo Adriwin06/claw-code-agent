@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.agent.models.types import AgentRuntimeConfig, ModelConfig
 from src.core.catalog.catalog_runtime import (
     assemble_tool_pool,
     build_command_graph,

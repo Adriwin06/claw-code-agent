@@ -216,6 +216,166 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('Improvements: add clearer interfaces', result.final_output)
         self.assertEqual(result.tool_calls, 1)
 
+    def test_agent_continues_long_unfinished_working_response_after_tool_use(self) -> None:
+        unfinished = (
+            'Codebase Analysis Summary\n\n'
+            + ('The architecture has several modules and runtime concerns. ' * 18)
+            + '\n\nI apologize for the incomplete response. I will now perform a web search '
+            'to test the functionality.'
+        )
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I will inspect the file first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': unfinished,
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Final result after continuing the unfinished work.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze the architecture and test search.')
+
+        self.assertIn('Codebase Analysis Summary', result.final_output)
+        self.assertIn('Final result after continuing', result.final_output)
+        self.assertEqual(result.tool_calls, 1)
+        continuation_messages = [
+            message for message in result.transcript
+            if message.get('metadata', {}).get('kind') == 'continuation_request'
+        ]
+        self.assertEqual(len(continuation_messages), 1)
+
+    def test_agent_allows_second_explicit_unfinished_continuation(self) -> None:
+        first_unfinished = (
+            'Codebase Analysis Summary\n\n'
+            + ('The architecture has several modules and runtime concerns. ' * 18)
+            + '\n\nI will now inspect the search behavior before finalizing.'
+        )
+        second_unfinished = (
+            'The search behavior still needs one more verification pass. '
+            'I will continue by summarizing the final result.'
+        )
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I will inspect the file first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': first_unfinished,
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': second_unfinished,
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Final result after the second continuation.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze the architecture and test search.')
+
+        self.assertIn('Final result after the second continuation.', result.final_output)
+        continuation_messages = [
+            message for message in result.transcript
+            if message.get('metadata', {}).get('kind') == 'continuation_request'
+        ]
+        self.assertEqual(len(continuation_messages), 2)
+
     def test_write_tool_is_blocked_without_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = AgentRuntimeConfig(cwd=Path(tmp_dir))

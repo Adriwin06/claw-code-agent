@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from src.agent.agent_session import AgentSessionState
-from src.agent.agent_tools import (
+from src.agent.models.session import AgentSessionState
+from src.agent.tools.execution import (
     AgentTool,
     ToolExecutionContext,
     execute_tool_streaming,
     serialize_tool_result,
 )
-from src.agent.agent_types import ToolCall, ToolExecutionResult
+from src.agent.models.types import ToolCall, ToolExecutionResult
 
 
 @dataclass(frozen=True)

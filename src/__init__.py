@@ -2,7 +2,7 @@
 
 from src.features.system.account_runtime import AccountRuntime, AccountProfile, AccountSessionState, AccountStatusReport
 from src.features.collaboration.ask_user_runtime import AskUserRuntime, AskUserResponse, QueuedUserAnswer
-from src.agent.agent_context import (
+from src.agent.context.snapshot import (
     AgentContextSnapshot,
     build_context_snapshot,
     clear_context_caches,
@@ -10,8 +10,8 @@ from src.agent.agent_context import (
     get_user_context,
     set_system_prompt_injection,
 )
-from src.agent.agent_manager import AgentManager
-from src.agent.agent_registry import (
+from src.agent.runtime.manager import AgentManager
+from src.agent.profiles.registry import (
     AgentLoadError,
     AgentRegistrySnapshot,
     find_agent_definition,
@@ -19,10 +19,10 @@ from src.agent.agent_registry import (
     render_agent_detail,
     render_agents_report,
 )
-from src.agent.agent_runtime import LocalCodingAgent
-from src.agent.agent_session import AgentMessage, AgentSessionState
-from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
-from src.agent.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig
+from src.agent.runtime.agent import LocalCodingAgent
+from src.agent.models.session import AgentMessage, AgentSessionState
+from src.agent.tools.execution import build_tool_context, default_tool_registry, execute_tool
+from src.agent.models.types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig
 from src.features.system.background_runtime import BackgroundSessionRuntime
 from src.core.orchestration.bootstrap_runtime import build_system_init_message
 from src.core.catalog.catalog_runtime import (

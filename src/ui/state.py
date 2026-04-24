@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.agent.agent_runtime import LocalCodingAgent
+from src.agent.runtime.agent import LocalCodingAgent
 from src.session.session_store import StoredAgentSession, usage_from_payload
 
 

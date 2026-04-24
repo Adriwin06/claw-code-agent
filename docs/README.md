@@ -8,4 +8,6 @@ The site is intentionally build-free:
 - `styles.css` owns the layout and visual system.
 - `app.js` contains the source-linked data model and renders the timeline, graph, budget bars, event lanes, and module map.
 
-The step data is grounded in the current Python runtime paths under `src/agent/`.
+The step data is grounded in the current Python runtime paths under
+`src/agent/context/`, `src/agent/runtime/`, `src/agent/tools/`,
+`src/agent/models/`, and the profile/command helper packages.

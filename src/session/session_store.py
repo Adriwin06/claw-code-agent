@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from src.agent.agent_types import (
+from src.agent.models.types import (
     AgentPermissions,
     AgentRuntimeConfig,
     BudgetConfig,

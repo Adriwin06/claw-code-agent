@@ -4,8 +4,8 @@ import json
 import re
 from dataclasses import dataclass
 
-from src.agent.agent_prompting import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
-from src.agent.agent_session import AgentMessage, AgentSessionState
+from src.agent.models.session import AgentMessage, AgentSessionState
+from src.agent.context.prompting import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 from src.features.system.tokenizer_runtime import describe_token_counter, count_tokens
 
 _PATH_HEADER_RE = re.compile(r'^## ((?:/|[A-Za-z]:[\\/]).+)$', re.MULTILINE)
