@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2422,6 +2424,91 @@ class AgentRuntimeTests(unittest.TestCase):
                 for message in second_child_request
             )
         )
+
+    def test_agent_runs_parallel_delegate_batch_concurrently(self) -> None:
+        active_children = 0
+        max_active_children = 0
+        lock = threading.Lock()
+
+        class ParentClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages, tools, *, output_schema=None):  # noqa: ANN001
+                self.calls += 1
+                if self.calls == 1:
+                    return AssistantTurn(
+                        content='Delegating in parallel.',
+                        tool_calls=(
+                            ToolCall(
+                                id='call_1',
+                                name='delegate_agent',
+                                arguments={
+                                    'subtasks': [
+                                        {'label': 'left', 'prompt': 'Do left.'},
+                                        {'label': 'right', 'prompt': 'Do right.'},
+                                    ],
+                                    'strategy': 'parallel',
+                                    'max_turns': 1,
+                                },
+                            ),
+                        ),
+                        finish_reason='tool_calls',
+                    )
+                return AssistantTurn(
+                    content='Parent completed after parallel delegation.',
+                    finish_reason='stop',
+                )
+
+        class ChildClient:
+            def complete(self, messages, tools, *, output_schema=None):  # noqa: ANN001
+                nonlocal active_children, max_active_children
+                with lock:
+                    active_children += 1
+                    max_active_children = max(max_active_children, active_children)
+                try:
+                    time.sleep(0.15)
+                    return AssistantTurn(
+                        content='Child finished.',
+                        finish_reason='stop',
+                    )
+                finally:
+                    with lock:
+                        active_children -= 1
+
+        parent_client = ParentClient()
+        client_lock = threading.Lock()
+        client_count = 0
+
+        def build_client(*args, **kwargs):  # noqa: ANN001
+            nonlocal client_count
+            with client_lock:
+                client_count += 1
+                if client_count == 1:
+                    return parent_client
+            return ChildClient()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=build_client):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Use parallel delegated subtasks')
+
+        self.assertEqual(result.final_output, 'Parent completed after parallel delegation.')
+        self.assertGreaterEqual(max_active_children, 2)
+        tool_message = next(
+            message
+            for message in result.transcript
+            if message.get('role') == 'tool'
+            and message.get('metadata', {}).get('action') == 'delegate_agent'
+        )
+        metadata = tool_message['metadata']
+        self.assertEqual(metadata.get('strategy'), 'parallel')
+        self.assertEqual(metadata.get('subtask_count'), 2)
+        self.assertIn('parallel subtasks', tool_message.get('content', ''))
 
     def test_agent_manager_tracks_delegate_group_membership(self) -> None:
         responses = [

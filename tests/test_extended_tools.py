@@ -68,6 +68,18 @@ class ExtendedToolTests(unittest.TestCase):
         self.assertIn('list_dir', result.content)
         self.assertIn('tool_search', result.content)
 
+    def test_agent_tool_schema_allows_subtasks_without_prompt(self) -> None:
+        registry = default_tool_registry()
+        agent_tool = registry['Agent'].to_openai_tool()
+        function = agent_tool['function']
+        parameters = function['parameters']
+        properties = parameters['properties']
+
+        self.assertEqual(parameters['required'], ['description'])
+        self.assertIn('subtasks', properties)
+        self.assertEqual(properties['strategy']['enum'], ['serial', 'parallel', 'topological'])
+        self.assertEqual(properties['max_parallel_subtasks']['maximum'], 8)
+
     def test_sleep_tool_waits_briefly_and_returns_metadata(self) -> None:
         registry = default_tool_registry()
         with tempfile.TemporaryDirectory() as tmp_dir:

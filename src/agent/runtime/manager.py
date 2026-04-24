@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import Lock
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class AgentManager:
     groups: dict[str, ManagedAgentGroup] = field(default_factory=dict)
     _counter: int = 0
     _group_counter: int = 0
+    _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
     def start_agent(
         self,
@@ -52,17 +54,18 @@ class AgentManager:
         label: str | None = None,
         resumed_from_session_id: str | None = None,
     ) -> str:
-        self._counter += 1
-        agent_id = f'agent_{self._counter}'
-        self.records[agent_id] = ManagedAgentRecord(
-            agent_id=agent_id,
-            prompt=prompt,
-            parent_agent_id=parent_agent_id,
-            group_id=group_id,
-            child_index=child_index,
-            label=label,
-            resumed_from_session_id=resumed_from_session_id,
-        )
+        with self._lock:
+            self._counter += 1
+            agent_id = f'agent_{self._counter}'
+            self.records[agent_id] = ManagedAgentRecord(
+                agent_id=agent_id,
+                prompt=prompt,
+                parent_agent_id=parent_agent_id,
+                group_id=group_id,
+                child_index=child_index,
+                label=label,
+                resumed_from_session_id=resumed_from_session_id,
+            )
         if group_id is not None:
             self.register_group_child(group_id, agent_id, child_index=child_index)
         return agent_id
@@ -74,14 +77,15 @@ class AgentManager:
         parent_agent_id: str | None = None,
         strategy: str = 'serial',
     ) -> str:
-        self._group_counter += 1
-        group_id = f'group_{self._group_counter}'
-        self.groups[group_id] = ManagedAgentGroup(
-            group_id=group_id,
-            label=label,
-            parent_agent_id=parent_agent_id,
-            strategy=strategy,
-        )
+        with self._lock:
+            self._group_counter += 1
+            group_id = f'group_{self._group_counter}'
+            self.groups[group_id] = ManagedAgentGroup(
+                group_id=group_id,
+                label=label,
+                parent_agent_id=parent_agent_id,
+                strategy=strategy,
+            )
         return group_id
 
     def register_group_child(
@@ -91,46 +95,47 @@ class AgentManager:
         *,
         child_index: int | None = None,
     ) -> None:
-        group = self.groups.get(group_id)
-        if group is None:
-            return
-        if agent_id in group.child_agent_ids:
-            updated_children = group.child_agent_ids
-        else:
-            updated_children = (*group.child_agent_ids, agent_id)
-            self.groups[group_id] = ManagedAgentGroup(
-                group_id=group.group_id,
-                label=group.label,
-                parent_agent_id=group.parent_agent_id,
-                child_agent_ids=updated_children,
-                strategy=group.strategy,
-                status=group.status,
-                completed_children=group.completed_children,
-                failed_children=group.failed_children,
-                batch_count=group.batch_count,
-                max_batch_size=group.max_batch_size,
-                dependency_skips=group.dependency_skips,
+        with self._lock:
+            group = self.groups.get(group_id)
+            if group is None:
+                return
+            if agent_id in group.child_agent_ids:
+                updated_children = group.child_agent_ids
+            else:
+                updated_children = (*group.child_agent_ids, agent_id)
+                self.groups[group_id] = ManagedAgentGroup(
+                    group_id=group.group_id,
+                    label=group.label,
+                    parent_agent_id=group.parent_agent_id,
+                    child_agent_ids=updated_children,
+                    strategy=group.strategy,
+                    status=group.status,
+                    completed_children=group.completed_children,
+                    failed_children=group.failed_children,
+                    batch_count=group.batch_count,
+                    max_batch_size=group.max_batch_size,
+                    dependency_skips=group.dependency_skips,
+                )
+            record = self.records.get(agent_id)
+            if record is None:
+                return
+            if record.group_id == group_id and record.child_index == child_index:
+                return
+            self.records[agent_id] = ManagedAgentRecord(
+                agent_id=record.agent_id,
+                prompt=record.prompt,
+                parent_agent_id=record.parent_agent_id,
+                group_id=group_id,
+                child_index=child_index,
+                label=record.label,
+                resumed_from_session_id=record.resumed_from_session_id,
+                session_id=record.session_id,
+                session_path=record.session_path,
+                status=record.status,
+                turns=record.turns,
+                tool_calls=record.tool_calls,
+                stop_reason=record.stop_reason,
             )
-        record = self.records.get(agent_id)
-        if record is None:
-            return
-        if record.group_id == group_id and record.child_index == child_index:
-            return
-        self.records[agent_id] = ManagedAgentRecord(
-            agent_id=record.agent_id,
-            prompt=record.prompt,
-            parent_agent_id=record.parent_agent_id,
-            group_id=group_id,
-            child_index=child_index,
-            label=record.label,
-            resumed_from_session_id=record.resumed_from_session_id,
-            session_id=record.session_id,
-            session_path=record.session_path,
-            status=record.status,
-            turns=record.turns,
-            tool_calls=record.tool_calls,
-            stop_reason=record.stop_reason,
-        )
 
     def finish_group(
         self,
@@ -143,22 +148,23 @@ class AgentManager:
         max_batch_size: int = 0,
         dependency_skips: int = 0,
     ) -> None:
-        group = self.groups.get(group_id)
-        if group is None:
-            return
-        self.groups[group_id] = ManagedAgentGroup(
-            group_id=group.group_id,
-            label=group.label,
-            parent_agent_id=group.parent_agent_id,
-            child_agent_ids=group.child_agent_ids,
-            strategy=group.strategy,
-            status=status,
-            completed_children=completed_children,
-            failed_children=failed_children,
-            batch_count=batch_count,
-            max_batch_size=max_batch_size,
-            dependency_skips=dependency_skips,
-        )
+        with self._lock:
+            group = self.groups.get(group_id)
+            if group is None:
+                return
+            self.groups[group_id] = ManagedAgentGroup(
+                group_id=group.group_id,
+                label=group.label,
+                parent_agent_id=group.parent_agent_id,
+                child_agent_ids=group.child_agent_ids,
+                strategy=group.strategy,
+                status=status,
+                completed_children=completed_children,
+                failed_children=failed_children,
+                batch_count=batch_count,
+                max_batch_size=max_batch_size,
+                dependency_skips=dependency_skips,
+            )
 
     def finish_agent(
         self,
@@ -170,24 +176,25 @@ class AgentManager:
         tool_calls: int,
         stop_reason: str | None,
     ) -> None:
-        record = self.records.get(agent_id)
-        if record is None:
-            return
-        self.records[agent_id] = ManagedAgentRecord(
-            agent_id=record.agent_id,
-            prompt=record.prompt,
-            parent_agent_id=record.parent_agent_id,
-            group_id=record.group_id,
-            child_index=record.child_index,
-            label=record.label,
-            resumed_from_session_id=record.resumed_from_session_id,
-            session_id=session_id,
-            session_path=session_path,
-            status='completed',
-            turns=turns,
-            tool_calls=tool_calls,
-            stop_reason=stop_reason,
-        )
+        with self._lock:
+            record = self.records.get(agent_id)
+            if record is None:
+                return
+            self.records[agent_id] = ManagedAgentRecord(
+                agent_id=record.agent_id,
+                prompt=record.prompt,
+                parent_agent_id=record.parent_agent_id,
+                group_id=record.group_id,
+                child_index=record.child_index,
+                label=record.label,
+                resumed_from_session_id=record.resumed_from_session_id,
+                session_id=session_id,
+                session_path=session_path,
+                status='completed',
+                turns=turns,
+                tool_calls=tool_calls,
+                stop_reason=stop_reason,
+            )
 
     def children_of(self, agent_id: str) -> tuple[ManagedAgentRecord, ...]:
         return tuple(

@@ -1018,6 +1018,10 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     },
                     'subtasks': {
                         'type': 'array',
+                        'description': (
+                            'Multiple child-agent subtasks. Use this instead of prompt when '
+                            'several independent agents should be launched from one tool call.'
+                        ),
                         'items': {
                             'oneOf': [
                                 {'type': 'string'},
@@ -1047,9 +1051,22 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'include_parent_context': {'type': 'boolean'},
                     'continue_on_error': {'type': 'boolean'},
                     'max_failures': {'type': 'integer', 'minimum': 0, 'maximum': 20},
-                    'strategy': {'type': 'string'},
+                    'strategy': {
+                        'type': 'string',
+                        'enum': ['serial', 'parallel', 'topological'],
+                        'description': (
+                            'serial runs subtasks one after another; parallel runs independent '
+                            'subtasks concurrently; topological runs dependency batches in order.'
+                        ),
+                    },
+                    'max_parallel_subtasks': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'maximum': 8,
+                        'description': 'Maximum concurrent child agents for parallel batches.',
+                    },
                 },
-                'required': ['description', 'prompt'],
+                'required': ['description'],
             },
             handler=_agent_tool_placeholder,
         ),
@@ -1063,6 +1080,10 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'prompt': {'type': 'string'},
                     'subtasks': {
                         'type': 'array',
+                        'description': (
+                            'Multiple child-agent subtasks. Use this instead of prompt when '
+                            'several independent agents should be launched from one tool call.'
+                        ),
                         'items': {
                             'oneOf': [
                                 {'type': 'string'},
@@ -1092,7 +1113,20 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'include_parent_context': {'type': 'boolean'},
                     'continue_on_error': {'type': 'boolean'},
                     'max_failures': {'type': 'integer', 'minimum': 0, 'maximum': 20},
-                    'strategy': {'type': 'string'},
+                    'strategy': {
+                        'type': 'string',
+                        'enum': ['serial', 'parallel', 'topological'],
+                        'description': (
+                            'serial runs subtasks one after another; parallel runs independent '
+                            'subtasks concurrently; topological runs dependency batches in order.'
+                        ),
+                    },
+                    'max_parallel_subtasks': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'maximum': 8,
+                        'description': 'Maximum concurrent child agents for parallel batches.',
+                    },
                 },
             },
             handler=_agent_tool_placeholder,

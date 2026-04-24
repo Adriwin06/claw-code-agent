@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from typing import Any
 
@@ -163,6 +164,9 @@ def execute_delegate_agent(
     if isinstance(max_failures, int) and max_failures < 0:
         max_failures = None
     strategy = normalize_delegate_strategy(arguments.get('strategy'))
+    max_parallel_subtasks = normalize_delegate_parallelism(
+        arguments.get('max_parallel_subtasks', arguments.get('max_parallel'))
+    )
     child_summaries: list[dict[str, object]] = []
     child_session_ids: list[str] = []
     prior_results: list[dict[str, str]] = []
@@ -187,6 +191,129 @@ def execute_delegate_agent(
     dependency_skips = 0
     child_result: AgentRunResult | None = None
     stop_processing = False
+
+    def run_child_subtask(
+        subtask: dict[str, object],
+        *,
+        index: int,
+        subtask_label: str,
+        dependencies: tuple[str, ...],
+        batch_index: int,
+        prior_results_snapshot: list[dict[str, str]],
+    ) -> tuple[AgentRunResult, dict[str, object], bool]:
+        child_system_prompt = agent_def.system_prompt or agent.custom_system_prompt
+        child_override_prompt = None
+        if agent_def.system_prompt:
+            child_override_prompt = agent_def.system_prompt
+        else:
+            child_override_prompt = agent.override_system_prompt
+
+        child_append_prompt = agent.append_system_prompt
+        if agent_def.critical_system_reminder:
+            reminder = (
+                f'\n\n<system-reminder>\n{agent_def.critical_system_reminder}\n</system-reminder>'
+            )
+            child_append_prompt = (child_append_prompt or '') + reminder
+
+        child_agent = agent.__class__(
+            model_config=child_model_config,
+            runtime_config=replace(
+                child_runtime_config,
+                max_turns=subtask.get('max_turns', child_runtime_config.max_turns),
+                disable_claude_md_discovery=agent_def.omit_claude_md,
+            ),
+            custom_system_prompt=child_system_prompt if not child_override_prompt else None,
+            append_system_prompt=child_append_prompt,
+            override_system_prompt=child_override_prompt,
+            tool_registry=child_tools,
+            agent_manager=agent.agent_manager,
+            parent_agent_id=agent.managed_agent_id,
+            managed_group_id=group_id,
+            managed_child_index=index,
+            managed_label=subtask_label,
+        )
+        if group_id is not None and child_agent.managed_agent_id is not None:
+            agent.agent_manager.register_group_child(
+                group_id,
+                child_agent.managed_agent_id,
+                child_index=index,
+            )
+        resume_session_id = subtask.get('resume_session_id')
+        child_prompt = str(subtask['prompt'])
+        if agent_def.initial_prompt and not (
+            isinstance(resume_session_id, str) and resume_session_id
+        ):
+            child_prompt = f'{agent_def.initial_prompt.strip()}\n\n{child_prompt}'.strip()
+        if delegate_preflight_messages:
+            child_prompt = prepend_plugin_delegate_context(
+                child_prompt,
+                delegate_preflight_messages,
+            )
+        if include_parent_context and prior_results_snapshot:
+            child_prompt = prepend_delegate_context(child_prompt, prior_results_snapshot)
+        resume_used = False
+        if isinstance(resume_session_id, str) and resume_session_id:
+            try:
+                stored_child_session = load_agent_session(
+                    resume_session_id,
+                    directory=child_runtime_config.session_directory,
+                )
+            except OSError:
+                failed_result = AgentRunResult(
+                    final_output=f'Unable to load delegated session {resume_session_id}.',
+                    turns=0,
+                    tool_calls=0,
+                    transcript=(),
+                    stop_reason='resume_load_error',
+                    session_id=resume_session_id,
+                )
+                return (
+                    failed_result,
+                    {
+                        'index': index,
+                        'label': subtask_label,
+                        'session_id': resume_session_id,
+                        'turns': failed_result.turns,
+                        'tool_calls': failed_result.tool_calls,
+                        'stop_reason': failed_result.stop_reason or 'resume_load_error',
+                        'output_preview': agent._preview_text(failed_result.final_output, 220),
+                        'resume_used': True,
+                        'resumed_from_session_id': resume_session_id,
+                        'depends_on': list(dependencies),
+                        'batch_index': batch_index,
+                    },
+                    True,
+                )
+            result = child_agent.resume(child_prompt, stored_child_session)
+            resume_used = True
+        else:
+            result = child_agent.run(child_prompt)
+        if group_id is not None and child_agent.managed_agent_id is not None:
+            agent.agent_manager.register_group_child(
+                group_id,
+                child_agent.managed_agent_id,
+                child_index=index,
+            )
+        summary = {
+            'index': index,
+            'label': subtask_label,
+            'session_id': result.session_id or '',
+            'turns': result.turns,
+            'tool_calls': result.tool_calls,
+            'stop_reason': result.stop_reason or 'stop',
+            'output_preview': agent._preview_text(result.final_output, 220),
+            'resume_used': resume_used,
+            'resumed_from_session_id': (
+                str(resume_session_id)
+                if isinstance(resume_session_id, str) and resume_session_id
+                else ''
+            ),
+            'depends_on': list(dependencies),
+            'batch_index': batch_index,
+        }
+        failed = result.stop_reason in {'backend_error', 'budget_exceeded'}
+        return result, summary, failed
+
     for batch_index, batch in enumerate(planned_batches, start=1):
         if stop_processing:
             break
@@ -194,6 +321,7 @@ def execute_delegate_agent(
         batch_failed = 0
         batch_skipped = 0
         batch_labels: list[str] = []
+        runnable_subtasks: list[tuple[dict[str, object], int, str, tuple[str, ...]]] = []
         for subtask in batch:
             index = int(subtask.get('_delegate_index', len(child_summaries) + 1))
             subtask_label = str(subtask.get('label') or f'subtask_{index}')
@@ -249,95 +377,81 @@ def execute_delegate_agent(
                     stop_processing = True
                     break
                 continue
-
-            child_system_prompt = agent_def.system_prompt or agent.custom_system_prompt
-            child_override_prompt = None
-            if agent_def.system_prompt:
-                child_override_prompt = agent_def.system_prompt
-            else:
-                child_override_prompt = agent.override_system_prompt
-
-            child_append_prompt = agent.append_system_prompt
-            if agent_def.critical_system_reminder:
-                reminder = (
-                    f'\n\n<system-reminder>\n{agent_def.critical_system_reminder}\n</system-reminder>'
-                )
-                child_append_prompt = (child_append_prompt or '') + reminder
-
-            child_agent = agent.__class__(
-                model_config=child_model_config,
-                runtime_config=replace(
-                    child_runtime_config,
-                    max_turns=subtask.get('max_turns', child_runtime_config.max_turns),
-                    disable_claude_md_discovery=agent_def.omit_claude_md,
-                ),
-                custom_system_prompt=child_system_prompt if not child_override_prompt else None,
-                append_system_prompt=child_append_prompt,
-                override_system_prompt=child_override_prompt,
-                tool_registry=child_tools,
-                agent_manager=agent.agent_manager,
-                parent_agent_id=agent.managed_agent_id,
-                managed_group_id=group_id,
-                managed_child_index=index,
-                managed_label=subtask_label,
-            )
-            if group_id is not None and child_agent.managed_agent_id is not None:
-                agent.agent_manager.register_group_child(
-                    group_id,
-                    child_agent.managed_agent_id,
-                    child_index=index,
-                )
-            resume_session_id = subtask.get('resume_session_id')
-            child_prompt = str(subtask['prompt'])
-            if agent_def.initial_prompt and not (
-                isinstance(resume_session_id, str) and resume_session_id
+            runnable_subtasks.append((subtask, index, subtask_label, dependencies))
+        if stop_processing:
+            pass
+        elif strategy in {'parallel', 'topological'} and len(runnable_subtasks) > 1:
+            prior_results_snapshot = list(prior_results)
+            outcomes: list[tuple[AgentRunResult, dict[str, object], bool]] = []
+            max_workers = min(len(runnable_subtasks), max_parallel_subtasks)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        run_child_subtask,
+                        subtask,
+                        index=index,
+                        subtask_label=subtask_label,
+                        dependencies=dependencies,
+                        batch_index=batch_index,
+                        prior_results_snapshot=prior_results_snapshot,
+                    )
+                    for subtask, index, subtask_label, dependencies in runnable_subtasks
+                ]
+                for future in as_completed(futures):
+                    outcomes.append(future.result())
+            for result, summary, failed in sorted(
+                outcomes,
+                key=lambda item: int(item[1].get('index', 0)),
             ):
-                child_prompt = f'{agent_def.initial_prompt.strip()}\n\n{child_prompt}'.strip()
-            if delegate_preflight_messages:
-                child_prompt = prepend_plugin_delegate_context(
-                    child_prompt,
-                    delegate_preflight_messages,
+                child_result = result
+                child_summaries.append(summary)
+                if result.session_id:
+                    child_session_ids.append(result.session_id)
+                prior_results.append(
+                    {
+                        'label': str(summary['label']),
+                        'output_preview': str(summary['output_preview']),
+                    }
                 )
-            if include_parent_context and prior_results:
-                child_prompt = prepend_delegate_context(child_prompt, prior_results)
-            resume_used = False
-            if isinstance(resume_session_id, str) and resume_session_id:
-                try:
-                    stored_child_session = load_agent_session(
-                        resume_session_id,
-                        directory=child_runtime_config.session_directory,
-                    )
-                except OSError:
-                    child_result = AgentRunResult(
-                        final_output=f'Unable to load delegated session {resume_session_id}.',
-                        turns=0,
-                        tool_calls=0,
-                        transcript=(),
-                        stop_reason='resume_load_error',
-                        session_id=resume_session_id,
-                    )
+                subtask_label = str(summary['label'])
+                if failed:
                     failed_children += 1
                     batch_failed += 1
-                    summary = {
-                        'index': index,
-                        'label': subtask_label,
-                        'session_id': resume_session_id,
-                        'turns': child_result.turns,
-                        'tool_calls': child_result.tool_calls,
-                        'stop_reason': child_result.stop_reason or 'resume_load_error',
-                        'output_preview': agent._preview_text(child_result.final_output, 220),
-                        'resume_used': True,
-                        'resumed_from_session_id': resume_session_id,
-                        'depends_on': list(dependencies),
-                        'batch_index': batch_index,
+                    failed_labels.add(subtask_label)
+                else:
+                    batch_completed += 1
+                    completed_labels.add(subtask_label)
+            if batch_failed and (
+                not continue_on_error
+                or (
+                    isinstance(max_failures, int)
+                    and failed_children > max_failures
+                )
+            ):
+                stop_processing = True
+        else:
+            for subtask, index, subtask_label, dependencies in runnable_subtasks:
+                result, summary, failed = run_child_subtask(
+                    subtask,
+                    index=index,
+                    subtask_label=subtask_label,
+                    dependencies=dependencies,
+                    batch_index=batch_index,
+                    prior_results_snapshot=prior_results,
+                )
+                child_result = result
+                child_summaries.append(summary)
+                if result.session_id:
+                    child_session_ids.append(result.session_id)
+                prior_results.append(
+                    {
+                        'label': str(summary['label']),
+                        'output_preview': str(summary['output_preview']),
                     }
-                    child_summaries.append(summary)
-                    prior_results.append(
-                        {
-                            'label': summary['label'],
-                            'output_preview': str(summary['output_preview']),
-                        }
-                    )
+                )
+                if failed:
+                    failed_children += 1
+                    batch_failed += 1
                     failed_labels.add(subtask_label)
                     if isinstance(max_failures, int) and failed_children > max_failures:
                         stop_processing = True
@@ -345,56 +459,9 @@ def execute_delegate_agent(
                     if not continue_on_error:
                         stop_processing = True
                         break
-                    continue
-                child_result = child_agent.resume(child_prompt, stored_child_session)
-                resume_used = True
-            else:
-                child_result = child_agent.run(child_prompt)
-            if group_id is not None and child_agent.managed_agent_id is not None:
-                agent.agent_manager.register_group_child(
-                    group_id,
-                    child_agent.managed_agent_id,
-                    child_index=index,
-                )
-            summary = {
-                'index': index,
-                'label': subtask_label,
-                'session_id': child_result.session_id or '',
-                'turns': child_result.turns,
-                'tool_calls': child_result.tool_calls,
-                'stop_reason': child_result.stop_reason or 'stop',
-                'output_preview': agent._preview_text(child_result.final_output, 220),
-                'resume_used': resume_used,
-                'resumed_from_session_id': (
-                    str(resume_session_id)
-                    if isinstance(resume_session_id, str) and resume_session_id
-                    else ''
-                ),
-                'depends_on': list(dependencies),
-                'batch_index': batch_index,
-            }
-            child_summaries.append(summary)
-            if child_result.session_id:
-                child_session_ids.append(child_result.session_id)
-            prior_results.append(
-                {
-                    'label': summary['label'],
-                    'output_preview': str(summary['output_preview']),
-                }
-            )
-            if child_result.stop_reason in {'backend_error', 'budget_exceeded'}:
-                failed_children += 1
-                batch_failed += 1
-                failed_labels.add(subtask_label)
-                if isinstance(max_failures, int) and failed_children > max_failures:
-                    stop_processing = True
-                    break
-                if not continue_on_error:
-                    stop_processing = True
-                    break
-            else:
-                batch_completed += 1
-                completed_labels.add(subtask_label)
+                else:
+                    batch_completed += 1
+                    completed_labels.add(subtask_label)
         batch_status = 'completed'
         if batch_failed and batch_completed:
             batch_status = 'partial'
@@ -439,7 +506,10 @@ def execute_delegate_agent(
         (
             'Delegated agent completed the subtask.'
             if len(child_summaries) == 1
-            else f'Delegated agent completed {len(child_summaries)} sequential subtasks.'
+            else (
+                f'Delegated agent completed {len(child_summaries)} '
+                f'{"parallel" if strategy in {"parallel", "topological"} else "sequential"} subtasks.'
+            )
         ),
     ]
     if group_id is not None:
@@ -448,6 +518,7 @@ def execute_delegate_agent(
         summary_lines.append(f'resumed_children={resumed_children}')
         summary_lines.append(f'strategy={strategy}')
         summary_lines.append(f'batch_count={len(batch_summaries)}')
+        summary_lines.append(f'max_parallel_subtasks={max_parallel_subtasks}')
         summary_lines.append(f'dependency_skips={dependency_skips}')
         summary_lines.append('')
     if delegate_preflight_messages:
@@ -505,6 +576,7 @@ def execute_delegate_agent(
             'completed_children': completed_children,
             'resumed_children': resumed_children,
             'strategy': strategy,
+            'max_parallel_subtasks': max_parallel_subtasks,
             'max_failures': max_failures,
             'delegate_batches': batch_summaries,
             'dependency_skips': dependency_skips,
@@ -586,16 +658,24 @@ def normalize_delegate_strategy(strategy: object) -> str:
     if not isinstance(strategy, str) or not strategy.strip():
         return 'serial'
     normalized = strategy.strip().lower().replace('-', '_')
-    if normalized in {'graph', 'topological', 'dependency_graph', 'parallel', 'parallel_batches'}:
+    if normalized in {'parallel', 'parallel_batches'}:
+        return 'parallel'
+    if normalized in {'graph', 'topological', 'dependency_graph'}:
         return 'topological'
     return 'serial'
+
+
+def normalize_delegate_parallelism(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 4
+    return max(1, min(value, 8))
 
 
 def plan_delegate_batches(
     subtasks: list[dict[str, object]],
     strategy: str,
 ) -> list[list[dict[str, object]]]:
-    if strategy != 'topological':
+    if strategy not in {'parallel', 'topological'}:
         return [subtasks]
     remaining = list(subtasks)
     scheduled_labels: set[str] = set()

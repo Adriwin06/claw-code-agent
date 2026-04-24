@@ -409,6 +409,28 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(bridge.turns[0].assistant_status, 'Ready')
         self.assertEqual(state.last_stop_reason, 'completed')
 
+    def test_event_bridge_renders_cancelled_run_as_stopped(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Generate a long reply')
+        bridge.handle_event({'type': 'message_start'})
+        bridge.handle_event({'type': 'content_delta', 'delta': 'Partial answer'})
+        bridge.request_cancel('Stop requested by user')
+        bridge.cancel('Stopped by user')
+
+        self.assertFalse(state.busy)
+        self.assertEqual(state.last_stop_reason, 'cancelled')
+        self.assertEqual(bridge.turns[0].assistant_status, 'Stopped')
+        self.assertEqual(bridge.turns[0].stop_reason, 'cancelled')
+        self.assertIn('Stop Requested', [entry.title for entry in bridge.turns[0].entries])
+        self.assertIn('stop_reason=cancelled', ''.join(chunks))
+
     def test_event_bridge_restore_history_populates_turns_and_activity(self) -> None:
         state = AgentTuiState(
             workspace='C:/workspace',

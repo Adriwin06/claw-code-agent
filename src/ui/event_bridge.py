@@ -205,6 +205,15 @@ class AgentTuiEventBridge:
         if event_type == 'tool_result':
             self._handle_tool_result(event)
             return
+        if event_type == 'delegate_batch_result':
+            self._handle_delegate_batch_result(event)
+            return
+        if event_type == 'delegate_subtask_result':
+            self._handle_delegate_subtask_result(event)
+            return
+        if event_type == 'delegate_group_result':
+            self._handle_delegate_group_result(event)
+            return
         if event_type == 'usage':
             usage = event.get('usage')
             if isinstance(usage, dict):
@@ -420,6 +429,60 @@ class AgentTuiEventBridge:
         self._publish_activity()
         self._publish_state()
 
+    def request_cancel(self, reason: str = 'Stop requested') -> None:
+        self.state.status = 'Stopping'
+        self.state.phase = 'Stopping'
+        self.state.phase_detail = reason
+        self._update_active_turn(
+            assistant_status='Stopping',
+            phase_label='Stopping',
+        )
+        self._append_turn_notice(
+            kind='warning',
+            title='Stop Requested',
+            content=reason,
+            status='warn',
+        )
+        self._upsert_activity(
+            'cancel_requested',
+            label='Stop requested',
+            detail=reason,
+            status='warn',
+        )
+        self._emit_data(f'[status] {reason}\n')
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_state()
+
+    def cancel(self, reason: str = 'Stopped by user') -> None:
+        self._close_open_blocks()
+        active_turn = self._active_turn()
+        if active_turn is not None:
+            active_turn.assistant_status = 'Stopped'
+            active_turn.phase_label = 'Stopped'
+            active_turn.stop_reason = 'cancelled'
+            self._append_turn_notice(
+                kind='warning',
+                title='Stopped',
+                content=reason,
+                status='warn',
+            )
+        self.state.busy = False
+        self.state.status = 'Ready'
+        self.state.phase = 'Ready'
+        self.state.phase_detail = 'Waiting for the next prompt'
+        self.state.last_stop_reason = 'cancelled'
+        self._upsert_activity(
+            'cancelled',
+            label='Run stopped',
+            detail=reason,
+            status='warn',
+        )
+        self._emit_data(f'[status] stop_reason=cancelled ({reason})\n')
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_state()
+
     def fail(self, error: BaseException) -> None:
         self._close_open_blocks()
         active_turn = self._active_turn()
@@ -463,6 +526,89 @@ class AgentTuiEventBridge:
         self.state.activity_events = 0
         self._publish_activity()
         self._publish_state()
+
+    def _handle_delegate_batch_result(self, event: dict[str, object]) -> None:
+        batch_index = _preview_value(event.get('batch_index'))
+        status = _preview_value(event.get('status')) or 'completed'
+        labels = event.get('labels')
+        if isinstance(labels, list):
+            label_text = ', '.join(str(label) for label in labels)
+        else:
+            label_text = _preview_value(labels)
+        title = f'Delegate Batch {batch_index or ""}'.strip()
+        content = (
+            f'status={status}\n'
+            f'labels={label_text or "(none)"}\n'
+            f'completed={event.get("completed_children", 0)} '
+            f'failed={event.get("failed_children", 0)} '
+            f'skipped={event.get("skipped_children", 0)}'
+        )
+        self._append_turn_notice(
+            kind='status',
+            title=title,
+            content=content,
+            status='ok' if status == 'completed' else 'warn',
+        )
+        self._upsert_activity(
+            f'delegate_batch:{batch_index or "unknown"}',
+            label='Delegate batch finished',
+            detail=f'{status}: {label_text or "(none)"}',
+            status='ok' if status == 'completed' else 'warn',
+        )
+        self._publish_turns()
+        self._publish_activity()
+
+    def _handle_delegate_subtask_result(self, event: dict[str, object]) -> None:
+        label = _preview_value(event.get('label')) or 'subtask'
+        stop_reason = _preview_value(event.get('stop_reason')) or 'stop'
+        content = (
+            f'label={label}\n'
+            f'batch_index={event.get("batch_index", "")}\n'
+            f'session_id={_preview_value(event.get("session_id"))}\n'
+            f'turns={event.get("turns", 0)} tool_calls={event.get("tool_calls", 0)}\n'
+            f'stop_reason={stop_reason}'
+        )
+        self._append_turn_notice(
+            kind='status',
+            title=f'Sub-Agent: {label}',
+            content=content,
+            status='ok' if stop_reason not in {'backend_error', 'budget_exceeded'} else 'error',
+        )
+        self._upsert_activity(
+            f'delegate_child:{label}',
+            label='Sub-agent finished',
+            detail=f'{label}: {stop_reason}',
+            status='ok' if stop_reason not in {'backend_error', 'budget_exceeded'} else 'error',
+        )
+        self._publish_turns()
+        self._publish_activity()
+
+    def _handle_delegate_group_result(self, event: dict[str, object]) -> None:
+        group_id = _preview_value(event.get('group_id')) or 'group'
+        group_status = _preview_value(event.get('group_status')) or 'completed'
+        strategy = _preview_value(event.get('strategy')) or 'serial'
+        content = (
+            f'group_id={group_id}\n'
+            f'status={group_status}\n'
+            f'strategy={strategy}\n'
+            f'subtasks={event.get("subtask_count", 0)} '
+            f'completed={event.get("completed_children", 0)} '
+            f'failed={event.get("failed_children", 0)}'
+        )
+        self._append_turn_notice(
+            kind='status',
+            title='Sub-Agent Group',
+            content=content,
+            status='ok' if group_status == 'completed' else 'warn',
+        )
+        self._upsert_activity(
+            f'delegate_group:{group_id}',
+            label='Sub-agent group finished',
+            detail=f'{group_status}; strategy={strategy}',
+            status='ok' if group_status == 'completed' else 'warn',
+        )
+        self._publish_turns()
+        self._publish_activity()
 
     def _handle_tool_start(self, event: dict[str, object]) -> None:
         tool_name = event.get('tool_name')
