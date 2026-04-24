@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Callable, Sequence
 
 from src.agent.models.types import AgentRunResult
@@ -465,6 +466,7 @@ class AgentTuiEventBridge:
 
     def _handle_tool_start(self, event: dict[str, object]) -> None:
         tool_name = event.get('tool_name')
+        rendered_start = self._render_tool_start(event)
         tool_call_id = (
             str(event['tool_call_id'])
             if isinstance(event.get('tool_call_id'), str)
@@ -483,16 +485,16 @@ class AgentTuiEventBridge:
         self._append_turn_notice(
             kind='tool',
             title=f'Tool Call: {tool_name or "tool"}',
-            content=self._render_tool_start(event),
+            content=self._render_tool_start_detail(event, rendered_start),
             status='info',
         )
         self._upsert_activity(
             f'tool:{tool_call_id}',
             label='Tool started',
-            detail=self._render_tool_start(event),
+            detail=rendered_start,
             status='running',
         )
-        self._write_status(self._render_tool_start(event))
+        self._write_status(rendered_start)
         self._publish_turns()
         self._publish_activity()
         self._publish_state()
@@ -533,6 +535,13 @@ class AgentTuiEventBridge:
         if key in self._announced_tool_plans:
             return
         self._announced_tool_plans.add(key)
+        arguments_delta = _preview_value(event.get('arguments_delta'), max_chars=360)
+        plan_content = f'Planning tool call: {tool_name}'
+        tool_call_id = _preview_value(event.get('tool_call_id'))
+        if tool_call_id:
+            plan_content += f' id={tool_call_id}'
+        if arguments_delta:
+            plan_content += f' args~ {arguments_delta}'
         self.state.phase = 'Planning tool'
         self.state.phase_detail = tool_name
         self._update_active_turn(
@@ -541,17 +550,17 @@ class AgentTuiEventBridge:
         )
         self._append_turn_notice(
             kind='thinking',
-            title='Thinking',
-            content=f'Planning tool call: {tool_name}',
+            title=f'Thinking: {tool_name}',
+            content=plan_content,
             status='info',
         )
         self._upsert_activity(
             f'plan:{key}',
             label='Tool planned',
-            detail=tool_name,
+            detail=plan_content,
             status='info',
         )
-        self._write_status(f'[thinking] planning tool call: {tool_name}')
+        self._write_status(f'[thinking] {plan_content}')
         self._publish_turns()
         self._publish_activity()
         self._publish_state()
@@ -572,12 +581,30 @@ class AgentTuiEventBridge:
         if tool_name == 'mcp_call_tool':
             server = _preview_value(arguments.get('server')) or '(auto)'
             remote_tool = _preview_value(arguments.get('tool_name')) or '(unknown)'
+            tool_arguments = arguments.get('arguments')
+            tool_args_preview = _preview_value(tool_arguments, max_chars=240)
+            if tool_args_preview:
+                return f'[mcp] server={server} tool={remote_tool} args={tool_args_preview}'
             return f'[mcp] server={server} tool={remote_tool}'
         if tool_name.startswith('mcp_'):
             summary = _preview_value(arguments)
             return f'[mcp] {tool_name} {summary}'.rstrip()
         summary = _preview_value(arguments)
         return f'[tool] {tool_name} {summary}'.rstrip() if summary else f'[tool] {tool_name}'
+
+    def _render_tool_start_detail(self, event: dict[str, object], summary: str) -> str:
+        lines = [summary]
+        tool_call_id = _preview_value(event.get('tool_call_id'))
+        if tool_call_id:
+            lines.append(f'tool_call_id={tool_call_id}')
+        arguments = event.get('arguments')
+        if isinstance(arguments, dict):
+            lines.append('arguments:')
+            lines.append(self._format_json_for_display(arguments, max_chars=6000))
+        elif arguments is not None:
+            lines.append('arguments:')
+            lines.append(_preview_value(arguments, max_chars=1200))
+        return '\n'.join(lines)
 
     def _render_tool_delta(self, event: dict[str, object]) -> None:
         tool_name = event.get('tool_name')
@@ -624,6 +651,9 @@ class AgentTuiEventBridge:
     def _handle_tool_result(self, event: dict[str, object]) -> None:
         tool_name = event.get('tool_name')
         ok = bool(event.get('ok'))
+        tool_label = _preview_value(tool_name) or 'tool'
+        rendered_result = self._render_tool_result(event)
+        rendered_result_detail = self._render_tool_result_detail(event, rendered_result)
         tool_call_id = (
             str(event['tool_call_id'])
             if isinstance(event.get('tool_call_id'), str)
@@ -638,17 +668,17 @@ class AgentTuiEventBridge:
         )
         self._append_turn_notice(
             kind='tool_result',
-            title='Tool Result',
-            content=self._render_tool_result(event),
+            title=f'Tool Result: {tool_label}',
+            content=rendered_result_detail,
             status='ok' if ok else 'error',
         )
         self._upsert_activity(
             f'tool:{tool_call_id}',
             label='Tool finished',
-            detail=self._render_tool_result(event),
+            detail=rendered_result,
             status='ok' if ok else 'error',
         )
-        self._write_status(self._render_tool_result(event))
+        self._write_status(rendered_result)
         self._publish_turns()
         self._publish_activity()
         self._publish_state()
@@ -657,6 +687,7 @@ class AgentTuiEventBridge:
         tool_name = event.get('tool_name')
         ok = bool(event.get('ok'))
         metadata = event.get('metadata')
+        content_preview = _preview_value(event.get('content_preview'), max_chars=220)
         if not isinstance(tool_name, str) or not tool_name:
             tool_name = 'tool'
         if not isinstance(metadata, dict):
@@ -665,17 +696,99 @@ class AgentTuiEventBridge:
         path = metadata.get('path')
         if action == 'bash':
             exit_code = metadata.get('exit_code')
+            output_preview = _preview_value(metadata.get('output_preview'), max_chars=120)
+            if output_preview:
+                return f'[command] exit_code={exit_code} ok={ok} output={output_preview}'
             return f'[command] exit_code={exit_code} ok={ok}'
+        if action == 'web_search':
+            query = _preview_value(metadata.get('query'), max_chars=90)
+            result_count = metadata.get('result_count')
+            top_url = ''
+            top_urls = metadata.get('top_urls')
+            if isinstance(top_urls, list) and top_urls:
+                top_url = _preview_value(top_urls[0], max_chars=120)
+            parts = [f'[search] ok={ok}']
+            if query:
+                parts.append(f'query={query}')
+            if isinstance(result_count, int):
+                parts.append(f'results={result_count}')
+            if top_url:
+                parts.append(f'top={top_url}')
+            return ' '.join(parts)
+        if action == 'web_fetch':
+            url = _preview_value(metadata.get('url'), max_chars=120)
+            fetched_chars = metadata.get('fetched_chars')
+            preview = _preview_value(metadata.get('preview'), max_chars=120)
+            parts = [f'[web_fetch] ok={ok}']
+            if url:
+                parts.append(f'url={url}')
+            if isinstance(fetched_chars, int):
+                parts.append(f'chars={fetched_chars}')
+            if metadata.get('truncated') is True:
+                parts.append('truncated=True')
+            if preview:
+                parts.append(f'preview={preview}')
+            return ' '.join(parts)
         if isinstance(path, str) and path:
-            return f'[file] updated {path}'
+            file_action = action if isinstance(action, str) and action else tool_name
+            if file_action in {'write_file', 'edit_file', 'notebook_edit'}:
+                label = 'updated'
+            elif file_action == 'read_file':
+                label = 'read'
+            else:
+                label = file_action
+            return f'[file] {label} {path} ok={ok}'
         if action == 'mcp_call_tool' or tool_name.startswith('mcp_'):
-            server = _preview_value(metadata.get('server_name')) or '(auto)'
+            server = _preview_value(metadata.get('server_name') or metadata.get('requested_server')) or '(auto)'
             remote_tool = _preview_value(metadata.get('tool_name')) or tool_name
-            return f'[mcp] server={server} tool={remote_tool} ok={ok}'
+            summary = f'[mcp] server={server} tool={remote_tool} ok={ok}'
+            if not ok and content_preview:
+                summary += f' error={content_preview}'
+            return summary
         cwd_update = metadata.get('cwd_update')
         if isinstance(cwd_update, str) and cwd_update:
             return f'[cwd] {cwd_update}'
+        for candidate in (
+            metadata.get('output_preview'),
+            metadata.get('preview'),
+            metadata.get('arguments_preview'),
+            metadata.get('answer_preview'),
+            content_preview,
+        ):
+            preview = _preview_value(candidate, max_chars=180)
+            if preview:
+                return f'[tool] {tool_name} ok={ok} {preview}'
+        if isinstance(action, str) and action and action != tool_name:
+            return f'[tool] {tool_name} action={action} ok={ok}'
         return f'[tool] {tool_name} ok={ok}'
+
+    def _render_tool_result_detail(self, event: dict[str, object], summary: str) -> str:
+        lines = [summary]
+        tool_call_id = _preview_value(event.get('tool_call_id'))
+        if tool_call_id:
+            lines.append(f'tool_call_id={tool_call_id}')
+        content = event.get('content')
+        if isinstance(content, str) and content:
+            lines.append('content:')
+            lines.append(content.rstrip())
+        elif isinstance(event.get('content_preview'), str) and event.get('content_preview'):
+            lines.append('content_preview:')
+            lines.append(str(event.get('content_preview')).rstrip())
+        metadata = event.get('metadata')
+        if isinstance(metadata, dict) and metadata:
+            lines.append('metadata:')
+            lines.append(self._format_json_for_display(metadata, max_chars=6000))
+        return '\n'.join(lines)
+
+    def _format_json_for_display(self, payload: object, *, max_chars: int = 6000) -> str:
+        try:
+            rendered = json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
+        except (TypeError, ValueError):
+            rendered = str(payload)
+        if len(rendered) <= max_chars:
+            return rendered
+        head = rendered[: max_chars - 20]
+        return head + '\n...[truncated]...'
 
     def _write_status(self, line: str) -> None:
         if not line:

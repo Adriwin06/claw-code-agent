@@ -281,8 +281,78 @@ class TextualUiTests(unittest.TestCase):
             [entry.kind for entry in bridge.turns[0].entries],
             ['assistant', 'tool', 'tool_output', 'tool_result'],
         )
+        self.assertEqual(bridge.turns[0].entries[1].title, 'Tool Call: bash')
+        self.assertEqual(bridge.turns[0].entries[3].title, 'Tool Result: bash')
+        self.assertIn('arguments:', bridge.turns[0].entries[1].content)
+        self.assertIn('metadata:', bridge.turns[0].entries[3].content)
         self.assertTrue(any(item.label == 'Tool finished' for item in bridge.activity_items))
         self.assertEqual(bridge.history_items[0].assistant_preview, 'Hello world')
+
+    def test_event_bridge_renders_web_search_result_details(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('What is today\'s date?')
+        bridge.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'web_search',
+                'ok': True,
+                'metadata': {
+                    'action': 'web_search',
+                    'query': 'What is the current date?',
+                    'result_count': 1,
+                    'top_urls': ['https://example.com/date'],
+                },
+                'content_preview': '# Web Search ...',
+            }
+        )
+
+        rendered = ''.join(chunks)
+        self.assertIn(
+            '[search] ok=True query=What is the current date? results=1 top=https://example.com/date',
+            rendered,
+        )
+        self.assertEqual(bridge.turns[0].entries[0].title, 'Tool Result: web_search')
+        self.assertIn('results=1', bridge.turns[0].entries[0].content)
+
+    def test_event_bridge_renders_failed_mcp_result_with_error_details(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Evaluate expression')
+        bridge.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'mcp_call_tool',
+                'tool_call_id': 'call-42',
+                'ok': False,
+                'content': 'MCP call failed: server unavailable',
+                'content_preview': 'MCP call failed: server unavailable',
+                'metadata': {
+                    'action': 'mcp_call_tool',
+                    'tool_name': 'evaluate_expression',
+                    'requested_server': 'sagemath',
+                },
+            }
+        )
+
+        rendered = ''.join(chunks)
+        self.assertIn('[mcp] server=sagemath tool=evaluate_expression ok=False', rendered)
+        self.assertIn('error=MCP call failed: server unavailable', rendered)
+        self.assertIn('content:', bridge.turns[0].entries[0].content)
+        self.assertIn('server unavailable', bridge.turns[0].entries[0].content)
+        self.assertIn('metadata:', bridge.turns[0].entries[0].content)
 
     def test_event_bridge_emits_final_output_when_response_is_not_streamed(self) -> None:
         chunks: list[str] = []

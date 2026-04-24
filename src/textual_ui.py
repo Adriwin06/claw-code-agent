@@ -303,6 +303,9 @@ def run_agent_tui(
             return rendered or '_No internal work details._'
 
         def _working_entry_heading(self, entry: ConversationEntry) -> str:
+            title = entry.title.strip()
+            if title:
+                return title
             if entry.kind == 'thinking':
                 return 'Thinking'
             if entry.kind == 'tool':

@@ -956,6 +956,10 @@ class LocalCodingAgent:
             return False
         if tool_calls_so_far <= 0:
             return False
+        latest_response = (turn.content or '').strip()
+        response_text = (current_response or latest_response).strip()
+        if self._looks_like_unfinished_working_response(latest_response):
+            return continuation_count <= 2
         prompt_text = prompt.lower()
         if not any(
             keyword in prompt_text
@@ -971,10 +975,6 @@ class LocalCodingAgent:
             )
         ):
             return False
-        latest_response = (turn.content or '').strip()
-        response_text = (current_response or latest_response).strip()
-        if self._looks_like_unfinished_working_response(latest_response):
-            return continuation_count <= 2
         if continuation_count != 1:
             return False
         if len(response_text) >= 900:
@@ -1005,10 +1005,19 @@ class LocalCodingAgent:
             'incomplete response',
             'i apologize for the incomplete',
             'i will now',
+            'i am now',
+            'i am running',
+            "i'm running",
             'i will proceed',
             "i'll proceed",
             'i will continue',
             "i'll continue",
+            'i will rerun',
+            'i will re-run',
+            "i'll rerun",
+            "i'll re-run",
+            'rerunning the tool call',
+            're-running the tool call',
             'next, i will',
             'now, i will',
             'after that, i will',
@@ -1021,6 +1030,9 @@ class LocalCodingAgent:
             'run a web search',
             'test the web search',
             'test the search',
+            'run the tool call',
+            'running the tool call',
+            'tool call again',
             'call the tool',
             'use the tool',
             'inspect the file',

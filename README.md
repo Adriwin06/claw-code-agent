@@ -369,6 +369,8 @@ OPENROUTER_API_KEY=
 # Optional override for local/proxy/custom endpoints:
 LLM_API_KEY=ollama
 SAGEMATH_IMAGE=sagemath/sagemath:latest
+SAGEMATH_HOST_PORT=18000
+SEARXNG_HOST_PORT=8080
 SAGEMATH_MCP_URL=http://127.0.0.1:18000/mcp
 AGENT_COMMAND=agent-tui
 HOST_WORKSPACE_DIR=.
@@ -410,7 +412,7 @@ python3 -m src.main mcp-tools --cwd .
 
 Optional web search setup:
 
-A local SearxNG endpoint at `http://127.0.0.1:8080` is used automatically. Set `SEARXNG_BASE_URL` only when you need a different endpoint, such as a container-accessible host URL.
+The workspace launchers start a local SearXNG sidecar by default and publish it at `http://127.0.0.1:8080`. Set `CLAW_START_SEARCH=0` to skip it, `SEARXNG_HOST_PORT` to publish a different host port, or `SEARXNG_BASE_URL` when you want to use an external provider instead.
 
 ```bash
 python3 -m src.main search-status --cwd .
@@ -428,10 +430,10 @@ Notes:
 - workspace `.env` files are loaded automatically by the CLI and runtime integrations
 - the repo includes a root-level [`.claw-mcp.json`](.claw-mcp.json) manifest that defaults SageMath to `http://127.0.0.1:18000/mcp` and can be overridden with `SAGEMATH_MCP_URL`
 - the repo includes a root-level [`.claw-search.json`](.claw-search.json) manifest that defaults `web_search` to `http://127.0.0.1:8080` and can be overridden with `SEARXNG_BASE_URL`
-- when you start SageMath in Compose, `claw-agent` can talk to it over the internal service URL `http://sagemath:8000/mcp`
-- from the host machine, the published port is `http://127.0.0.1:18000/mcp`
+- the workspace launchers start the SageMath and SearXNG sidecars by default, wait briefly for their HTTP endpoints, then pass container-reachable URLs into the agent
+- from the host machine, the default published endpoints are `http://127.0.0.1:18000/mcp` for SageMath and `http://127.0.0.1:8080` for SearXNG
 - SearxNG does not require an API key, but it still requires a reachable search endpoint
-- for Dockerized agent runs that need a search provider on the host machine, prefer `SEARXNG_BASE_URL=http://host.docker.internal:8080`
+- for manual Dockerized agent runs that need services published on the host machine, prefer `SAGEMATH_MCP_URL=http://host.docker.internal:18000/mcp` and `SEARXNG_BASE_URL=http://host.docker.internal:8080`
 - set `AGENT_READ_ONLY=true` to force read-only mode; when it is true, the write/shell/unsafe flags are ignored
 - set `AGENT_ALLOW_WRITE`, `AGENT_ALLOW_SHELL`, and `AGENT_UNSAFE` as needed when `AGENT_READ_ONLY=false`
 - set `AGENT_COMMAND=agent-chat` if you want the plain REPL instead of the Textual UI
@@ -439,6 +441,7 @@ Notes:
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
 - on Windows, [`launch-workspace.bat`](launch-workspace.bat) starts the agent without rebuilding the image every run; set `CLAW_REBUILD=1` only when you need a fresh image
 - SageMath starts by default when using the workspace launchers; set `CLAW_START_SAGEMATH=0` to skip the sidecar
+- SearXNG starts by default when using the workspace launchers; set `CLAW_START_SEARCH=0` to skip the sidecar
 
 ### Optional: Use LiteLLM Proxy
 

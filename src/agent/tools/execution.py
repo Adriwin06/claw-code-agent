@@ -1144,6 +1144,9 @@ def _mcp_call_tool(arguments: dict[str, Any], context: ToolExecutionContext) -> 
         raw_arguments = {}
     if not isinstance(raw_arguments, dict):
         raise ToolExecutionError('arguments must be an object')
+    arguments_preview = _snapshot_text(
+        json.dumps(raw_arguments, ensure_ascii=True, sort_keys=True)
+    )
     max_chars = _coerce_int(arguments, 'max_chars', context.max_output_chars)
     try:
         content, metadata = runtime.call_tool(
@@ -1160,6 +1163,8 @@ def _mcp_call_tool(arguments: dict[str, Any], context: ToolExecutionContext) -> 
             'action': 'mcp_call_tool',
             'tool_name': tool_name,
             'server_name': metadata.get('server_name'),
+            'requested_server': server,
+            'arguments_preview': arguments_preview,
             'mcp_is_error': metadata.get('is_error'),
         },
     )

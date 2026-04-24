@@ -166,6 +166,20 @@ class MainCliTests(unittest.TestCase):
                 },
             }
         )
+        renderer.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'web_search',
+                'ok': True,
+                'metadata': {
+                    'action': 'web_search',
+                    'query': 'What is the current date?',
+                    'result_count': 1,
+                    'top_urls': ['https://example.com/date'],
+                },
+                'content_preview': '# Web Search ...',
+            }
+        )
         renderer.finish()
 
         rendered = buffer.getvalue()
@@ -175,6 +189,32 @@ class MainCliTests(unittest.TestCase):
         self.assertIn('[tool-output:bash:stdout]', rendered)
         self.assertIn('/workspace', rendered)
         self.assertIn('[mcp] server=sagemath tool=factor', rendered)
+        self.assertIn('[search] ok=True query=What is the current date? results=1', rendered)
+
+    def test_live_renderer_shows_failed_mcp_error_details(self) -> None:
+        buffer = io.StringIO()
+        renderer = _AgentLiveRenderer(buffer)
+
+        renderer.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'mcp_call_tool',
+                'ok': False,
+                'content': 'MCP call failed: server unavailable',
+                'content_preview': 'MCP call failed: server unavailable',
+                'metadata': {
+                    'action': 'mcp_call_tool',
+                    'requested_server': 'sagemath',
+                    'tool_name': 'evaluate_expression',
+                },
+            }
+        )
+        renderer.finish()
+
+        rendered = buffer.getvalue()
+        self.assertIn('[mcp] server=sagemath tool=evaluate_expression ok=False', rendered)
+        self.assertIn('error=MCP call failed: server unavailable', rendered)
+        self.assertIn('[tool-error] MCP call failed: server unavailable', rendered)
 
     def test_parser_accepts_remote_runtime_commands(self) -> None:
         parser = build_parser()

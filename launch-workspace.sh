@@ -7,6 +7,9 @@ set -euo pipefail
 #   CLAW_AGENT_COMMAND=agent-tui|agent-chat|doctor|...
 #   CLAW_REBUILD=1              rebuild the image before launching
 #   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
+#   CLAW_START_SEARCH=0         disable the default SearXNG sidecar
+#   SAGEMATH_HOST_PORT=18000    host port published by the SageMath sidecar
+#   SEARXNG_HOST_PORT=8080      host port published by the SearXNG sidecar
 
 bool_true() {
   case "${1:-}" in
@@ -36,7 +39,13 @@ read_env_file_value() {
       value = substr($0, index($0, "=") + 1)
       gsub(/\r$/, "", value)
       print value
+      found = 1
       exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
     }
   ' "$env_file"
 }
@@ -71,6 +80,25 @@ ensure_ollama_running() {
     waited=$((waited + 1))
   done
 
+  return 1
+}
+
+wait_http_url() {
+  local label="$1"
+  local url="$2"
+  local timeout_seconds="${3:-60}"
+  local waited=0
+
+  while (( waited < timeout_seconds )); do
+    if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
+      echo "$label is reachable at $url"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  echo "Warning: $label did not become reachable at $url within ${timeout_seconds}s."
   return 1
 }
 
@@ -122,6 +150,9 @@ WORKSPACE_DIR="$(pwd)"
 REPO_ROOT="${CLAW_CODE_AGENT_ROOT:-}"
 LAUNCH_AGENT_COMMAND="${CLAW_AGENT_COMMAND:-agent-tui}"
 CLAW_START_SAGEMATH="${CLAW_START_SAGEMATH:-1}"
+CLAW_START_SEARCH="${CLAW_START_SEARCH:-1}"
+SAGEMATH_HOST_PORT="${SAGEMATH_HOST_PORT:-18000}"
+SEARXNG_HOST_PORT="${SEARXNG_HOST_PORT:-8080}"
 DOCKER_IMAGE="claw-code-agent-local"
 
 if docker compose version >/dev/null 2>&1; then
@@ -170,7 +201,11 @@ if [[ -f "$ENV_FILE" ]]; then
   LLM_API_BASE_VALUE="$(read_env_file_value "$ENV_FILE" LLM_API_BASE || printf '%s' "$LLM_API_BASE_VALUE")"
   LLM_MODEL_VALUE="$(read_env_file_value "$ENV_FILE" LLM_MODEL || printf '%s' "$LLM_MODEL_VALUE")"
   LLM_API_KEY_VALUE="$(read_env_file_value "$ENV_FILE" LLM_API_KEY || printf '%s' "$LLM_API_KEY_VALUE")"
+  SAGEMATH_HOST_PORT="$(read_env_file_value "$ENV_FILE" SAGEMATH_HOST_PORT || printf '%s' "$SAGEMATH_HOST_PORT")"
+  SEARXNG_HOST_PORT="$(read_env_file_value "$ENV_FILE" SEARXNG_HOST_PORT || printf '%s' "$SEARXNG_HOST_PORT")"
 fi
+export SAGEMATH_HOST_PORT
+export SEARXNG_HOST_PORT
 
 if is_wsl && uses_ollama_backend "$LLM_API_BASE_VALUE"; then
   if ensure_ollama_running; then
@@ -193,6 +228,13 @@ if is_wsl && uses_ollama_backend "$LLM_API_BASE_VALUE"; then
     echo "Start it with 'ollama serve' and make sure a model is available via 'ollama list'."
   fi
 fi
+
+AGENT_SIDECAR_HOST="host.docker.internal"
+if [[ "${DOCKER_NETWORK_ARGS[*]}" == "--network host" ]]; then
+  AGENT_SIDECAR_HOST="127.0.0.1"
+fi
+AGENT_SAGEMATH_MCP_URL="${CLAW_AGENT_SAGEMATH_MCP_URL:-http://${AGENT_SIDECAR_HOST}:${SAGEMATH_HOST_PORT}/mcp}"
+AGENT_SEARXNG_BASE_URL="${CLAW_AGENT_SEARXNG_BASE_URL:-http://${AGENT_SIDECAR_HOST}:${SEARXNG_HOST_PORT}}"
 
 echo "Launching Claw Code Agent"
 echo "  repo: $REPO_ROOT"
@@ -220,67 +262,65 @@ else
   fi
 fi
 
+SIDECAR_SERVICES=()
 if bool_true "${CLAW_START_SAGEMATH:-}"; then
-  echo "Starting optional SageMath sidecar..."
-  "${COMPOSE_CMD[@]}" -f "$REPO_ROOT/docker-compose.yml" --project-directory "$REPO_ROOT" up -d sagemath
-  if [[ -f "$ENV_FILE" ]]; then
-    docker run --rm -it \
-      --env-file "$ENV_FILE" \
-      "${DOCKER_NETWORK_ARGS[@]}" \
-      "${DOCKER_ENV_ARGS[@]}" \
-      -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND" \
-      -e "AGENT_CWD=/workspace" \
-      -e "AGENT_READ_ONLY=false" \
-      -e "AGENT_ALLOW_WRITE=true" \
-      -e "AGENT_ALLOW_SHELL=false" \
-      -e "AGENT_UNSAFE=false" \
-      -e "SAGEMATH_MCP_URL=http://sagemath:8000/mcp" \
-      -v "$WORKSPACE_DIR:/workspace" \
-      -w /workspace \
-      "$DOCKER_IMAGE"
-  else
-    docker run --rm -it \
-      "${DOCKER_NETWORK_ARGS[@]}" \
-      "${DOCKER_ENV_ARGS[@]}" \
-      -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND" \
-      -e "AGENT_CWD=/workspace" \
-      -e "AGENT_READ_ONLY=false" \
-      -e "AGENT_ALLOW_WRITE=true" \
-      -e "AGENT_ALLOW_SHELL=false" \
-      -e "AGENT_UNSAFE=false" \
-      -e "SAGEMATH_MCP_URL=http://sagemath:8000/mcp" \
-      -v "$WORKSPACE_DIR:/workspace" \
-      -w /workspace \
-      "$DOCKER_IMAGE"
-  fi
+  SIDECAR_SERVICES+=(sagemath)
 else
   echo "Skipping SageMath sidecar. Set CLAW_START_SAGEMATH=1 to enable it."
-  if [[ -f "$ENV_FILE" ]]; then
-    docker run --rm -it \
-      --env-file "$ENV_FILE" \
-      "${DOCKER_NETWORK_ARGS[@]}" \
-      "${DOCKER_ENV_ARGS[@]}" \
-      -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND" \
-      -e "AGENT_CWD=/workspace" \
-      -e "AGENT_READ_ONLY=false" \
-      -e "AGENT_ALLOW_WRITE=true" \
-      -e "AGENT_ALLOW_SHELL=false" \
-      -e "AGENT_UNSAFE=false" \
-      -v "$WORKSPACE_DIR:/workspace" \
-      -w /workspace \
-      "$DOCKER_IMAGE"
-  else
-    docker run --rm -it \
-      "${DOCKER_NETWORK_ARGS[@]}" \
-      "${DOCKER_ENV_ARGS[@]}" \
-      -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND" \
-      -e "AGENT_CWD=/workspace" \
-      -e "AGENT_READ_ONLY=false" \
-      -e "AGENT_ALLOW_WRITE=true" \
-      -e "AGENT_ALLOW_SHELL=false" \
-      -e "AGENT_UNSAFE=false" \
-      -v "$WORKSPACE_DIR:/workspace" \
-      -w /workspace \
-      "$DOCKER_IMAGE"
+fi
+if bool_true "${CLAW_START_SEARCH:-}"; then
+  SIDECAR_SERVICES+=(searxng)
+else
+  echo "Skipping SearXNG sidecar. Set CLAW_START_SEARCH=1 to enable it."
+fi
+
+if [[ "${#SIDECAR_SERVICES[@]}" -gt 0 ]]; then
+  echo "Starting optional sidecars: ${SIDECAR_SERVICES[*]}..."
+  "${COMPOSE_CMD[@]}" -f "$REPO_ROOT/docker-compose.yml" --project-directory "$REPO_ROOT" up -d "${SIDECAR_SERVICES[@]}"
+  if bool_true "${CLAW_START_SAGEMATH:-}"; then
+    wait_http_url "SageMath MCP" "http://127.0.0.1:${SAGEMATH_HOST_PORT}/health" 90 || true
+  fi
+  if bool_true "${CLAW_START_SEARCH:-}"; then
+    wait_http_url "SearXNG" "http://127.0.0.1:${SEARXNG_HOST_PORT}/" 60 || true
   fi
 fi
+
+ENV_FILE_ARGS=()
+if [[ -f "$ENV_FILE" ]]; then
+  ENV_FILE_ARGS=(--env-file "$ENV_FILE")
+fi
+
+RUN_ENV_ARGS=(
+  -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND"
+  -e "AGENT_CWD=/workspace"
+  -e "AGENT_READ_ONLY=false"
+  -e "AGENT_ALLOW_WRITE=true"
+  -e "AGENT_ALLOW_SHELL=false"
+  -e "AGENT_UNSAFE=false"
+)
+if bool_true "${CLAW_START_SAGEMATH:-}"; then
+  RUN_ENV_ARGS+=(-e "SAGEMATH_MCP_URL=$AGENT_SAGEMATH_MCP_URL")
+fi
+if bool_true "${CLAW_START_SEARCH:-}"; then
+  RUN_ENV_ARGS+=(
+    -e "SEARXNG_BASE_URL=$AGENT_SEARXNG_BASE_URL"
+    -e "WEB_SEARCH_ENABLED=True"
+  )
+else
+  RUN_ENV_ARGS+=(-e "WEB_SEARCH_ENABLED=False")
+fi
+
+DOCKER_RUN_ARGS=(--rm -i)
+if [[ -t 0 && -t 1 ]]; then
+  DOCKER_RUN_ARGS=(--rm -it)
+fi
+
+docker run \
+  "${DOCKER_RUN_ARGS[@]}" \
+  "${ENV_FILE_ARGS[@]}" \
+  "${DOCKER_NETWORK_ARGS[@]}" \
+  "${DOCKER_ENV_ARGS[@]}" \
+  "${RUN_ENV_ARGS[@]}" \
+  -v "$WORKSPACE_DIR:/workspace" \
+  -w /workspace \
+  "$DOCKER_IMAGE"

@@ -376,6 +376,73 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(len(continuation_messages), 2)
 
+    def test_agent_continues_explicit_tool_retry_even_without_analysis_prompt_keywords(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I will test the MCP tool first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I am running the tool call again to verify the fix.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Retry completed with the updated parameters.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace, max_turns=None),
+                )
+                result = agent.run('Rerun it then, why did you stop?')
+
+        self.assertIn('I am running the tool call again', result.final_output)
+        self.assertIn('Retry completed with the updated parameters.', result.final_output)
+        continuation_messages = [
+            message for message in result.transcript
+            if message.get('metadata', {}).get('kind') == 'continuation_request'
+        ]
+        self.assertEqual(len(continuation_messages), 1)
+
     def test_write_tool_is_blocked_without_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = AgentRuntimeConfig(cwd=Path(tmp_dir))

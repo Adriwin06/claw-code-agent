@@ -35,6 +35,13 @@ class ToolCallExecutionOutcome:
     history_entry: dict[str, object] | None = None
 
 
+def _preview_tool_content(content: str, *, max_chars: int = 220) -> str:
+    normalized = ' '.join(content.split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[: max_chars - 3] + '...'
+
+
 def execute_runtime_tool_call(
     *,
     tool_call: ToolCall,
@@ -250,6 +257,8 @@ def execute_runtime_tool_call(
             'message_id': session.messages[tool_message_index].message_id,
             'ok': tool_result.ok,
             'metadata': dict(tool_result.metadata),
+            'content': tool_result.content,
+            'content_preview': _preview_tool_content(tool_result.content),
         }
     )
     hooks.append_runtime_tool_followup_events(stream_events, tool_call, tool_result)
