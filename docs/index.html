@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Claw Context Pipeline</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="top-band" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Runtime visualization</p>
+          <h1 id="page-title">Claw Context Pipeline</h1>
+          <p class="lede">
+            A source-linked view of how each prompt becomes model-ready context,
+            how turns loop through tools, and where runtime state is injected.
+          </p>
+        </div>
+        <div class="runtime-card" aria-label="Runtime summary">
+          <span class="summary-label">Tool registry</span>
+          <strong id="tool-count">66 tools</strong>
+          <span class="summary-label">Main loop</span>
+          <strong>LocalCodingAgent._run_prompt</strong>
+        </div>
+      </section>
+
+      <section class="control-strip" aria-label="Visualization controls">
+        <label class="field">
+          <span>Prompt path</span>
+          <select id="prompt-mode"></select>
+        </label>
+        <label class="field field-wide">
+          <span>Find step</span>
+          <input id="step-search" type="search" placeholder="Search phase, module, or context key">
+        </label>
+        <div class="phase-filters" id="phase-filters" aria-label="Phase filters"></div>
+      </section>
+
+      <section class="grid-two">
+        <article class="panel timeline-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">After each prompt</p>
+              <h2>Execution Timeline</h2>
+            </div>
+            <span id="visible-count" class="pill"></span>
+          </div>
+          <div id="timeline" class="timeline" aria-live="polite"></div>
+        </article>
+
+        <aside class="panel detail-panel" aria-labelledby="detail-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Selected step</p>
+              <h2 id="detail-title">Step Details</h2>
+            </div>
+          </div>
+          <div id="step-detail" class="detail-body"></div>
+        </aside>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Context assembly</p>
+            <h2>LLM Context Builder</h2>
+          </div>
+          <button id="reset-graph" class="icon-button" type="button" title="Reset graph focus" aria-label="Reset graph focus">
+            <span aria-hidden="true">R</span>
+          </button>
+        </div>
+        <div class="graph-wrap">
+          <svg id="context-graph" class="context-graph" role="img" aria-label="Graph of context inputs and model request outputs"></svg>
+        </div>
+      </section>
+
+      <section class="grid-two lower-grid">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Pressure points</p>
+              <h2>Token Budget And Compaction</h2>
+            </div>
+          </div>
+          <div id="budget-bars" class="budget-bars"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Runtime events</p>
+              <h2>Stream Event Lanes</h2>
+            </div>
+          </div>
+          <div id="event-lanes" class="event-lanes"></div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Code map</p>
+            <h2>Module Responsibilities</h2>
+          </div>
+        </div>
+        <div id="module-map" class="module-map"></div>
+      </section>
+    </main>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>

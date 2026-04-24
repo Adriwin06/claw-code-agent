@@ -64,6 +64,7 @@ from src.agent.agent_tools import (
     build_tool_context,
     default_tool_registry,
 )
+from src.agent.tools.registry import build_effective_tool_registry
 from src.agent.agent_types import (
     AgentRunResult,
     AgentRuntimeConfig,
@@ -227,14 +228,10 @@ class LocalCodingAgent:
         self.workflow_runtime = dependencies.workflow_runtime
         self.worktree_runtime = dependencies.worktree_runtime
         self.runtime_config = self._apply_hook_policy_budget_overrides(self.runtime_config)
-        registry = dict(self.tool_registry)
-        plugin_tools = self.plugin_runtime.register_tool_aliases(registry)
-        if plugin_tools:
-            registry = {**registry, **plugin_tools}
-        virtual_tools = self.plugin_runtime.register_virtual_tools(registry)
-        if virtual_tools:
-            registry = {**registry, **virtual_tools}
-        self.tool_registry = registry
+        self.tool_registry = build_effective_tool_registry(
+            self.tool_registry,
+            plugin_runtime=self.plugin_runtime,
+        )
         self.llm_backend = resolve_llm_backend(self.llm_backend or self.model_config.llm_backend)
         self.client = build_llm_client(self.model_config, backend=self.llm_backend)
         self.tool_context = build_tool_context(
@@ -3016,15 +3013,10 @@ class LocalCodingAgent:
         )
         self.worktree_runtime = WorktreeRuntime.from_workspace(self.runtime_config.cwd)
         self.runtime_config = self._apply_hook_policy_budget_overrides(self.runtime_config)
-        registry = dict(default_tool_registry())
-        if self.plugin_runtime is not None:
-            alias_tools = self.plugin_runtime.register_tool_aliases(registry)
-            if alias_tools:
-                registry = {**registry, **alias_tools}
-            virtual_tools = self.plugin_runtime.register_virtual_tools(registry)
-            if virtual_tools:
-                registry = {**registry, **virtual_tools}
-        self.tool_registry = registry
+        self.tool_registry = build_effective_tool_registry(
+            default_tool_registry(),
+            plugin_runtime=self.plugin_runtime,
+        )
         self.tool_context = build_tool_context(
             self.runtime_config,
             tool_registry=self.tool_registry,
