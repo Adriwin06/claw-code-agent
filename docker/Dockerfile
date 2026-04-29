@@ -17,6 +17,9 @@ WORKDIR /workspace
 COPY . /workspace
 COPY docker/entrypoint.sh /usr/local/bin/claw-agent-entrypoint
 
+RUN find /workspace -type f -name "*.sh" -exec sed -i 's/\r$//' {} + \
+    && sed -i 's/\r$//' /usr/local/bin/claw-agent-entrypoint
+
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir ".[tui]"
 

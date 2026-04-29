@@ -120,6 +120,12 @@ def has_unresolved_env_var(value: str) -> bool:
     return bool(_UNRESOLVED_ENV_RE.search(value))
 
 
+def clean_env_value(raw_value: str | None) -> str | None:
+    if not isinstance(raw_value, str):
+        return None
+    return _parse_dotenv_value(raw_value)
+
+
 def _parse_dotenv_value(raw_value: str) -> str:
     value = raw_value.strip()
     if not value:

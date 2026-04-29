@@ -1,5 +1,58 @@
 @echo off
 setlocal
+goto main
+
+:read_env_file_value
+set "READ_ENV_FILE=%~1"
+set "READ_ENV_KEY=%~2"
+set "READ_ENV_TARGET=%~3"
+for /f "usebackq tokens=1,* delims==" %%A in ("%READ_ENV_FILE%") do (
+  if /i "%%~A"=="%READ_ENV_KEY%" (
+    set "%READ_ENV_TARGET%=%%~B"
+    exit /b 0
+  )
+)
+exit /b 1
+
+:uses_ollama_backend
+echo(%~1 | findstr /I /C:":11434" /C:"ollama" >nul 2>&1
+exit /b %errorlevel%
+
+:host_ollama_ready
+curl.exe -fsS --max-time 3 "http://127.0.0.1:11434/api/tags" >nul 2>&1
+exit /b %errorlevel%
+
+:wait_http_url
+set "WAIT_LABEL=%~1"
+set "WAIT_URL=%~2"
+set "WAIT_SECONDS=%~3"
+if not defined WAIT_SECONDS set "WAIT_SECONDS=60"
+for /l %%I in (1,1,%WAIT_SECONDS%) do (
+  curl.exe -fsS --max-time 3 "%WAIT_URL%" >nul 2>&1
+  if not errorlevel 1 (
+    echo %WAIT_LABEL% is reachable at %WAIT_URL%
+    exit /b 0
+  )
+  timeout /t 1 /nobreak >nul
+)
+echo Warning: %WAIT_LABEL% did not become reachable at %WAIT_URL% within %WAIT_SECONDS%s.
+exit /b 1
+
+:find_repo_root
+set "SEARCH_DIR=%~1"
+
+:find_repo_root_loop
+if exist "%SEARCH_DIR%\docker-compose.yml" (
+  set "REPO_ROOT=%SEARCH_DIR%"
+  exit /b 0
+)
+
+for %%I in ("%SEARCH_DIR%\..") do set "PARENT_DIR=%%~fI"
+if /i "%PARENT_DIR%"=="%SEARCH_DIR%" exit /b 1
+set "SEARCH_DIR=%PARENT_DIR%"
+goto find_repo_root_loop
+
+:main
 
 rem Launch Claw Code Agent against the current directory.
 rem If this script is not inside the repository tree, set CLAW_CODE_AGENT_ROOT first.
@@ -51,6 +104,26 @@ set "AGENT_SAGEMATH_MCP_URL=%CLAW_AGENT_SAGEMATH_MCP_URL%"
 if not defined AGENT_SAGEMATH_MCP_URL set "AGENT_SAGEMATH_MCP_URL=http://%AGENT_SIDECAR_HOST%:%SAGEMATH_HOST_PORT%/mcp"
 set "AGENT_SEARXNG_BASE_URL=%CLAW_AGENT_SEARXNG_BASE_URL%"
 if not defined AGENT_SEARXNG_BASE_URL set "AGENT_SEARXNG_BASE_URL=http://%AGENT_SIDECAR_HOST%:%SEARXNG_HOST_PORT%"
+set "RUN_LLM_API_BASE_ENV="
+set "RUN_LLM_API_KEY_ENV="
+set "LLM_API_BASE_VALUE=%LLM_API_BASE%"
+set "LLM_API_KEY_VALUE=%LLM_API_KEY%"
+if exist "%ENV_FILE%" (
+  call :read_env_file_value "%ENV_FILE%" "LLM_API_BASE" LLM_API_BASE_VALUE
+  call :read_env_file_value "%ENV_FILE%" "LLM_API_KEY" LLM_API_KEY_VALUE
+)
+call :uses_ollama_backend "%LLM_API_BASE_VALUE%"
+if not errorlevel 1 (
+  set "RUN_LLM_API_BASE_ENV=-e "LLM_API_BASE=http://host.docker.internal:11434/v1""
+  if not defined LLM_API_KEY_VALUE set "RUN_LLM_API_KEY_ENV=-e "LLM_API_KEY=ollama""
+  call :host_ollama_ready
+  if errorlevel 1 (
+    echo Warning: Ollama is configured, but http://127.0.0.1:11434/api/tags is not reachable.
+    echo Start Ollama and make sure the configured model is pulled.
+  ) else (
+    echo Detected host Ollama. Using host.docker.internal for the Docker backend URL.
+  )
+)
 
 echo Launching Claw Code Agent
 echo   repo: %REPO_ROOT%
@@ -65,6 +138,16 @@ if /i "%CLAW_REBUILD%"=="1" (
 if /i "%CLAW_REBUILD%"=="1" goto build_image
 docker image inspect "%DOCKER_IMAGE%" >nul 2>&1
 if errorlevel 1 goto build_image
+docker run --rm --entrypoint python "%DOCKER_IMAGE%" -c "import litellm, textual" >nul 2>&1
+if errorlevel 1 (
+  echo Cached Docker image is missing required Python packages. Rebuilding %DOCKER_IMAGE%...
+  goto build_image
+)
+docker run --rm -e "AGENT_COMMAND=doctor" -e "AGENT_SKIP_BACKEND=true" -e "AGENT_SKIP_TUI=true" "%DOCKER_IMAGE%" >nul 2>&1
+if errorlevel 1 (
+  echo Cached Docker image entrypoint is not runnable. Rebuilding %DOCKER_IMAGE%...
+  goto build_image
+)
 goto image_ready
 
 :build_image
@@ -114,6 +197,8 @@ if defined ENV_FILE_ARGS (
     -e "AGENT_UNSAFE=false" ^
     %RUN_SAGEMATH_ENV% ^
     %RUN_SEARCH_ENV% ^
+    %RUN_LLM_API_BASE_ENV% ^
+    %RUN_LLM_API_KEY_ENV% ^
     -v "%WORKSPACE_DIR%:/workspace" ^
     -w /workspace ^
     "%DOCKER_IMAGE%"
@@ -128,39 +213,11 @@ if defined ENV_FILE_ARGS (
     -e "AGENT_UNSAFE=false" ^
     %RUN_SAGEMATH_ENV% ^
     %RUN_SEARCH_ENV% ^
+    %RUN_LLM_API_BASE_ENV% ^
+    %RUN_LLM_API_KEY_ENV% ^
     -v "%WORKSPACE_DIR%:/workspace" ^
     -w /workspace ^
     "%DOCKER_IMAGE%"
 )
 
 exit /b %errorlevel%
-
-:wait_http_url
-set "WAIT_LABEL=%~1"
-set "WAIT_URL=%~2"
-set "WAIT_SECONDS=%~3"
-if not defined WAIT_SECONDS set "WAIT_SECONDS=60"
-for /l %%I in (1,1,%WAIT_SECONDS%) do (
-  curl.exe -fsS --max-time 3 "%WAIT_URL%" >nul 2>&1
-  if not errorlevel 1 (
-    echo %WAIT_LABEL% is reachable at %WAIT_URL%
-    exit /b 0
-  )
-  timeout /t 1 /nobreak >nul
-)
-echo Warning: %WAIT_LABEL% did not become reachable at %WAIT_URL% within %WAIT_SECONDS%s.
-exit /b 1
-
-:find_repo_root
-set "SEARCH_DIR=%~1"
-
-:find_repo_root_loop
-if exist "%SEARCH_DIR%\docker-compose.yml" (
-  set "REPO_ROOT=%SEARCH_DIR%"
-  exit /b 0
-)
-
-for %%I in ("%SEARCH_DIR%\..") do set "PARENT_DIR=%%~fI"
-if /i "%PARENT_DIR%"=="%SEARCH_DIR%" exit /b 1
-set "SEARCH_DIR=%PARENT_DIR%"
-goto find_repo_root_loop

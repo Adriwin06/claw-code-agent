@@ -18,6 +18,16 @@ class AgentCliConfigTests(unittest.TestCase):
         with patch.dict('os.environ', env, clear=False):
             self.assertEqual(_default_model_from_env(), 'openai/gemma4:e4b')
 
+    def test_default_model_from_env_strips_docker_env_file_inline_comments(self) -> None:
+        env = {
+            'LLM_API_BASE': 'http://127.0.0.1:11434/v1',
+            'LLM_MODEL': 'gemma4:e4b',
+            'LLM_PROVIDER': 'ollama_chat # openai, anthropic, gemini, ollama_chat',
+        }
+
+        with patch.dict('os.environ', env, clear=False):
+            self.assertEqual(_default_model_from_env(), 'openai/gemma4:e4b')
+
     def test_build_model_config_prefixes_ollama_model_for_ollama_base_url(self) -> None:
         parser = build_parser()
         args = parser.parse_args(
@@ -37,6 +47,72 @@ class AgentCliConfigTests(unittest.TestCase):
             config = _build_model_config(args)
 
         self.assertEqual(config.model, 'openai/gemma4:e4b')
+
+    def test_build_model_config_adds_openai_compatible_ollama_v1_base_path(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'agent',
+                'hello',
+                '--model',
+                'gemma4:e4b',
+                '--base-url',
+                'http://127.0.0.1:11434',
+                '--cwd',
+                '.',
+            ]
+        )
+
+        with patch.dict('os.environ', {'LLM_PROVIDER': 'ollama_chat'}, clear=False):
+            config = _build_model_config(args)
+
+        self.assertEqual(config.model, 'openai/gemma4:e4b')
+        self.assertEqual(config.base_url, 'http://127.0.0.1:11434/v1')
+
+    def test_build_model_config_keeps_native_ollama_base_url_for_ollama_model_prefix(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'agent',
+                'hello',
+                '--model',
+                'ollama/gemma4:e4b',
+                '--base-url',
+                'http://127.0.0.1:11434',
+                '--cwd',
+                '.',
+            ]
+        )
+
+        config = _build_model_config(args)
+
+        self.assertEqual(config.model, 'ollama/gemma4:e4b')
+        self.assertEqual(config.base_url, 'http://127.0.0.1:11434')
+
+    def test_build_model_config_strips_inline_comments_from_forwarded_env_args(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'agent',
+                'hello',
+                '--model',
+                'gemma4:e4b # local model',
+                '--base-url',
+                'http://127.0.0.1:11434/v1 # local ollama',
+                '--cwd',
+                '.',
+            ]
+        )
+
+        with patch.dict(
+            'os.environ',
+            {'LLM_PROVIDER': 'ollama_chat # openai, anthropic, gemini, ollama_chat'},
+            clear=False,
+        ):
+            config = _build_model_config(args)
+
+        self.assertEqual(config.model, 'openai/gemma4:e4b')
+        self.assertEqual(config.base_url, 'http://127.0.0.1:11434/v1')
 
     def test_build_model_config_keeps_provider_prefix_for_non_openai_provider(self) -> None:
         parser = build_parser()

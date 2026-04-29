@@ -36,6 +36,14 @@ class MainCliTests(unittest.TestCase):
         runtime_config = _build_runtime_config(args)
         self.assertEqual(runtime_config.budget_config.max_model_calls, 3)
         self.assertEqual(runtime_config.budget_config.max_session_turns, 5)
+        self.assertEqual(
+            runtime_config.session_directory,
+            Path('.').resolve() / '.port_sessions' / 'agent',
+        )
+        self.assertEqual(
+            runtime_config.scratchpad_root,
+            Path('.').resolve() / '.port_sessions' / 'scratchpad',
+        )
 
     def test_agent_chat_loop_runs_multiple_turns_and_reuses_session(self) -> None:
         responses = [

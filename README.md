@@ -852,6 +852,12 @@ Inspect saved sessions:
 ls -lt .port_sessions/agent
 ```
 
+The Textual UI also keeps its conversation sidebar history under
+`~/.claw-code/conversations/`. That history is keyed by workspace path, so
+opening the TUI with a different `--cwd` only shows conversations for that
+workspace. Use `Ctrl+D` or `/delete` in the TUI to remove the active
+conversation from the workspace history.
+
 > **Note:** Run `agent-resume` from the same `claw-code/` directory where the session was created. A resumed session continues from the saved transcript, not from scratch.
 
 ---

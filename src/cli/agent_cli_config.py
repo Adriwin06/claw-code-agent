@@ -15,6 +15,7 @@ from src.agent.models.types import (
     ModelPricing,
     OutputSchemaConfig,
 )
+from src.features.system.env_runtime import clean_env_value
 
 
 _DEFAULT_MODEL = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
@@ -65,7 +66,7 @@ _BASE_URL_PROVIDER_HINTS = (
 def _looks_like_ollama_base_url(base_url: str | None) -> bool:
     if not isinstance(base_url, str):
         return False
-    normalized = base_url.strip().lower()
+    normalized = clean_env_value(base_url).strip().lower()
     if not normalized:
         return False
     return ':11434' in normalized or 'ollama' in normalized
@@ -74,7 +75,7 @@ def _looks_like_ollama_base_url(base_url: str | None) -> bool:
 def _looks_like_local_base_url(base_url: str | None) -> bool:
     if not isinstance(base_url, str):
         return False
-    normalized = base_url.strip().lower()
+    normalized = clean_env_value(base_url).strip().lower()
     if not normalized:
         return False
     parsed = urlparse(normalized)
@@ -85,7 +86,7 @@ def _looks_like_local_base_url(base_url: str | None) -> bool:
 def _env_first(*names: str, default: str | None = None) -> str | None:
     for name in names:
         if name in os.environ:
-            return os.environ.get(name, default)
+            return clean_env_value(os.environ.get(name, default))
     return default
 
 
@@ -96,7 +97,7 @@ def _env_nonempty(*names: str, default: str | None = None) -> str | None:
         raw = os.environ.get(name)
         if not isinstance(raw, str):
             continue
-        stripped = raw.strip()
+        stripped = clean_env_value(raw).strip()
         if stripped:
             return stripped
     return default
@@ -128,7 +129,7 @@ def _env_optional_int(*names: str) -> int | None:
 def _normalize_provider_name(provider: str | None) -> str | None:
     if not isinstance(provider, str):
         return None
-    normalized = provider.strip().lower()
+    normalized = clean_env_value(provider).strip().lower()
     if not normalized:
         return None
     return _PROVIDER_ENV_ALIASES.get(normalized, normalized)
@@ -137,7 +138,7 @@ def _normalize_provider_name(provider: str | None) -> str | None:
 def _provider_from_model_name(model: str | None) -> str | None:
     if not isinstance(model, str):
         return None
-    normalized_model = model.strip()
+    normalized_model = clean_env_value(model).strip()
     if not normalized_model or '/' not in normalized_model:
         return None
     return _normalize_provider_name(normalized_model.split('/', 1)[0])
@@ -148,7 +149,7 @@ def _provider_from_base_url(base_url: str | None) -> str | None:
         return 'ollama'
     if not isinstance(base_url, str):
         return None
-    normalized = base_url.strip().lower()
+    normalized = clean_env_value(base_url).strip().lower()
     if not normalized:
         return None
     for marker, provider in _BASE_URL_PROVIDER_HINTS:
@@ -189,7 +190,7 @@ def _resolve_api_key(
     model: str | None = None,
     base_url: str | None = None,
 ) -> str:
-    explicit = explicit_api_key.strip() if isinstance(explicit_api_key, str) else ''
+    explicit = clean_env_value(explicit_api_key).strip() if isinstance(explicit_api_key, str) else ''
     if explicit:
         return explicit
 
@@ -222,6 +223,26 @@ def _default_api_key_from_env() -> str:
     )
 
 
+def _normalize_base_url(
+    base_url: str | None,
+    *,
+    model: str | None = None,
+) -> str:
+    if not isinstance(base_url, str):
+        return _LOCAL_BASE_URL_DEFAULT
+    normalized_base_url = clean_env_value(base_url).strip()
+    if not normalized_base_url:
+        return _LOCAL_BASE_URL_DEFAULT
+    if not _looks_like_ollama_base_url(normalized_base_url):
+        return normalized_base_url
+    if _provider_from_model_name(model) == 'ollama':
+        return normalized_base_url
+    parsed = urlparse(normalized_base_url)
+    if parsed.path.rstrip('/'):
+        return normalized_base_url
+    return f'{normalized_base_url.rstrip("/")}/v1'
+
+
 def _normalize_model_name(
     model: str | None,
     *,
@@ -230,14 +251,14 @@ def _normalize_model_name(
 ) -> str:
     if not isinstance(model, str):
         return _DEFAULT_MODEL
-    normalized_model = model.strip()
+    normalized_model = clean_env_value(model).strip()
     if not normalized_model:
         return _DEFAULT_MODEL
     if '/' in normalized_model:
         return normalized_model
 
-    normalized_provider = (provider or '').strip().lower()
-    if normalized_provider in {'ollama', 'ollama_chat'}:
+    normalized_provider = _normalize_provider_name(provider)
+    if normalized_provider == 'ollama':
         if _looks_like_ollama_base_url(base_url):
             return f'openai/{normalized_model}'
         return f'ollama/{normalized_model}'
@@ -321,8 +342,9 @@ def _load_output_schema_config(args: argparse.Namespace) -> OutputSchemaConfig |
 
 
 def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
+    cwd = Path(args.cwd).resolve()
     return AgentRuntimeConfig(
-        cwd=Path(args.cwd).resolve(),
+        cwd=cwd,
         max_turns=getattr(args, 'max_turns', 12),
         permissions=AgentPermissions(
             allow_file_write=args.allow_write,
@@ -347,11 +369,11 @@ def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
             max_session_turns=getattr(args, 'max_session_turns', None),
         ),
         output_schema=_load_output_schema_config(args),
-        session_directory=(Path('.port_sessions') / 'agent').resolve(),
+        session_directory=(cwd / '.port_sessions' / 'agent').resolve(),
         scratchpad_root=(
             Path(getattr(args, 'scratchpad_root')).resolve()
             if getattr(args, 'scratchpad_root', None)
-            else (Path('.port_sessions') / 'scratchpad').resolve()
+            else (cwd / '.port_sessions' / 'scratchpad').resolve()
         ),
     )
 
@@ -360,21 +382,25 @@ def _build_model_config(args: argparse.Namespace) -> ModelConfig:
     base_url = getattr(args, 'base_url', None)
     if base_url is None:
         base_url = _env_first('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+    base_url = clean_env_value(str(base_url))
     provider = _env_nonempty('LLM_PROVIDER')
-    model = getattr(args, 'model', None) or _default_model_from_env()
+    raw_model = getattr(args, 'model', None) or _default_model_from_env()
+    model = clean_env_value(str(raw_model))
+    normalized_model = _normalize_model_name(
+        model,
+        provider=provider,
+        base_url=base_url,
+    )
+    normalized_base_url = _normalize_base_url(base_url, model=normalized_model)
     api_key = _resolve_api_key(
         explicit_api_key=getattr(args, 'api_key', None),
         provider=provider,
-        model=str(model),
-        base_url=str(base_url),
+        model=normalized_model,
+        base_url=normalized_base_url,
     )
     return ModelConfig(
-        model=_normalize_model_name(
-            model,
-            provider=provider,
-            base_url=str(base_url),
-        ),
-        base_url=str(base_url),
+        model=normalized_model,
+        base_url=normalized_base_url,
         api_key=str(api_key),
         llm_backend=getattr(
             args,

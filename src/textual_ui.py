@@ -19,6 +19,7 @@ from .ui.conversation import (
     build_conversation_history_items,
     restore_conversation_turns,
 )
+from .ui.conversation_store import ConversationHistoryStore
 from .ui.event_bridge import AgentTuiEventBridge
 from .ui.formatting import _friendly_stop_reason
 from .ui.ids import (
@@ -105,7 +106,8 @@ def render_details_panel(
             'Ctrl+T: rerun selected turn',
             'Ctrl+N: new conversation',
             'Ctrl+F: toggle follow',
-            '/new /prev /next /retry /reuse',
+            'Ctrl+D: delete conversation',
+            '/new /prev /next /retry /reuse /delete',
             'Ctrl+C: stop current run',
             'PgUp/PgDn: scroll conversation',
         ]
@@ -118,6 +120,7 @@ def run_agent_tui(
     *,
     initial_prompt: str | None = None,
     resume_session_id: str | None = None,
+    history_store: ConversationHistoryStore | None = None,
 ) -> int:
     try:
         from textual import events, work
@@ -657,6 +660,7 @@ def run_agent_tui(
             ('ctrl+j', 'focus_prompt', 'Prompt'),
             ('ctrl+u', 'reuse_selected_prompt', 'Reuse'),
             ('ctrl+t', 'retry_selected_turn', 'Retry'),
+            ('ctrl+d', 'delete_conversation', 'Delete'),
             ('ctrl+r', 'refresh_panels', 'Refresh'),
             ('ctrl+f', 'toggle_auto_follow', 'Follow'),
             ('ctrl+c', 'stop_generation', 'Stop'),
@@ -669,22 +673,32 @@ def run_agent_tui(
             *,
             first_prompt: str | None,
             resumed_session_id: str | None,
+            history_store: ConversationHistoryStore | None,
         ) -> None:
             super().__init__()
             self._agent = runtime_agent
             self._first_prompt = first_prompt.strip() if first_prompt else None
             self._active_session_id = resumed_session_id
+            self._workspace = self._agent.runtime_config.cwd
+            self._history_store = history_store or ConversationHistoryStore()
             self._state = AgentTuiState.from_agent(runtime_agent)
             self._command_suggestions = build_slash_command_suggestions()
             self._visible_command_suggestions: list[SlashCommandSuggestion] = []
-            self._conversation_counter = 1
-            self._conversations: list[ConversationThread] = [
-                ConversationThread(
-                    conversation_id='conversation-1',
-                    title=('Resumed conversation' if resumed_session_id else 'Conversation 1'),
-                )
-            ]
-            self._active_conversation_id = 'conversation-1'
+            snapshot = self._history_store.load_workspace(self._workspace)
+            self._conversations = list(snapshot.conversations)
+            if not self._conversations:
+                self._conversations = [
+                    ConversationThread(
+                        conversation_id='conversation-1',
+                        title=('Resumed conversation' if resumed_session_id else 'Conversation 1'),
+                    )
+                ]
+            self._conversation_counter = self._max_conversation_counter(self._conversations)
+            self._active_conversation_id = self._initial_active_conversation_id(
+                snapshot.active_conversation_id,
+                resumed_session_id=resumed_session_id,
+            )
+            self._active_session_id = self._active_conversation().session_id or resumed_session_id
             self._sidebar_items: tuple[SidebarItem, ...] = ()
             self._conversation_turns: tuple[ConversationTurn, ...] = ()
             self._history_items: tuple[ConversationHistoryItem, ...] = ()
@@ -710,7 +724,7 @@ def run_agent_tui(
                     self._restored_session = None
                 else:
                     hydrate_state_from_stored_session(self._state, self._restored_session)
-                    self._conversations[0].session_id = resumed_session_id
+                    self._active_conversation().session_id = resumed_session_id
             self._bridge = self._make_bridge(self._state)
 
         def compose(self) -> ComposeResult:
@@ -728,6 +742,7 @@ def run_agent_tui(
                     with Horizontal(id='actions-toolbar'):
                         yield Button('Reuse', id='reuse-prompt-button')
                         yield Button('Retry', id='retry-turn-button')
+                        yield Button('Delete', id='delete-conversation-button')
                     with Horizontal(id='run-toolbar'):
                         yield Button('Stop', id='stop-run-button')
                         yield Button('Follow On', id='follow-button')
@@ -736,7 +751,7 @@ def run_agent_tui(
                 yield OptionList(id='command-options')
                 yield Static(id='command-description')
             yield Input(
-                placeholder='Type a task, /retry, /reuse, /new, or another slash command',
+                placeholder='Type a task, /retry, /reuse, /new, /delete, or another slash command',
                 id='prompt',
             )
             yield Footer()
@@ -747,6 +762,16 @@ def run_agent_tui(
             if self._restored_session is not None:
                 restored_turns = restore_conversation_turns(self._restored_session.messages)
                 self._bridge.restore_history(restored_turns)
+            else:
+                conversation = self._active_conversation()
+                self._active_session_id = conversation.session_id
+                self._selected_turn_id = (
+                    conversation.turns[-1].turn_id if conversation.turns else None
+                )
+                self._bridge.restore_history(
+                    conversation.turns,
+                    announce_activity=bool(conversation.turns),
+                )
             self._refresh_all_panels()
             self.call_after_refresh(self.action_focus_prompt)
             if self._first_prompt:
@@ -781,6 +806,9 @@ def run_agent_tui(
                 return
             if lowered_prompt in {'/reuse', '/edit-selected'}:
                 self.action_reuse_selected_prompt()
+                return
+            if lowered_prompt in {'/delete', '/delete-conversation'}:
+                self.action_delete_conversation()
                 return
             self._submit_prompt(prompt)
 
@@ -910,6 +938,10 @@ def run_agent_tui(
                 self.action_retry_selected_turn()
                 event.stop()
                 return
+            if event.button.id == 'delete-conversation-button':
+                self.action_delete_conversation()
+                event.stop()
+                return
             if event.button.id == 'stop-run-button':
                 self.action_stop_generation()
                 event.stop()
@@ -933,6 +965,7 @@ def run_agent_tui(
                 )
             )
             self._switch_to_conversation(conversation_id)
+            self._persist_history()
             self.call_after_refresh(self.action_focus_prompt)
 
         def action_previous_conversation(self) -> None:
@@ -978,6 +1011,42 @@ def run_agent_tui(
                 return
             self._submit_prompt(turn.user_prompt)
 
+        def action_delete_conversation(self) -> None:
+            if self._state.busy or not self._conversations:
+                return
+            delete_index = self._conversation_index(self._active_conversation_id)
+            deleted = self._conversations[delete_index]
+            self._delete_session_file(deleted.session_id)
+            remaining = [
+                conversation
+                for conversation in self._conversations
+                if conversation.conversation_id != deleted.conversation_id
+            ]
+            if not remaining:
+                self._conversation_counter = 1
+                remaining = [
+                    ConversationThread(
+                        conversation_id='conversation-1',
+                        title='Conversation 1',
+                    )
+                ]
+                target_index = 0
+            else:
+                target_index = max(0, min(delete_index, len(remaining) - 1))
+            self._conversations = remaining
+            target = self._conversations[target_index]
+            self._active_conversation_id = target.conversation_id
+            self._active_session_id = target.session_id
+            self._state = AgentTuiState.from_agent(self._agent)
+            if target.session_id:
+                self._state.session_id = target.session_id
+            self._bridge = self._make_bridge(self._state)
+            self._selected_turn_id = target.turns[-1].turn_id if target.turns else None
+            self._bridge.restore_history(target.turns, announce_activity=False)
+            self._persist_history()
+            self._refresh_all_panels()
+            self.call_after_refresh(self.action_focus_prompt)
+
         def on_collapsible_toggled(self, event) -> None:
             collapsible = getattr(event, 'collapsible', None)
             if collapsible is None:
@@ -1012,6 +1081,53 @@ def run_agent_tui(
                     return conversation
             return self._conversations[0]
 
+        def _initial_active_conversation_id(
+            self,
+            stored_active_id: str | None,
+            *,
+            resumed_session_id: str | None,
+        ) -> str:
+            if resumed_session_id:
+                for conversation in self._conversations:
+                    if conversation.session_id == resumed_session_id:
+                        return conversation.conversation_id
+                if (
+                    len(self._conversations) == 1
+                    and not self._conversations[0].turns
+                    and self._conversations[0].session_id is None
+                ):
+                    self._conversations[0].title = 'Resumed conversation'
+                    self._conversations[0].session_id = resumed_session_id
+                    return self._conversations[0].conversation_id
+                self._conversation_counter += 1
+                conversation_id = f'conversation-{self._conversation_counter}'
+                self._conversations.append(
+                    ConversationThread(
+                        conversation_id=conversation_id,
+                        title='Resumed conversation',
+                        session_id=resumed_session_id,
+                    )
+                )
+                return conversation_id
+            if stored_active_id:
+                for conversation in self._conversations:
+                    if conversation.conversation_id == stored_active_id:
+                        return conversation.conversation_id
+            return self._conversations[-1].conversation_id
+
+        @staticmethod
+        def _max_conversation_counter(conversations: Sequence[ConversationThread]) -> int:
+            counter = 0
+            for conversation in conversations:
+                prefix, _, suffix = conversation.conversation_id.rpartition('-')
+                if prefix != 'conversation':
+                    continue
+                try:
+                    counter = max(counter, int(suffix))
+                except ValueError:
+                    continue
+            return max(counter, len(conversations), 1)
+
         def _conversation_index(self, conversation_id: str) -> int:
             for index, conversation in enumerate(self._conversations):
                 if conversation.conversation_id == conversation_id:
@@ -1035,6 +1151,7 @@ def run_agent_tui(
             for conversation in self._conversations:
                 if conversation.conversation_id == conversation_id:
                     conversation.expanded = expanded
+                    self._persist_history()
                     return
 
         def _sync_active_conversation(self) -> None:
@@ -1060,6 +1177,7 @@ def run_agent_tui(
                     )
                     self._bridge.restore_history(conversation.turns, announce_activity=False)
                     self._refresh_all_panels()
+                    self._persist_history()
                     return
 
         def _rebuild_sidebar_items(self) -> tuple[SidebarItem, ...]:
@@ -1116,6 +1234,8 @@ def run_agent_tui(
                 self._set_command_picker_visible(False)
             self._refresh_details_panel()
             self._refresh_conversation_view(allow_auto_follow=False)
+            if not state.busy:
+                self._persist_history()
 
         def _handle_turns_change(self, turns: tuple[ConversationTurn, ...]) -> None:
             self._conversation_turns = turns
@@ -1274,10 +1394,12 @@ def run_agent_tui(
             reuse_button = self.query_one('#reuse-prompt-button', Button)
             retry_button = self.query_one('#retry-turn-button', Button)
             stop_button = self.query_one('#stop-run-button', Button)
+            delete_button = self.query_one('#delete-conversation-button', Button)
             can_use_turn = turn is not None and not self._state.busy
             reuse_button.disabled = not can_use_turn
             retry_button.disabled = not can_use_turn
             stop_button.disabled = not self._state.busy
+            delete_button.disabled = self._state.busy
             self._refresh_follow_button()
             self.query_one('#details', Static).update(
                 render_details_panel(
@@ -1473,11 +1595,13 @@ def run_agent_tui(
             self._active_worker = None
             self._cancel_requested.clear()
             self._bridge.cancel('Stopped by user')
+            self._persist_history()
 
         def _finish_failed_prompt(self, error: BaseException) -> None:
             self._active_worker = None
             self._cancel_requested.clear()
             self._bridge.fail(error)
+            self._persist_history()
 
         def _finish_prompt(self, result: AgentRunResult) -> None:
             self._active_worker = None
@@ -1486,11 +1610,46 @@ def run_agent_tui(
                 return
             self._active_session_id = result.session_id or self._active_session_id
             self._bridge.complete(result)
+            self._persist_history()
+
+        def _persist_history(self) -> None:
+            try:
+                if not any(
+                    conversation.turns or conversation.session_id
+                    for conversation in self._conversations
+                ):
+                    try:
+                        self._history_store.workspace_path(self._workspace).unlink()
+                    except FileNotFoundError:
+                        pass
+                    return
+                self._history_store.save_workspace_conversations(
+                    self._workspace,
+                    self._conversations,
+                    active_conversation_id=self._active_conversation_id,
+                )
+            except OSError:
+                return
+
+        def _delete_session_file(self, session_id: str | None) -> None:
+            if not session_id:
+                return
+            session_directory = self._agent.runtime_config.session_directory.resolve()
+            session_path = (session_directory / f'{session_id}.json').resolve()
+            if session_path.parent != session_directory:
+                return
+            try:
+                session_path.unlink()
+            except FileNotFoundError:
+                return
+            except OSError:
+                return
 
     app = AgentTuiApp(
         agent,
         first_prompt=initial_prompt,
         resumed_session_id=resume_session_id,
+        history_store=history_store,
     )
     app.run()
     return 0

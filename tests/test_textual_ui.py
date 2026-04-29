@@ -13,6 +13,7 @@ from src.textual_ui import (
     AgentTuiEventBridge,
     AgentTuiState,
     ConversationEntry,
+    ConversationThread,
     ConversationTurn,
     build_working_section_id,
     build_working_section_instance_id,
@@ -25,6 +26,7 @@ from src.textual_ui import (
     restore_conversation_turns,
     should_route_key_to_prompt,
 )
+from src.ui.conversation_store import ConversationHistoryStore, workspace_history_key
 
 
 try:
@@ -453,6 +455,84 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(bridge.turns[0].entries[0].kind, 'assistant')
         self.assertEqual(bridge.activity_items[0].label, 'Conversation restored')
 
+    def test_conversation_history_store_round_trips_by_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / 'home' / '.claw-code'
+            workspace_a = Path(tmp_dir) / 'workspace-a'
+            workspace_b = Path(tmp_dir) / 'workspace-b'
+            workspace_a.mkdir()
+            workspace_b.mkdir()
+            store = ConversationHistoryStore(root)
+            conversation = ConversationThread(
+                conversation_id='conversation-3',
+                title='Inspect repo',
+                session_id='session-a',
+                turns=(
+                    ConversationTurn(
+                        turn_id='turn-1',
+                        user_prompt='Inspect repo',
+                        assistant_response='Done.',
+                        assistant_status='Ready',
+                        phase_label='Completed',
+                        session_id='session-a',
+                        entries=[
+                            ConversationEntry(
+                                entry_id='turn-1-entry-1',
+                                kind='assistant',
+                                title='Assistant',
+                                content='Done.',
+                                status='ok',
+                            )
+                        ],
+                    ),
+                ),
+            )
+
+            path = store.save_workspace_conversations(
+                workspace_a,
+                (conversation,),
+                active_conversation_id='conversation-3',
+            )
+            snapshot_a = store.load_workspace(workspace_a)
+            snapshot_b = store.load_workspace(workspace_b)
+
+            self.assertEqual(path.parent, root / 'conversations')
+            self.assertIn(workspace_history_key(workspace_a), path.name)
+            self.assertEqual(snapshot_a.active_conversation_id, 'conversation-3')
+            self.assertEqual(len(snapshot_a.conversations), 1)
+            self.assertEqual(snapshot_a.conversations[0].session_id, 'session-a')
+            self.assertEqual(snapshot_a.conversations[0].turns[0].user_prompt, 'Inspect repo')
+            self.assertEqual(snapshot_a.conversations[0].turns[0].entries[0].content, 'Done.')
+            self.assertEqual(snapshot_b.conversations, ())
+
+    def test_conversation_history_store_deletes_workspace_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / '.claw-code'
+            workspace = Path(tmp_dir) / 'workspace'
+            workspace.mkdir()
+            store = ConversationHistoryStore(root)
+            store.save_workspace_conversations(
+                workspace,
+                (
+                    ConversationThread('conversation-1', 'One'),
+                    ConversationThread('conversation-2', 'Two'),
+                ),
+                active_conversation_id='conversation-2',
+            )
+
+            deleted = store.delete_workspace_conversation(
+                workspace,
+                'conversation-1',
+                active_conversation_id='conversation-2',
+            )
+            snapshot = store.load_workspace(workspace)
+
+            self.assertTrue(deleted)
+            self.assertEqual(
+                [conversation.conversation_id for conversation in snapshot.conversations],
+                ['conversation-2'],
+            )
+
     @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
     def test_agent_tui_prompt_accepts_typing_when_idle(self) -> None:
         from textual.app import App
@@ -471,7 +551,10 @@ class TextualUiTests(unittest.TestCase):
                     model_config=ModelConfig(model='demo-model'),
                     runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
                 )
-                run_agent_tui(agent)
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
         finally:
             App.run = original_run
 
@@ -504,7 +587,10 @@ class TextualUiTests(unittest.TestCase):
                     model_config=ModelConfig(model='demo-model'),
                     runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
                 )
-                run_agent_tui(agent)
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
         finally:
             App.run = original_run
 
@@ -547,7 +633,10 @@ class TextualUiTests(unittest.TestCase):
                     model_config=ModelConfig(model='demo-model'),
                     runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
                 )
-                run_agent_tui(agent)
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
         finally:
             App.run = original_run
 
@@ -572,6 +661,76 @@ class TextualUiTests(unittest.TestCase):
         asyncio.run(exercise())
 
     @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_loads_and_deletes_workspace_history(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        try:
+            tmp_dir = Path(tmp.name)
+            workspace = tmp_dir / 'workspace'
+            other_workspace = tmp_dir / 'other'
+            workspace.mkdir()
+            other_workspace.mkdir()
+            store = ConversationHistoryStore(tmp_dir / '.claw-code-test')
+            store.save_workspace_conversations(
+                workspace,
+                (
+                    ConversationThread(
+                        conversation_id='conversation-5',
+                        title='Saved task',
+                        session_id='session-5',
+                        turns=(
+                            ConversationTurn(
+                                turn_id='turn-1',
+                                user_prompt='Saved task',
+                                assistant_response='Saved answer',
+                                assistant_status='Ready',
+                            ),
+                        ),
+                    ),
+                ),
+                active_conversation_id='conversation-5',
+            )
+            store.save_workspace_conversations(
+                other_workspace,
+                (ConversationThread('conversation-1', 'Other workspace'),),
+            )
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='demo-model'),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            run_agent_tui(agent, history_store=store)
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                self.assertEqual(app._active_conversation_id, 'conversation-5')
+                self.assertEqual(len(app._conversations), 1)
+                self.assertEqual(app._conversation_turns[0].user_prompt, 'Saved task')
+
+                app.action_delete_conversation()
+                await pilot.pause(0.2)
+
+                self.assertEqual(app._active_conversation_id, 'conversation-1')
+                self.assertEqual(app._conversation_turns, ())
+                self.assertEqual(store.load_workspace(workspace).conversations, ())
+                self.assertEqual(len(store.load_workspace(other_workspace).conversations), 1)
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
     def test_agent_tui_renders_split_working_sections_with_unique_ids(self) -> None:
         from textual.app import App
         from src.textual_ui import run_agent_tui
@@ -589,7 +748,10 @@ class TextualUiTests(unittest.TestCase):
                     model_config=ModelConfig(model='demo-model'),
                     runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
                 )
-                run_agent_tui(agent)
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
         finally:
             App.run = original_run
 
