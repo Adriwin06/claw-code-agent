@@ -8,6 +8,7 @@ set -euo pipefail
 #   CLAW_REBUILD=1              rebuild the image before launching
 #   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
 #   CLAW_START_SEARCH=0         disable the default SearXNG sidecar
+#   CLAW_HOST_CODE_HOME=...     host directory for persistent TUI history
 #   SAGEMATH_HOST_PORT=18000    host port published by the SageMath sidecar
 #   SEARXNG_HOST_PORT=8080      host port published by the SearXNG sidecar
 
@@ -154,6 +155,7 @@ CLAW_START_SEARCH="${CLAW_START_SEARCH:-1}"
 SAGEMATH_HOST_PORT="${SAGEMATH_HOST_PORT:-18000}"
 SEARXNG_HOST_PORT="${SEARXNG_HOST_PORT:-8080}"
 DOCKER_IMAGE="claw-code-agent-local"
+HOST_CLAW_CODE_HOME="${CLAW_HOST_CODE_HOME:-${CLAW_CODE_HOME:-$HOME/.claw-code}}"
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
@@ -239,6 +241,7 @@ AGENT_SEARXNG_BASE_URL="${CLAW_AGENT_SEARXNG_BASE_URL:-http://${AGENT_SIDECAR_HO
 echo "Launching Claw Code Agent"
 echo "  repo: $REPO_ROOT"
 echo "  workspace: $WORKSPACE_DIR"
+echo "  history: $HOST_CLAW_CODE_HOME"
 echo "  command: $LAUNCH_AGENT_COMMAND"
 if bool_true "${CLAW_REBUILD:-}"; then
   echo "  image rebuild: enabled"
@@ -290,9 +293,13 @@ if [[ -f "$ENV_FILE" ]]; then
   ENV_FILE_ARGS=(--env-file "$ENV_FILE")
 fi
 
+mkdir -p "$HOST_CLAW_CODE_HOME"
+
 RUN_ENV_ARGS=(
   -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND"
   -e "AGENT_CWD=/workspace"
+  -e "CLAW_CODE_HOME=/root/.claw-code"
+  -e "CLAW_HOST_WORKSPACE=$WORKSPACE_DIR"
   -e "AGENT_READ_ONLY=false"
   -e "AGENT_ALLOW_WRITE=true"
   -e "AGENT_ALLOW_SHELL=false"
@@ -321,6 +328,7 @@ docker run \
   "${DOCKER_NETWORK_ARGS[@]}" \
   "${DOCKER_ENV_ARGS[@]}" \
   "${RUN_ENV_ARGS[@]}" \
+  -v "$HOST_CLAW_CODE_HOME:/root/.claw-code" \
   -v "$WORKSPACE_DIR:/workspace" \
   -w /workspace \
   "$DOCKER_IMAGE"

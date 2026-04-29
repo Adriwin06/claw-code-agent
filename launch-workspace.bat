@@ -61,6 +61,7 @@ rem   CLAW_AGENT_COMMAND=agent-tui|agent-chat|doctor|...
 rem   CLAW_REBUILD=1              rebuild the image before launching
 rem   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
 rem   CLAW_START_SEARCH=0         disable the default SearXNG sidecar
+rem   CLAW_HOST_CODE_HOME=...     host directory for persistent TUI history
 rem   SAGEMATH_HOST_PORT=18000    host port published by the SageMath sidecar
 rem   SEARXNG_HOST_PORT=8080      host port published by the SearXNG sidecar
 
@@ -73,6 +74,14 @@ if not defined CLAW_START_SEARCH set "CLAW_START_SEARCH=1"
 if not defined SAGEMATH_HOST_PORT set "SAGEMATH_HOST_PORT=18000"
 if not defined SEARXNG_HOST_PORT set "SEARXNG_HOST_PORT=8080"
 set "DOCKER_IMAGE=claw-code-agent-local"
+set "HOST_CLAW_CODE_HOME=%CLAW_HOST_CODE_HOME%"
+if not defined HOST_CLAW_CODE_HOME (
+  if defined USERPROFILE (
+    set "HOST_CLAW_CODE_HOME=%USERPROFILE%\.claw-code"
+  ) else (
+    set "HOST_CLAW_CODE_HOME=%HOMEDRIVE%%HOMEPATH%\.claw-code"
+  )
+)
 
 if not defined REPO_ROOT (
   set "REPO_ROOT=%~dp0"
@@ -128,6 +137,7 @@ if not errorlevel 1 (
 echo Launching Claw Code Agent
 echo   repo: %REPO_ROOT%
 echo   workspace: %WORKSPACE_DIR%
+echo   history: %HOST_CLAW_CODE_HOME%
 echo   command: %LAUNCH_AGENT_COMMAND%
 if /i "%CLAW_REBUILD%"=="1" (
   echo   image rebuild: enabled
@@ -176,6 +186,8 @@ if defined SIDECAR_SERVICES (
   if /i "%CLAW_START_SEARCH%"=="1" call :wait_http_url "SearXNG" "http://127.0.0.1:%SEARXNG_HOST_PORT%/" 60
 )
 
+if not exist "%HOST_CLAW_CODE_HOME%" mkdir "%HOST_CLAW_CODE_HOME%"
+
 set "ENV_FILE_ARGS="
 if exist "%ENV_FILE%" set "ENV_FILE_ARGS=--env-file "%ENV_FILE%""
 set "RUN_SAGEMATH_ENV="
@@ -191,6 +203,8 @@ if defined ENV_FILE_ARGS (
     --add-host "host.docker.internal:host-gateway" ^
     -e "AGENT_COMMAND=%LAUNCH_AGENT_COMMAND%" ^
     -e "AGENT_CWD=/workspace" ^
+    -e "CLAW_CODE_HOME=/root/.claw-code" ^
+    -e "CLAW_HOST_WORKSPACE=%WORKSPACE_DIR%" ^
     -e "AGENT_READ_ONLY=false" ^
     -e "AGENT_ALLOW_WRITE=true" ^
     -e "AGENT_ALLOW_SHELL=false" ^
@@ -199,6 +213,7 @@ if defined ENV_FILE_ARGS (
     %RUN_SEARCH_ENV% ^
     %RUN_LLM_API_BASE_ENV% ^
     %RUN_LLM_API_KEY_ENV% ^
+    -v "%HOST_CLAW_CODE_HOME%:/root/.claw-code" ^
     -v "%WORKSPACE_DIR%:/workspace" ^
     -w /workspace ^
     "%DOCKER_IMAGE%"
@@ -207,6 +222,8 @@ if defined ENV_FILE_ARGS (
     --add-host "host.docker.internal:host-gateway" ^
     -e "AGENT_COMMAND=%LAUNCH_AGENT_COMMAND%" ^
     -e "AGENT_CWD=/workspace" ^
+    -e "CLAW_CODE_HOME=/root/.claw-code" ^
+    -e "CLAW_HOST_WORKSPACE=%WORKSPACE_DIR%" ^
     -e "AGENT_READ_ONLY=false" ^
     -e "AGENT_ALLOW_WRITE=true" ^
     -e "AGENT_ALLOW_SHELL=false" ^
@@ -215,6 +232,7 @@ if defined ENV_FILE_ARGS (
     %RUN_SEARCH_ENV% ^
     %RUN_LLM_API_BASE_ENV% ^
     %RUN_LLM_API_KEY_ENV% ^
+    -v "%HOST_CLAW_CODE_HOME%:/root/.claw-code" ^
     -v "%WORKSPACE_DIR%:/workspace" ^
     -w /workspace ^
     "%DOCKER_IMAGE%"

@@ -858,6 +858,12 @@ opening the TUI with a different `--cwd` only shows conversations for that
 workspace. Use `Ctrl+D` or `/delete` in the TUI to remove the active
 conversation from the workspace history.
 
+When using the Docker workspace launchers, the host history directory is
+mounted into the container so it survives `docker run --rm`. Override the host
+location with `CLAW_HOST_CODE_HOME`; the launcher also passes the host
+workspace path into the container so different mounted workspaces do not all
+collapse to `/workspace`.
+
 > **Note:** Run `agent-resume` from the same `claw-code/` directory where the session was created. A resumed session continues from the saved transcript, not from scratch.
 
 ---

@@ -13,6 +13,7 @@ from .conversation import ConversationEntry, ConversationThread, ConversationTur
 
 
 CONVERSATION_HISTORY_VERSION = 1
+_HOST_WORKSPACE_ENV = 'CLAW_HOST_WORKSPACE'
 
 
 @dataclass(frozen=True)
@@ -29,15 +30,23 @@ def default_claw_code_home() -> Path:
 
 
 def workspace_history_key(workspace: Path) -> str:
-    resolved = Path(workspace).expanduser().resolve()
-    normalized = str(resolved)
-    if os.name == 'nt':
-        normalized = normalized.lower()
+    normalized = workspace_history_identity(workspace)
+    if _looks_like_windows_path(normalized) or os.name == 'nt':
+        normalized = normalized.replace('\\', '/').lower()
     digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:16]
-    slug = re.sub(r'[^A-Za-z0-9_.-]+', '-', resolved.name).strip('.-')
+    slug_source = normalized.rstrip('/\\')
+    slug_name = re.split(r'[/\\]+', slug_source)[-1] if slug_source else ''
+    slug = re.sub(r'[^A-Za-z0-9_.-]+', '-', slug_name).strip('.-')
     if not slug:
         slug = 'workspace'
     return f'{slug}-{digest}'
+
+
+def workspace_history_identity(workspace: Path) -> str:
+    host_workspace = os.environ.get(_HOST_WORKSPACE_ENV)
+    if isinstance(host_workspace, str) and host_workspace.strip():
+        return _normalize_workspace_identity(host_workspace)
+    return str(Path(workspace).expanduser().resolve())
 
 
 class ConversationHistoryStore:
@@ -91,9 +100,11 @@ class ConversationHistoryStore:
         self.conversations_dir.mkdir(parents=True, exist_ok=True)
         resolved_workspace = Path(workspace).expanduser().resolve()
         path = self.workspace_path(resolved_workspace)
+        workspace_identity = workspace_history_identity(resolved_workspace)
         payload = {
             'version': CONVERSATION_HISTORY_VERSION,
-            'workspace': str(resolved_workspace),
+            'workspace': workspace_identity,
+            'runtime_workspace': str(resolved_workspace),
             'workspace_key': workspace_history_key(resolved_workspace),
             'active_conversation_id': active_conversation_id,
             'updated_at': _utc_now(),
@@ -136,6 +147,19 @@ class ConversationHistoryStore:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _normalize_workspace_identity(value: str) -> str:
+    normalized = value.strip()
+    normalized = os.path.expanduser(normalized)
+    normalized = re.sub(r'(?<!^)[/\\]+$', '', normalized)
+    if _looks_like_windows_path(normalized):
+        return normalized.replace('\\', '/')
+    return normalized
+
+
+def _looks_like_windows_path(value: str) -> bool:
+    return bool(re.match(r'^[A-Za-z]:[/\\]', value)) or '\\' in value
 
 
 def _conversation_to_payload(conversation: ConversationThread) -> dict[str, Any]:

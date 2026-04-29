@@ -5,6 +5,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_types import AgentPermissions, AgentRunResult, AgentRuntimeConfig, ModelConfig, UsageStats
@@ -504,6 +505,46 @@ class TextualUiTests(unittest.TestCase):
             self.assertEqual(snapshot_a.conversations[0].turns[0].user_prompt, 'Inspect repo')
             self.assertEqual(snapshot_a.conversations[0].turns[0].entries[0].content, 'Done.')
             self.assertEqual(snapshot_b.conversations, ())
+
+    def test_conversation_history_store_uses_host_workspace_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / '.claw-code'
+            runtime_workspace = Path(tmp_dir) / 'workspace'
+            runtime_workspace.mkdir()
+            store = ConversationHistoryStore(root)
+
+            with mock.patch.dict(
+                'os.environ',
+                {'CLAW_HOST_WORKSPACE': r'C:\Users\Ada\project-one'},
+            ):
+                path_one = store.save_workspace_conversations(
+                    runtime_workspace,
+                    (ConversationThread('conversation-1', 'One'),),
+                    active_conversation_id='conversation-1',
+                )
+                key_one = workspace_history_key(runtime_workspace)
+
+            with mock.patch.dict(
+                'os.environ',
+                {'CLAW_HOST_WORKSPACE': r'C:\Users\Ada\project-two'},
+            ):
+                path_two = store.save_workspace_conversations(
+                    runtime_workspace,
+                    (ConversationThread('conversation-1', 'Two'),),
+                    active_conversation_id='conversation-1',
+                )
+                snapshot_two = store.load_workspace(runtime_workspace)
+
+            with mock.patch.dict(
+                'os.environ',
+                {'CLAW_HOST_WORKSPACE': r'C:\Users\Ada\project-one'},
+            ):
+                snapshot_one = store.load_workspace(runtime_workspace)
+
+            self.assertNotEqual(path_one, path_two)
+            self.assertIn(key_one, path_one.name)
+            self.assertEqual(snapshot_one.conversations[0].title, 'One')
+            self.assertEqual(snapshot_two.conversations[0].title, 'Two')
 
     def test_conversation_history_store_deletes_workspace_conversation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
