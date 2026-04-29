@@ -21,8 +21,8 @@ if "%CLAW_CODE_AGENT_ROOT:~-1%"=="\" (
   set "CLAW_CODE_AGENT_ROOT=%CLAW_CODE_AGENT_ROOT:~0,-1%"
 )
 
-if not exist "%CLAW_CODE_AGENT_ROOT%\launch-workspace.bat" (
-  echo Could not find launch-workspace.bat at:
+if not exist "%CLAW_CODE_AGENT_ROOT%\scripts\launch-workspace.bat" (
+  echo Could not find scripts\launch-workspace.bat at:
   echo   %CLAW_CODE_AGENT_ROOT%
   echo.
   echo Update DEFAULT_AGENT_ROOT inside this script or set CLAW_CODE_AGENT_ROOT.
@@ -30,7 +30,7 @@ if not exist "%CLAW_CODE_AGENT_ROOT%\launch-workspace.bat" (
 )
 
 pushd "%WORKSPACE_DIR%"
-call "%CLAW_CODE_AGENT_ROOT%\launch-workspace.bat"
+call "%CLAW_CODE_AGENT_ROOT%\scripts\launch-workspace.bat"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
 

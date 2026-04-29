@@ -439,7 +439,7 @@ Notes:
 - set `AGENT_COMMAND=agent-chat` if you want the plain REPL instead of the Textual UI
 - set `AGENT_COMMAND=agent` and provide `AGENT_PROMPT=...` if you want one-shot mode instead of interactive chat
 - the launcher logic now lives entirely in [`docker/entrypoint.sh`](docker/entrypoint.sh), not in `src/`, which keeps the Python runtime closer to upstream
-- on Windows, [`launch-workspace.bat`](launch-workspace.bat) starts the agent without rebuilding the image every run; set `CLAW_REBUILD=1` only when you need a fresh image
+- on Windows, [`launch-workspace.bat`](scripts/launch-workspace.bat) starts the agent without rebuilding the image every run; set `CLAW_REBUILD=1` only when you need a fresh image
 - SageMath starts by default when using the workspace launchers; set `CLAW_START_SAGEMATH=0` to skip the sidecar
 - SearXNG starts by default when using the workspace launchers; set `CLAW_START_SEARCH=0` to skip the sidecar
 

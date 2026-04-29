@@ -3,4 +3,4 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec bash "$SCRIPT_DIR/launch-workspace.sh" "$@"
+exec bash "$SCRIPT_DIR/scripts/launch-workspace.sh" "$@"
