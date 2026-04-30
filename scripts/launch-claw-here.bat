@@ -1,13 +1,22 @@
 @echo off
 setlocal
 
-rem Copy this file into any folder and run it from there.
-rem The folder containing this script becomes the agent workspace.
+rem Copy this file into any folder and run it from there, or call it from a
+rem terminal opened in the folder you want to use.
+rem The current terminal folder becomes the workspace; Explorer double-clicks
+rem fall back to the folder containing this script.
 rem If you move the claw-code-agent repository, either update DEFAULT_AGENT_ROOT
 rem below or set CLAW_CODE_AGENT_ROOT before running this script.
 
 set "DEFAULT_AGENT_ROOT=C:\Users\adri1\Documents\_Stage\claw-code-agent"
-set "WORKSPACE_DIR=%~dp0"
+set "SCRIPT_DIR=%~dp0"
+set "WORKSPACE_DIR=%CD%"
+
+rem When double-clicked from Explorer, CD is normally the script folder.
+rem When invoked from a terminal through a central copy of this script, CD is
+rem the folder the user actually wants to open.
+if /i "%WORKSPACE_DIR%"=="%SystemRoot%\System32" set "WORKSPACE_DIR=%SCRIPT_DIR%"
+if not defined WORKSPACE_DIR set "WORKSPACE_DIR=%SCRIPT_DIR%"
 
 if "%WORKSPACE_DIR:~-1%"=="\" (
   set "WORKSPACE_DIR=%WORKSPACE_DIR:~0,-1%"

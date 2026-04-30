@@ -19,9 +19,13 @@ from .ui.conversation import (
     build_conversation_history_items,
     restore_conversation_turns,
 )
-from .ui.conversation_store import ConversationHistoryStore
+from .ui.conversation_store import (
+    ConversationHistoryStore,
+    workspace_history_identity,
+    workspace_history_key,
+)
 from .ui.event_bridge import AgentTuiEventBridge
-from .ui.formatting import _friendly_stop_reason
+from .ui.formatting import _friendly_stop_reason, _preview_value
 from .ui.ids import (
     build_working_section_id,
     build_working_section_instance_id,
@@ -45,6 +49,9 @@ def render_details_panel(
     auto_follow: bool,
 ) -> str:
     max_turns_label = 'unlimited' if state.max_turns is None else str(state.max_turns)
+    workspace_path = Path(state.workspace)
+    workspace_identity = workspace_history_identity(workspace_path)
+    history_key = workspace_history_key(workspace_path)
     lines = [
         'Run',
         '',
@@ -54,6 +61,8 @@ def render_details_panel(
         f'model={state.model}',
         f'permissions={state.permissions}',
         f'workspace={state.workspace}',
+        f'workspace_identity={workspace_identity}',
+        f'history_key={history_key}',
         f'streaming={state.streaming_enabled}',
         f'max_turns={max_turns_label}',
         f'command_timeout_seconds={state.command_timeout_seconds:.1f}',
@@ -94,6 +103,11 @@ def render_details_panel(
             ]
         )
     if activity_items:
+        lines.extend(['', 'Activity', ''])
+        for item in activity_items[-5:]:
+            detail = _preview_activity_detail(item.detail)
+            suffix = f': {detail}' if detail else f' ({item.status})'
+            lines.append(f'- {item.label}{suffix}')
         latest = activity_items[-1]
         lines.extend(['', f'last_activity={latest.label}'])
     lines.extend(
@@ -113,6 +127,10 @@ def render_details_panel(
         ]
     )
     return '\n'.join(lines)
+
+
+def _preview_activity_detail(detail: str, *, max_chars: int = 86) -> str:
+    return _preview_value(detail, max_chars=max_chars)
 
 
 def run_agent_tui(
@@ -271,10 +289,16 @@ def run_agent_tui(
             *,
             include_live_state: bool,
         ) -> str:
+            has_delegate_activity = any(
+                entry.title.startswith('Sub-Agent') for entry in entries
+            )
             if include_live_state:
                 spinner_frames = ('|', '/', '-', '\\')
                 spinner = spinner_frames[self._spinner_index % len(spinner_frames)]
-                base = f'{spinner} Working'
+                label = 'Delegating' if has_delegate_activity else 'Working'
+                base = f'{spinner} {label}'
+            elif has_delegate_activity:
+                base = 'Sub-agents'
             else:
                 base = 'Working'
             tool_events = sum(1 for entry in entries if entry.kind in {'tool', 'tool_result'})
@@ -382,11 +406,20 @@ def run_agent_tui(
             return widget
 
         def _footer_text(self) -> str:
-            status_label = 'in progress' if self._active and self._busy else 'done'
+            friendly_reason = _friendly_stop_reason(self._turn.stop_reason)
+            if self._active and self._busy:
+                status_label = 'in progress'
+            elif self._turn.assistant_status.lower() == 'error' or any(
+                entry.kind == 'error' for entry in self._turn.entries
+            ):
+                status_label = 'error'
+            elif friendly_reason == 'completed':
+                status_label = 'done'
+            else:
+                status_label = 'stopped'
             parts = [status_label]
             if self._turn.tool_count:
                 parts.append(f'tools={self._turn.tool_count}')
-            friendly_reason = _friendly_stop_reason(self._turn.stop_reason)
             if friendly_reason != 'completed':
                 parts.append(f'reason={friendly_reason}')
             if self._turn.restored:

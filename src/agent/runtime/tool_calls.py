@@ -19,7 +19,10 @@ class ToolCallExecutionHooks:
     hook_policy_tool_preflight_messages: Callable[[str], tuple[str, ...]]
     plugin_block_message: Callable[[str], str | None]
     hook_policy_block_message: Callable[[str], str | None]
-    execute_delegate_agent: Callable[[dict[str, object], str], ToolExecutionResult]
+    execute_delegate_agent: Callable[
+        [dict[str, object], str, Callable[[dict[str, object]], None] | None],
+        ToolExecutionResult,
+    ]
     execute_skill: Callable[[dict[str, object]], ToolExecutionResult]
     plugin_tool_result_messages: Callable[[str], tuple[str, ...]]
     hook_policy_tool_result_messages: Callable[[str], tuple[str, ...]]
@@ -146,6 +149,7 @@ def execute_runtime_tool_call(
             tool_result = hooks.execute_delegate_agent(
                 dict(tool_call.arguments),
                 tool_call.name,
+                stream_events.append,
             )
     elif tool_call.name == 'Skill':
         if tool_result is None:

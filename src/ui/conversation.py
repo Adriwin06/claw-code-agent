@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from .formatting import _preview_value
+from .formatting import _preview_value, sanitize_assistant_display_text
 
 
 @dataclass
@@ -122,6 +122,7 @@ def restore_conversation_turns(
             turns.append(current_turn)
             continue
         if role == 'assistant':
+            content = sanitize_assistant_display_text(content)
             if current_turn is None:
                 restored_index += 1
                 current_turn = ConversationTurn(

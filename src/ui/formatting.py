@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import re
+
+
+_ASSISTANT_CONTROL_MARKER_RE = re.compile(
+    r'<\s*/?\s*channel\s*/?\s*>\s*(?:\|>)?',
+    flags=re.IGNORECASE,
+)
+
 
 def _preview_value(value: object, *, max_chars: int = 120) -> str:
     if value is None:
@@ -35,3 +43,9 @@ def _friendly_stop_reason(stop_reason: str | None) -> str:
     if normalized.lower() in {'stop', 'completed', 'complete', 'done', 'end_turn'}:
         return 'completed'
     return normalized
+
+
+def sanitize_assistant_display_text(text: str) -> str:
+    if not text:
+        return ''
+    return _ASSISTANT_CONTROL_MARKER_RE.sub('', text)

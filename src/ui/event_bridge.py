@@ -11,7 +11,12 @@ from src.ui.conversation import (
     ConversationTurn,
     build_conversation_history_items,
 )
-from src.ui.formatting import _friendly_stop_reason, _preview_multiline, _preview_value
+from src.ui.formatting import (
+    _friendly_stop_reason,
+    _preview_multiline,
+    _preview_value,
+    sanitize_assistant_display_text,
+)
 from src.ui.state import AgentTuiState
 
 
@@ -205,6 +210,12 @@ class AgentTuiEventBridge:
         if event_type == 'tool_result':
             self._handle_tool_result(event)
             return
+        if event_type == 'delegate_subtask_start':
+            self._handle_delegate_subtask_start(event)
+            return
+        if event_type == 'delegate_subtask_event':
+            self._handle_delegate_subtask_event(event)
+            return
         if event_type == 'delegate_batch_result':
             self._handle_delegate_batch_result(event)
             return
@@ -345,6 +356,8 @@ class AgentTuiEventBridge:
             'plugin_tool_hook',
             'hook_policy_tool_hook',
             'plugin_tool_context',
+            'plugin_delegate_preflight',
+            'plugin_delegate_after',
             'plugin_after_turn',
             'hook_policy_after_turn',
         }:
@@ -370,31 +383,46 @@ class AgentTuiEventBridge:
 
     def complete(self, result: AgentRunResult) -> None:
         self._close_open_blocks()
+        friendly_stop = _friendly_stop_reason(result.stop_reason)
+        completed = friendly_stop == 'completed'
         active_turn = self._active_turn()
         if active_turn is not None:
-            if result.final_output and not active_turn.assistant_response:
-                active_turn.assistant_response = result.final_output
+            final_output = sanitize_assistant_display_text(result.final_output)
+            if final_output and not active_turn.assistant_response:
+                active_turn.assistant_response = final_output
                 self._append_turn_entry(
                     kind='assistant',
                     title='Assistant',
-                    content=result.final_output,
+                    content=final_output,
                     status='ok',
                     merge_key='assistant',
                 )
-            active_turn.assistant_status = (
-                'Ready'
-                if _friendly_stop_reason(result.stop_reason) == 'completed'
-                else 'Stopped'
-            )
-            active_turn.phase_label = 'Completed'
+            active_turn.assistant_status = 'Ready' if completed else 'Stopped'
+            active_turn.phase_label = 'Completed' if completed else 'Stopped'
             active_turn.stop_reason = result.stop_reason
             active_turn.session_id = result.session_id or active_turn.session_id
+            if not completed:
+                self._append_turn_notice(
+                    kind='warning',
+                    title='Run Stopped',
+                    content=(
+                        f'stop_reason={friendly_stop}\n'
+                        f'turns={result.turns} tool_calls={result.tool_calls}'
+                    ),
+                    status='warn',
+                )
         if not self._streamed_assistant_output and result.final_output:
-            self._emit_data(f'[assistant] {result.final_output}\n')
+            final_output = sanitize_assistant_display_text(result.final_output)
+            if final_output:
+                self._emit_data(f'[assistant] {final_output}\n')
         self.state.busy = False
         self.state.status = 'Ready'
         self.state.phase = 'Ready'
-        self.state.phase_detail = 'Waiting for the next prompt'
+        self.state.phase_detail = (
+            'Waiting for the next prompt'
+            if completed
+            else f'Waiting for the next prompt; last run stopped: {friendly_stop}'
+        )
         self.state.session_id = result.session_id or self.state.session_id
         self.state.last_turns = result.turns
         self.state.last_tool_calls = result.tool_calls
@@ -408,9 +436,9 @@ class AgentTuiEventBridge:
             label='Run completed',
             detail=(
                 f'turns={result.turns} tool_calls={result.tool_calls} '
-                f'reason={_friendly_stop_reason(result.stop_reason)}'
+                f'reason={friendly_stop}'
             ),
-            status='ok',
+            status='ok' if completed else 'warn',
         )
         if result.stop_reason:
             self._emit_data(f'[status] stop_reason={result.stop_reason}\n')
@@ -486,9 +514,11 @@ class AgentTuiEventBridge:
     def fail(self, error: BaseException) -> None:
         self._close_open_blocks()
         active_turn = self._active_turn()
+        stop_reason = error.__class__.__name__
         if active_turn is not None:
             active_turn.assistant_status = 'Error'
             active_turn.phase_label = 'Error'
+            active_turn.stop_reason = stop_reason
             if not active_turn.assistant_response:
                 active_turn.assistant_response = f'Error: {error}'
             self._append_turn_notice(
@@ -501,7 +531,7 @@ class AgentTuiEventBridge:
         self.state.status = 'Error'
         self.state.phase = 'Error'
         self.state.phase_detail = _preview_value(str(error), max_chars=220)
-        self.state.last_stop_reason = error.__class__.__name__
+        self.state.last_stop_reason = stop_reason
         self._upsert_activity(
             'error',
             label='Run failed',
@@ -524,6 +554,75 @@ class AgentTuiEventBridge:
         self._activity_index.clear()
         self._tool_stream_buffers.clear()
         self.state.activity_events = 0
+        self._publish_activity()
+        self._publish_state()
+
+    def _handle_delegate_subtask_start(self, event: dict[str, object]) -> None:
+        label = _preview_value(event.get('label')) or 'subtask'
+        batch_index = _preview_value(event.get('batch_index'))
+        prompt_preview = _preview_value(event.get('prompt_preview'), max_chars=220)
+        depends_on = self._render_list_field(event.get('depends_on'))
+        resume_session_id = _preview_value(event.get('resume_session_id'))
+        content_lines = [
+            f'label={label}',
+            f'batch_index={batch_index or ""}',
+            f'depends_on={depends_on}',
+        ]
+        if resume_session_id:
+            content_lines.append(f'resume_session_id={resume_session_id}')
+        if prompt_preview:
+            content_lines.append(f'prompt={prompt_preview}')
+        self.state.status = f'Sub-agent: {label}'
+        self.state.phase = 'Delegating'
+        self.state.phase_detail = f'{label} started'
+        self._update_active_turn(
+            assistant_status='Delegating',
+            phase_label=f'Sub-agent: {label}',
+        )
+        self._append_turn_notice(
+            kind='status',
+            title=f'Sub-Agent Started: {label}',
+            content='\n'.join(content_lines),
+            status='running',
+        )
+        self._upsert_activity(
+            self._delegate_activity_key(event),
+            label='Sub-agent running',
+            detail=f'{label}: started',
+            status='running',
+        )
+        self._write_status(f'[delegate] started {label}')
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_state()
+
+    def _handle_delegate_subtask_event(self, event: dict[str, object]) -> None:
+        label = _preview_value(event.get('label')) or 'subtask'
+        summary = self._render_delegate_subtask_event(event)
+        if not summary:
+            return
+        status = self._delegate_event_status(event)
+        self.state.status = f'Sub-agent: {label}'
+        self.state.phase = 'Delegating'
+        self.state.phase_detail = summary
+        self._update_active_turn(
+            assistant_status='Delegating',
+            phase_label=f'Sub-agent: {label}',
+        )
+        self._append_turn_entry(
+            kind='status',
+            title=f'Sub-Agent Live: {label}',
+            content=summary + '\n',
+            status=status,
+            merge_key=f'delegate-live:{event.get("batch_index", "")}:{label}',
+        )
+        self._upsert_activity(
+            self._delegate_activity_key(event),
+            label='Sub-agent running',
+            detail=f'{label}: {summary}',
+            status=status,
+        )
+        self._publish_turns()
         self._publish_activity()
         self._publish_state()
 
@@ -561,6 +660,7 @@ class AgentTuiEventBridge:
     def _handle_delegate_subtask_result(self, event: dict[str, object]) -> None:
         label = _preview_value(event.get('label')) or 'subtask'
         stop_reason = _preview_value(event.get('stop_reason')) or 'stop'
+        output_preview = _preview_value(event.get('output_preview'), max_chars=260)
         content = (
             f'label={label}\n'
             f'batch_index={event.get("batch_index", "")}\n'
@@ -568,6 +668,8 @@ class AgentTuiEventBridge:
             f'turns={event.get("turns", 0)} tool_calls={event.get("tool_calls", 0)}\n'
             f'stop_reason={stop_reason}'
         )
+        if output_preview:
+            content += f'\noutput_preview={output_preview}'
         self._append_turn_notice(
             kind='status',
             title=f'Sub-Agent: {label}',
@@ -582,6 +684,104 @@ class AgentTuiEventBridge:
         )
         self._publish_turns()
         self._publish_activity()
+
+    def _render_delegate_subtask_event(self, event: dict[str, object]) -> str:
+        child_event_type = _preview_value(event.get('child_event_type'))
+        if child_event_type == 'message_start':
+            return 'model call started'
+        if child_event_type == 'message_stop':
+            reason = _preview_value(event.get('finish_reason')) or 'stop'
+            return f'model call finished reason={reason}'
+        if child_event_type == 'tool_start':
+            return self._render_delegate_tool_start(event)
+        if child_event_type == 'tool_result':
+            return self._render_delegate_tool_result(event)
+        if child_event_type == 'tool_permission_denial':
+            reason = _preview_value(event.get('reason'), max_chars=180)
+            return f'permission denied: {reason or "tool blocked"}'
+        if child_event_type == 'task_budget_exceeded':
+            reason = _preview_value(event.get('reason'), max_chars=180)
+            return f'budget exceeded: {reason or "limit reached"}'
+        if child_event_type == 'continuation_request':
+            return 'requested response continuation'
+        if child_event_type == 'usage':
+            usage = event.get('usage')
+            if isinstance(usage, dict):
+                return (
+                    f"usage input={usage.get('input_tokens', 0)} "
+                    f"output={usage.get('output_tokens', 0)}"
+                )
+            return 'usage updated'
+        if child_event_type in {
+            'plugin_tool_preflight',
+            'hook_policy_tool_preflight',
+            'plugin_tool_hook',
+            'hook_policy_tool_hook',
+            'plugin_tool_context',
+            'plugin_delegate_preflight',
+            'plugin_delegate_after',
+        }:
+            tool_name = _preview_value(event.get('tool_name')) or 'tool'
+            return f'{child_event_type.replace("_", " ")}: {tool_name}'
+        if child_event_type == 'content_delta':
+            return ''
+        return child_event_type
+
+    def _render_delegate_tool_start(self, event: dict[str, object]) -> str:
+        tool_name = _preview_value(event.get('tool_name')) or 'tool'
+        arguments = event.get('arguments')
+        if not isinstance(arguments, dict):
+            return f'tool started: {tool_name}'
+        if tool_name == 'bash':
+            command = _preview_value(arguments.get('command'), max_chars=160)
+            return f'tool started: bash {command or "(empty command)"}'
+        if tool_name in {'write_file', 'edit_file', 'read_file', 'notebook_edit'}:
+            path = _preview_value(arguments.get('path'), max_chars=180)
+            return f'tool started: {tool_name} {path or "(unknown path)"}'
+        return f'tool started: {tool_name}'
+
+    def _render_delegate_tool_result(self, event: dict[str, object]) -> str:
+        tool_name = _preview_value(event.get('tool_name')) or 'tool'
+        ok = bool(event.get('ok'))
+        metadata = event.get('metadata')
+        if not isinstance(metadata, dict):
+            metadata = {}
+        action = metadata.get('action')
+        if action == 'bash':
+            exit_code = metadata.get('exit_code')
+            return f'tool finished: bash ok={ok} exit_code={exit_code}'
+        path = metadata.get('path')
+        if isinstance(path, str) and path:
+            return f'tool finished: {tool_name} ok={ok} path={path}'
+        preview = _preview_value(
+            metadata.get('output_preview')
+            or metadata.get('preview')
+            or event.get('content_preview'),
+            max_chars=160,
+        )
+        if preview:
+            return f'tool finished: {tool_name} ok={ok} {preview}'
+        return f'tool finished: {tool_name} ok={ok}'
+
+    def _delegate_event_status(self, event: dict[str, object]) -> str:
+        child_event_type = event.get('child_event_type')
+        if child_event_type in {'tool_permission_denial', 'task_budget_exceeded'}:
+            return 'error'
+        if child_event_type == 'tool_result' and not bool(event.get('ok')):
+            return 'error'
+        return 'running'
+
+    def _delegate_activity_key(self, event: dict[str, object]) -> str:
+        label = _preview_value(event.get('label')) or 'subtask'
+        batch_index = _preview_value(event.get('batch_index')) or 'unknown'
+        return f'delegate_child:{batch_index}:{label}'
+
+    def _render_list_field(self, value: object) -> str:
+        if isinstance(value, list):
+            rendered = ', '.join(str(item) for item in value if str(item))
+            return rendered or '(none)'
+        rendered = _preview_value(value)
+        return rendered or '(none)'
 
     def _handle_delegate_group_result(self, event: dict[str, object]) -> None:
         group_id = _preview_value(event.get('group_id')) or 'group'
@@ -613,6 +813,7 @@ class AgentTuiEventBridge:
     def _handle_tool_start(self, event: dict[str, object]) -> None:
         tool_name = event.get('tool_name')
         rendered_start = self._render_tool_start(event)
+        delegate_tool = self._is_delegate_tool(tool_name)
         tool_call_id = (
             str(event['tool_call_id'])
             if isinstance(event.get('tool_call_id'), str)
@@ -620,23 +821,40 @@ class AgentTuiEventBridge:
         )
         if isinstance(tool_name, str) and tool_name:
             self.state.last_tool = tool_name
-            self.state.status = f'Tool: {tool_name}'
-            self.state.phase = 'Running tool'
-            self.state.phase_detail = tool_name
+            if delegate_tool:
+                self.state.status = 'Sub-agent requested'
+                self.state.phase = 'Delegating'
+                self.state.phase_detail = self._delegate_request_label(event)
+            else:
+                self.state.status = f'Tool: {tool_name}'
+                self.state.phase = 'Running tool'
+                self.state.phase_detail = tool_name
         self._update_active_turn(
-            assistant_status='Working',
-            phase_label=(f'Tool: {tool_name}' if isinstance(tool_name, str) and tool_name else 'Tool'),
+            assistant_status='Delegating' if delegate_tool else 'Working',
+            phase_label=(
+                self._delegate_request_label(event)
+                if delegate_tool
+                else (
+                    f'Tool: {tool_name}'
+                    if isinstance(tool_name, str) and tool_name
+                    else 'Tool'
+                )
+            ),
             increment_tool_count=True,
         )
         self._append_turn_notice(
-            kind='tool',
-            title=f'Tool Call: {tool_name or "tool"}',
+            kind='status' if delegate_tool else 'tool',
+            title=(
+                f'Sub-Agent Requested: {self._delegate_request_label(event)}'
+                if delegate_tool
+                else f'Tool Call: {tool_name or "tool"}'
+            ),
             content=self._render_tool_start_detail(event, rendered_start),
             status='info',
         )
         self._upsert_activity(
             f'tool:{tool_call_id}',
-            label='Tool started',
+            label='Sub-agent requested' if delegate_tool else 'Tool started',
             detail=rendered_start,
             status='running',
         )
@@ -646,6 +864,9 @@ class AgentTuiEventBridge:
         self._publish_state()
 
     def _render_assistant_delta(self, delta: str) -> None:
+        if not delta:
+            return
+        delta = sanitize_assistant_display_text(delta)
         if not delta:
             return
         self._close_tool_stream()
@@ -681,13 +902,10 @@ class AgentTuiEventBridge:
         if key in self._announced_tool_plans:
             return
         self._announced_tool_plans.add(key)
-        arguments_delta = _preview_value(event.get('arguments_delta'), max_chars=360)
-        plan_content = f'Planning tool call: {tool_name}'
+        plan_content = self._render_tool_plan_summary(event)
         tool_call_id = _preview_value(event.get('tool_call_id'))
         if tool_call_id:
             plan_content += f' id={tool_call_id}'
-        if arguments_delta:
-            plan_content += f' args~ {arguments_delta}'
         self.state.phase = 'Planning tool'
         self.state.phase_detail = tool_name
         self._update_active_turn(
@@ -718,6 +936,8 @@ class AgentTuiEventBridge:
             return '[tool] starting'
         if not isinstance(arguments, dict):
             arguments = {}
+        if self._is_delegate_tool(tool_name):
+            return self._render_delegate_tool_request(arguments)
         if tool_name == 'bash':
             command = _preview_value(arguments.get('command'))
             return f'[command] {command or "(empty command)"}'
@@ -744,9 +964,20 @@ class AgentTuiEventBridge:
         if tool_call_id:
             lines.append(f'tool_call_id={tool_call_id}')
         arguments = event.get('arguments')
+        tool_name = event.get('tool_name')
+        if self._is_delegate_tool(tool_name) and isinstance(arguments, dict):
+            lines.extend(self._render_delegate_arguments(arguments))
+            return '\n'.join(lines)
+        if (
+            isinstance(tool_name, str)
+            and tool_name in {'write_file', 'edit_file', 'notebook_edit'}
+            and isinstance(arguments, dict)
+        ):
+            lines.extend(self._render_file_write_arguments(arguments))
+            return '\n'.join(lines)
         if isinstance(arguments, dict):
             lines.append('arguments:')
-            lines.append(self._format_json_for_display(arguments, max_chars=6000))
+            lines.append(self._format_json_for_display(arguments, max_chars=1800))
         elif arguments is not None:
             lines.append('arguments:')
             lines.append(_preview_value(arguments, max_chars=1200))
@@ -913,18 +1144,142 @@ class AgentTuiEventBridge:
         tool_call_id = _preview_value(event.get('tool_call_id'))
         if tool_call_id:
             lines.append(f'tool_call_id={tool_call_id}')
+        metadata = event.get('metadata')
+        action = metadata.get('action') if isinstance(metadata, dict) else None
+        if action == 'web_fetch':
+            preview = _preview_value(event.get('content_preview'), max_chars=360)
+            if preview:
+                lines.append(f'preview={preview}')
+            if isinstance(metadata, dict):
+                for key in ('url', 'fetched_chars', 'truncated'):
+                    value = metadata.get(key)
+                    if value is not None:
+                        lines.append(f'{key}={_preview_value(value, max_chars=180)}')
+            return '\n'.join(lines)
+        if action in {'delegate_agent', 'Agent'}:
+            preview = _preview_value(event.get('content_preview'), max_chars=520)
+            if preview:
+                lines.append(f'summary={preview}')
+            if isinstance(metadata, dict):
+                for key in (
+                    'subagent_type',
+                    'subtask_count',
+                    'completed_children',
+                    'failed_children',
+                    'group_status',
+                    'child_stop_reason',
+                ):
+                    value = metadata.get(key)
+                    if value is not None:
+                        lines.append(f'{key}={_preview_value(value, max_chars=160)}')
+            return '\n'.join(lines)
         content = event.get('content')
         if isinstance(content, str) and content:
             lines.append('content:')
-            lines.append(content.rstrip())
+            lines.append(self._clip_multiline_content(content.rstrip()))
         elif isinstance(event.get('content_preview'), str) and event.get('content_preview'):
             lines.append('content_preview:')
             lines.append(str(event.get('content_preview')).rstrip())
-        metadata = event.get('metadata')
         if isinstance(metadata, dict) and metadata:
             lines.append('metadata:')
-            lines.append(self._format_json_for_display(metadata, max_chars=6000))
+            lines.append(self._format_json_for_display(metadata, max_chars=1800))
         return '\n'.join(lines)
+
+    def _is_delegate_tool(self, tool_name: object) -> bool:
+        return tool_name in {'Agent', 'delegate_agent'}
+
+    def _delegate_request_label(self, event: dict[str, object]) -> str:
+        arguments = event.get('arguments')
+        subagent_type = ''
+        if isinstance(arguments, dict):
+            subagent_type = _preview_value(arguments.get('subagent_type'), max_chars=40)
+        return subagent_type or 'general'
+
+    def _render_delegate_tool_request(self, arguments: dict[str, object]) -> str:
+        subagent_type = (
+            _preview_value(arguments.get('subagent_type'), max_chars=40)
+            or 'general'
+        )
+        label = _preview_value(arguments.get('label'), max_chars=80)
+        prompt = _preview_value(arguments.get('prompt'), max_chars=160)
+        subtasks = arguments.get('subtasks')
+        parts = [f'[delegate] subagent={subagent_type}']
+        if label:
+            parts.append(f'label={label}')
+        if isinstance(subtasks, list):
+            parts.append(f'subtasks={len(subtasks)}')
+        elif prompt:
+            parts.append(f'prompt={prompt}')
+        return ' '.join(parts)
+
+    def _render_delegate_arguments(self, arguments: dict[str, object]) -> list[str]:
+        lines: list[str] = []
+        for key in (
+            'subagent_type',
+            'label',
+            'strategy',
+            'max_turns',
+            'max_parallel_subtasks',
+        ):
+            value = arguments.get(key)
+            if value is not None:
+                lines.append(f'{key}={_preview_value(value, max_chars=160)}')
+        prompt = _preview_value(arguments.get('prompt'), max_chars=420)
+        if prompt:
+            lines.append(f'prompt_preview={prompt}')
+        subtasks = arguments.get('subtasks')
+        if isinstance(subtasks, list):
+            lines.append(f'subtasks={len(subtasks)}')
+            for index, item in enumerate(subtasks[:5], start=1):
+                if isinstance(item, dict):
+                    label = (
+                        _preview_value(item.get('label'), max_chars=80)
+                        or f'subtask_{index}'
+                    )
+                    preview = _preview_value(item.get('prompt'), max_chars=220)
+                    lines.append(f'- {label}: {preview}')
+                else:
+                    preview = _preview_value(item, max_chars=220)
+                    lines.append(f'- subtask_{index}: {preview}')
+            if len(subtasks) > 5:
+                lines.append(f'- ... plus {len(subtasks) - 5} more')
+        return lines
+
+    def _render_file_write_arguments(self, arguments: dict[str, object]) -> list[str]:
+        lines: list[str] = []
+        path = _preview_value(arguments.get('path'), max_chars=220)
+        if path:
+            lines.append(f'path={path}')
+        content = arguments.get('content')
+        if isinstance(content, str):
+            lines.append(f'content_chars={len(content)}')
+            preview = _preview_value(content, max_chars=360)
+            if preview:
+                lines.append(f'content_preview={preview}')
+        for key in ('old_text', 'new_text'):
+            value = arguments.get(key)
+            if isinstance(value, str):
+                lines.append(f'{key}_chars={len(value)}')
+                preview = _preview_value(value, max_chars=260)
+                if preview:
+                    lines.append(f'{key}_preview={preview}')
+        return lines
+
+    def _render_tool_plan_summary(self, event: dict[str, object]) -> str:
+        tool_name = _preview_value(event.get('tool_name')) or 'tool'
+        if tool_name in {'Agent', 'delegate_agent'}:
+            return 'Planning sub-agent delegation'
+        if tool_name in {'write_file', 'edit_file', 'notebook_edit'}:
+            return f'Planning file update: {tool_name}'
+        arguments_delta = _preview_value(event.get('arguments_delta'), max_chars=160)
+        if arguments_delta:
+            return f'Planning tool call: {tool_name} args~ {arguments_delta}'
+        return f'Planning tool call: {tool_name}'
+
+    def _clip_multiline_content(self, content: str, *, max_chars: int = 1800) -> str:
+        if len(content) <= max_chars:
+            return content
+        return content[:max_chars].rstrip() + '\n...[truncated for display]...'
 
     def _format_json_for_display(self, payload: object, *, max_chars: int = 6000) -> str:
         try:

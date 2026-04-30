@@ -523,7 +523,12 @@ class AgentRuntimeTests(unittest.TestCase):
     def test_delegate_agent_inherits_unlimited_turns_from_parent_runtime(self) -> None:
         observed_max_turns: list[int | None] = []
 
-        def _fake_run(child: LocalCodingAgent, prompt: str, *, event_handler=None) -> AgentRunResult:
+        def _fake_run(
+            child: LocalCodingAgent,
+            prompt: str,
+            *,
+            event_handler=None,
+        ) -> AgentRunResult:
             _ = prompt
             _ = event_handler
             observed_max_turns.append(child.runtime_config.max_turns)
@@ -554,6 +559,75 @@ class AgentRuntimeTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(observed_max_turns, [None])
+
+    def test_delegate_agent_wraps_child_runtime_events(self) -> None:
+        events: list[dict[str, object]] = []
+
+        def _fake_run(child: LocalCodingAgent, prompt: str, *, event_handler=None) -> AgentRunResult:
+            _ = child
+            _ = prompt
+            if event_handler is not None:
+                event_handler(
+                    {
+                        'type': 'tool_start',
+                        'tool_name': 'bash',
+                        'tool_call_id': 'child-call',
+                        'arguments': {'command': 'pwd'},
+                    }
+                )
+                event_handler(
+                    {
+                        'type': 'tool_result',
+                        'tool_name': 'bash',
+                        'tool_call_id': 'child-call',
+                        'ok': True,
+                        'metadata': {'action': 'bash', 'exit_code': 0},
+                    }
+                )
+            return AgentRunResult(
+                final_output='Child completed.',
+                turns=1,
+                tool_calls=1,
+                transcript=(),
+                stop_reason='stop',
+                session_id='child-session',
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                    base_url='http://127.0.0.1:8000/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            with patch.object(LocalCodingAgent, 'run', autospec=True, side_effect=_fake_run):
+                result = agent._execute_delegate_agent(
+                    {
+                        'description': 'inspect workspace',
+                        'prompt': 'Inspect the repository.',
+                    },
+                    event_handler=events.append,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(events[0].get('type'), 'delegate_subtask_start')
+        child_events = [
+            event for event in events if event.get('type') == 'delegate_subtask_event'
+        ]
+        self.assertEqual(
+            [event.get('child_event_type') for event in child_events],
+            ['message_start', 'tool_start', 'tool_result', 'message_stop'],
+        )
+        self.assertEqual(child_events[1].get('tool_name'), 'bash')
+        self.assertEqual(child_events[1].get('arguments'), {'command': 'pwd'})
+        self.assertEqual(
+            child_events[2].get('metadata'),
+            {'action': 'bash', 'exit_code': 0},
+        )
+        self.assertEqual(child_events[3].get('finish_reason'), 'stop')
+        self.assertIn('output_preview=Child completed.', result.content)
 
     def test_non_ollama_tool_schema_keeps_full_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

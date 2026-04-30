@@ -913,9 +913,12 @@ class LocalCodingAgent:
             hook_policy_tool_preflight_messages=self._hook_policy_tool_preflight_messages,
             plugin_block_message=self._plugin_block_message,
             hook_policy_block_message=self._hook_policy_block_message,
-            execute_delegate_agent=lambda arguments, tool_name: self._execute_delegate_agent(
-                arguments,
-                tool_name=tool_name,
+            execute_delegate_agent=(
+                lambda arguments, tool_name, event_handler: self._execute_delegate_agent(
+                    arguments,
+                    tool_name=tool_name,
+                    event_handler=event_handler,
+                )
             ),
             execute_skill=self._execute_skill,
             plugin_tool_result_messages=self._plugin_tool_result_messages,
@@ -1639,8 +1642,14 @@ class LocalCodingAgent:
         arguments: dict[str, object],
         *,
         tool_name: str = 'Agent',
+        event_handler: RuntimeEventHandler | None = None,
     ) -> ToolExecutionResult:
-        return execute_delegate_agent(self, arguments, tool_name=tool_name)
+        return execute_delegate_agent(
+            self,
+            arguments,
+            tool_name=tool_name,
+            event_handler=event_handler,
+        )
 
     def _append_runtime_tool_followup_events(
         self,
@@ -1714,6 +1723,7 @@ class LocalCodingAgent:
                         'index': child.get('index'),
                         'session_id': child.get('session_id'),
                         'stop_reason': child.get('stop_reason'),
+                        'output_preview': child.get('output_preview'),
                         'tool_calls': child.get('tool_calls'),
                         'turns': child.get('turns'),
                         'resume_used': child.get('resume_used'),

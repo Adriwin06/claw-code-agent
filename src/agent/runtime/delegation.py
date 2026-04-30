@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
-from typing import Any
+from typing import Any, Callable
 
 from src.agent.tools.execution import AgentTool
 from src.agent.models.types import (
@@ -100,6 +100,7 @@ def execute_delegate_agent(
     arguments: dict[str, object],
     *,
     tool_name: str = 'Agent',
+    event_handler: Callable[[dict[str, object]], None] | None = None,
 ) -> ToolExecutionResult:
     agent_def = resolve_agent_definition(agent, arguments)
     max_turns = arguments.get('max_turns')
@@ -192,6 +193,59 @@ def execute_delegate_agent(
     child_result: AgentRunResult | None = None
     stop_processing = False
 
+    def emit_delegate_event(payload: dict[str, object]) -> None:
+        if event_handler is None:
+            return
+        event_handler(payload)
+
+    def emit_child_event(
+        child_event: dict[str, object],
+        *,
+        index: int,
+        subtask_label: str,
+        batch_index: int,
+        dependencies: tuple[str, ...],
+    ) -> None:
+        child_event_type = child_event.get('type')
+        wrapped: dict[str, object] = {
+            'type': 'delegate_subtask_event',
+            'group_id': group_id,
+            'label': subtask_label,
+            'index': index,
+            'batch_index': batch_index,
+            'depends_on': list(dependencies),
+            'child_event_type': child_event_type,
+        }
+        for key in (
+            'tool_name',
+            'tool_call_id',
+            'message_id',
+            'finish_reason',
+            'stream',
+            'ok',
+            'content_preview',
+            'reason',
+            'source',
+            'message_count',
+            'blocked',
+            'preflight_count',
+        ):
+            if key in child_event:
+                wrapped[key] = child_event[key]
+        delta = child_event.get('delta')
+        if isinstance(delta, str) and delta:
+            wrapped['delta_preview'] = agent._preview_text(delta, 180)
+        arguments_payload = child_event.get('arguments')
+        if isinstance(arguments_payload, dict):
+            wrapped['arguments'] = dict(arguments_payload)
+        metadata = child_event.get('metadata')
+        if isinstance(metadata, dict):
+            wrapped['metadata'] = dict(metadata)
+        usage = child_event.get('usage')
+        if isinstance(usage, dict):
+            wrapped['usage'] = dict(usage)
+        emit_delegate_event(wrapped)
+
     def run_child_subtask(
         subtask: dict[str, object],
         *,
@@ -252,6 +306,41 @@ def execute_delegate_agent(
         if include_parent_context and prior_results_snapshot:
             child_prompt = prepend_delegate_context(child_prompt, prior_results_snapshot)
         resume_used = False
+        emit_delegate_event(
+            {
+                'type': 'delegate_subtask_start',
+                'group_id': group_id,
+                'label': subtask_label,
+                'index': index,
+                'batch_index': batch_index,
+                'depends_on': list(dependencies),
+                'subagent_type': agent_def.agent_type,
+                'strategy': strategy,
+                'resume_session_id': (
+                    resume_session_id if isinstance(resume_session_id, str) else ''
+                ),
+                'prompt_preview': agent._preview_text(child_prompt, 220),
+            }
+        )
+
+        def child_event_handler(child_event: dict[str, object]) -> None:
+            emit_child_event(
+                dict(child_event),
+                index=index,
+                subtask_label=subtask_label,
+                batch_index=batch_index,
+                dependencies=dependencies,
+            )
+
+        synthesize_model_events = not child_agent.runtime_config.stream_model_responses
+        if synthesize_model_events:
+            emit_child_event(
+                {'type': 'message_start'},
+                index=index,
+                subtask_label=subtask_label,
+                batch_index=batch_index,
+                dependencies=dependencies,
+            )
         if isinstance(resume_session_id, str) and resume_session_id:
             try:
                 stored_child_session = load_agent_session(
@@ -267,6 +356,17 @@ def execute_delegate_agent(
                     stop_reason='resume_load_error',
                     session_id=resume_session_id,
                 )
+                if synthesize_model_events:
+                    emit_child_event(
+                        {
+                            'type': 'message_stop',
+                            'finish_reason': failed_result.stop_reason,
+                        },
+                        index=index,
+                        subtask_label=subtask_label,
+                        batch_index=batch_index,
+                        dependencies=dependencies,
+                    )
                 return (
                     failed_result,
                     {
@@ -284,10 +384,28 @@ def execute_delegate_agent(
                     },
                     True,
                 )
-            result = child_agent.resume(child_prompt, stored_child_session)
+            result = child_agent.resume(
+                child_prompt,
+                stored_child_session,
+                event_handler=child_event_handler,
+            )
             resume_used = True
         else:
-            result = child_agent.run(child_prompt)
+            result = child_agent.run(
+                child_prompt,
+                event_handler=child_event_handler,
+            )
+        if synthesize_model_events:
+            emit_child_event(
+                {
+                    'type': 'message_stop',
+                    'finish_reason': result.stop_reason or 'stop',
+                },
+                index=index,
+                subtask_label=subtask_label,
+                batch_index=batch_index,
+                dependencies=dependencies,
+            )
         if group_id is not None and child_agent.managed_agent_id is not None:
             agent.agent_manager.register_group_child(
                 group_id,

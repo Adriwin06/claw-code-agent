@@ -174,6 +174,8 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('context_size=high', rendered)
         self.assertIn('default_max_results=8', rendered)
         self.assertIn('active_provider=local-search (searxng)', rendered)
+        self.assertIn('workspace_identity=', rendered)
+        self.assertIn('history_key=', rendered)
         self.assertIn('stop_reason=completed', rendered)
         self.assertIn('last_activity=Tool finished', rendered)
         self.assertIn('Ctrl+U: reuse selected prompt', rendered)
@@ -434,6 +436,214 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('Stop Requested', [entry.title for entry in bridge.turns[0].entries])
         self.assertIn('stop_reason=cancelled', ''.join(chunks))
 
+    def test_event_bridge_strips_leaked_channel_marker_from_assistant_text(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Update the CSS')
+        bridge.handle_event({'type': 'content_delta', 'delta': 'I will update style.css.<channel>|>'})
+
+        self.assertEqual(bridge.turns[0].assistant_response, 'I will update style.css.')
+        self.assertEqual(bridge.turns[0].entries[-1].content, 'I will update style.css.')
+        self.assertNotIn('<channel>', ''.join(chunks))
+
+    def test_event_bridge_failed_partial_run_gets_error_stop_reason(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+
+        bridge.begin_prompt('Update the CSS')
+        bridge.handle_event({'type': 'content_delta', 'delta': 'Partial answer'})
+        bridge.fail(RuntimeError('backend timed out'))
+
+        self.assertFalse(state.busy)
+        self.assertEqual(state.status, 'Error')
+        self.assertEqual(state.last_stop_reason, 'RuntimeError')
+        self.assertEqual(bridge.turns[0].assistant_status, 'Error')
+        self.assertEqual(bridge.turns[0].stop_reason, 'RuntimeError')
+        self.assertIn('Error', [entry.title for entry in bridge.turns[0].entries])
+
+    def test_event_bridge_renders_live_delegate_activity(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Use a sub-agent')
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_start',
+                'label': 'scan',
+                'index': 1,
+                'batch_index': 1,
+                'depends_on': [],
+                'prompt_preview': 'Inspect the repository.',
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'message_start',
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'tool_start',
+                'tool_name': 'bash',
+                'arguments': {'command': 'pwd'},
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'tool_result',
+                'tool_name': 'bash',
+                'ok': True,
+                'metadata': {'action': 'bash', 'exit_code': 0},
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_result',
+                'label': 'scan',
+                'batch_index': 1,
+                'session_id': 'child-session',
+                'turns': 1,
+                'tool_calls': 1,
+                'stop_reason': 'stop',
+                'output_preview': 'Repository scan complete.',
+            }
+        )
+
+        titles = [entry.title for entry in bridge.turns[0].entries]
+        self.assertIn('Sub-Agent Started: scan', titles)
+        self.assertIn('Sub-Agent Live: scan', titles)
+        self.assertIn('Sub-Agent: scan', titles)
+        live_entry = next(
+            entry
+            for entry in bridge.turns[0].entries
+            if entry.title == 'Sub-Agent Live: scan'
+        )
+        self.assertIn('model call started', live_entry.content)
+        self.assertIn('tool started: bash pwd', live_entry.content)
+        self.assertIn('tool finished: bash ok=True exit_code=0', live_entry.content)
+        result_entry = bridge.turns[0].entries[-1]
+        self.assertIn('output_preview=Repository scan complete.', result_entry.content)
+        self.assertEqual(state.phase, 'Delegating')
+        self.assertTrue(
+            any(item.label == 'Sub-agent finished' for item in bridge.activity_items)
+        )
+        self.assertIn('[delegate] started scan', ''.join(chunks))
+
+    def test_event_bridge_compacts_delegate_tool_start_details(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+        long_prompt = 'Create a complete website. ' * 80
+
+        bridge.begin_prompt('Delegate planning')
+        bridge.handle_event(
+            {
+                'type': 'tool_start',
+                'tool_name': 'Agent',
+                'tool_call_id': 'call-agent',
+                'arguments': {
+                    'subagent_type': 'Plan',
+                    'prompt': long_prompt,
+                },
+            }
+        )
+
+        entry = bridge.turns[0].entries[-1]
+        self.assertEqual(entry.title, 'Sub-Agent Requested: Plan')
+        self.assertIn('prompt_preview=', entry.content)
+        self.assertNotIn('arguments:', entry.content)
+        self.assertLess(len(entry.content), 900)
+        self.assertIn('[delegate] subagent=Plan', ''.join(chunks))
+
+    def test_event_bridge_compacts_web_fetch_result_details(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+        html = (
+            '<!doctype html>\n'
+            '<html><head><script>large()</script></head></html>'
+        ) * 80
+
+        bridge.begin_prompt('Fetch page')
+        bridge.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'web_fetch',
+                'tool_call_id': 'call-fetch',
+                'ok': True,
+                'content': html,
+                'content_preview': '<!doctype html> <html>...',
+                'metadata': {
+                    'action': 'web_fetch',
+                    'url': 'https://example.com',
+                    'fetched_chars': len(html),
+                    'truncated': False,
+                },
+            }
+        )
+
+        entry = bridge.turns[0].entries[-1]
+        self.assertIn('preview=<!doctype html> <html>...', entry.content)
+        self.assertIn('url=https://example.com', entry.content)
+        self.assertNotIn('<script>large()</script>', entry.content)
+        self.assertLess(len(entry.content), 600)
+
+    def test_event_bridge_marks_max_turns_completion_as_stopped(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+
+        bridge.begin_prompt('Do a long task')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Stopped before final answer.',
+                turns=12,
+                tool_calls=3,
+                transcript=(),
+                usage=UsageStats(input_tokens=10, output_tokens=5),
+                stop_reason='max_turns',
+            )
+        )
+
+        self.assertEqual(bridge.turns[0].assistant_status, 'Stopped')
+        self.assertEqual(bridge.turns[0].phase_label, 'Stopped')
+        self.assertIn('Run Stopped', [entry.title for entry in bridge.turns[0].entries])
+        self.assertIn('last run stopped: max_turns', state.phase_detail)
+
     def test_event_bridge_restore_history_populates_turns_and_activity(self) -> None:
         state = AgentTuiState(
             workspace='C:/workspace',
@@ -455,6 +665,17 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(bridge.turns[0].assistant_response, 'Restored answer')
         self.assertEqual(bridge.turns[0].entries[0].kind, 'assistant')
         self.assertEqual(bridge.activity_items[0].label, 'Conversation restored')
+
+    def test_restore_conversation_turns_strips_leaked_channel_marker(self) -> None:
+        turns = restore_conversation_turns(
+            (
+                {'role': 'user', 'content': 'Update animations'},
+                {'role': 'assistant', 'content': 'I will edit style.css.<channel>|>'},
+            )
+        )
+
+        self.assertEqual(turns[0].assistant_response, 'I will edit style.css.')
+        self.assertEqual(turns[0].entries[0].content, 'I will edit style.css.')
 
     def test_conversation_history_store_round_trips_by_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
