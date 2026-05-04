@@ -113,6 +113,11 @@ def _env_float(*names: str, default: float) -> float:
         return default
 
 
+def _env_flag_disabled(name: str) -> bool:
+    """Return True if the named env var is set to a truthy disable value (1/true/yes)."""
+    return os.environ.get(name, '').strip().lower() in ('1', 'true', 'yes')
+
+
 def _env_optional_int(*names: str) -> int | None:
     raw = _env_first(*names)
     if not isinstance(raw, str):
@@ -302,8 +307,8 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     parser.add_argument('--add-dir', action='append', default=[])
     parser.add_argument('--disable-claude-md', action='store_true')
     # File writes and shell commands are allowed by default. Use --no-write / --no-shell to disable.
-    _write_default = os.environ.get('CLAW_NO_WRITE', '').strip().lower() not in ('1', 'true', 'yes')
-    _shell_default = os.environ.get('CLAW_NO_SHELL', '').strip().lower() not in ('1', 'true', 'yes')
+    _write_default = not _env_flag_disabled('CLAW_NO_WRITE')
+    _shell_default = not _env_flag_disabled('CLAW_NO_SHELL')
     parser.add_argument(
         '--allow-write',
         action='store_true',

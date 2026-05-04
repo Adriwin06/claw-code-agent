@@ -493,8 +493,10 @@ def _edit_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     if not target.is_file():
         raise ToolExecutionError(f'Path is not a file: {target}')
     # Accept old_str (primary, Claude Code convention) or old_text (legacy alias)
-    old_str = arguments.get('old_str') if arguments.get('old_str') is not None else arguments.get('old_text')
-    new_str = arguments.get('new_str') if arguments.get('new_str') is not None else arguments.get('new_text')
+    _raw_old = arguments.get('old_str')
+    old_str = _raw_old if _raw_old is not None else arguments.get('old_text')
+    _raw_new = arguments.get('new_str')
+    new_str = _raw_new if _raw_new is not None else arguments.get('new_text')
     replace_all = arguments.get('replace_all', False)
     if not isinstance(old_str, str):
         raise ToolExecutionError('old_str must be a string')
