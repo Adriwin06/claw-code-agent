@@ -338,10 +338,11 @@ def build_parser() -> argparse.ArgumentParser:
     team_messages_parser.add_argument('--team-name')
     team_messages_parser.add_argument('--cwd', default='.')
 
-    agent_parser = subparsers.add_parser('agent', help='run the real Python local-model agent')
+    agent_parser = subparsers.add_parser('agent', help='run the real Python local-model agent (one-shot)')
     agent_parser.add_argument('prompt')
     agent_parser.add_argument('--max-turns', type=int)
     agent_parser.add_argument('--show-transcript', action='store_true')
+    agent_parser.add_argument('--show-usage', action='store_true', help='print token/cost usage after the turn')
     _add_agent_common_args(agent_parser, include_backend=True)
 
     background_parser = subparsers.add_parser('agent-bg', help='run the Python local-model agent as a local background session')
@@ -409,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument('--resume-session-id')
     chat_parser.add_argument('--max-turns', type=int)
     chat_parser.add_argument('--show-transcript', action='store_true')
+    chat_parser.add_argument('--show-usage', action='store_true', help='print token/cost usage after each turn')
     _add_agent_common_args(chat_parser, include_backend=True)
 
     tui_parser = subparsers.add_parser('agent-tui', help='run the Textual terminal UI for the local-model agent')

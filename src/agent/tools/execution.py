@@ -439,15 +439,13 @@ def _read_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     text = target.read_text(encoding='utf-8', errors='replace')
     start_line = arguments.get('start_line')
     end_line = arguments.get('end_line')
-    if start_line is None and end_line is None:
-        return _truncate_output(text, context.max_output_chars)
     if start_line is not None and (isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1):
         raise ToolExecutionError('start_line must be an integer >= 1')
     if end_line is not None and (isinstance(end_line, bool) or not isinstance(end_line, int) or end_line < 1):
         raise ToolExecutionError('end_line must be an integer >= 1')
     lines = text.splitlines()
     start_idx = max((start_line or 1) - 1, 0)
-    end_idx = end_line or len(lines)
+    end_idx = end_line if end_line is not None else len(lines)
     selected = lines[start_idx:end_idx]
     rendered = '\n'.join(f'{start_idx + idx + 1}: {line}' for idx, line in enumerate(selected))
     return _truncate_output(rendered, context.max_output_chars)
@@ -494,25 +492,26 @@ def _edit_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     target = _resolve_path(_require_string(arguments, 'path'), context, allow_missing=False)
     if not target.is_file():
         raise ToolExecutionError(f'Path is not a file: {target}')
-    old_text = arguments.get('old_text')
-    new_text = arguments.get('new_text')
+    # Accept old_str (primary, Claude Code convention) or old_text (legacy alias)
+    old_str = arguments.get('old_str') if arguments.get('old_str') is not None else arguments.get('old_text')
+    new_str = arguments.get('new_str') if arguments.get('new_str') is not None else arguments.get('new_text')
     replace_all = arguments.get('replace_all', False)
-    if not isinstance(old_text, str):
-        raise ToolExecutionError('old_text must be a string')
-    if not isinstance(new_text, str):
-        raise ToolExecutionError('new_text must be a string')
+    if not isinstance(old_str, str):
+        raise ToolExecutionError('old_str must be a string')
+    if not isinstance(new_str, str):
+        raise ToolExecutionError('new_str must be a string')
     if not isinstance(replace_all, bool):
         raise ToolExecutionError('replace_all must be a boolean')
     current = target.read_text(encoding='utf-8', errors='replace')
-    occurrences = current.count(old_text)
+    occurrences = current.count(old_str)
     if occurrences == 0:
-        raise ToolExecutionError('old_text was not found in the target file')
+        raise ToolExecutionError('old_str was not found in the target file')
     if occurrences > 1 and not replace_all:
         raise ToolExecutionError(
-            f'old_text matched {occurrences} times; pass replace_all=true to replace every match'
+            f'old_str matched {occurrences} times; pass replace_all=true to replace every match'
         )
     before_sha256 = hashlib.sha256(current.encode('utf-8')).hexdigest()
-    updated = current.replace(old_text, new_text) if replace_all else current.replace(old_text, new_text, 1)
+    updated = current.replace(old_str, new_str) if replace_all else current.replace(old_str, new_str, 1)
     target.write_text(updated, encoding='utf-8')
     rel = target.relative_to(context.root)
     replaced = occurrences if replace_all else 1
@@ -528,8 +527,8 @@ def _edit_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
             'after_size': len(updated),
             'before_preview': _snapshot_text(current),
             'after_preview': _snapshot_text(updated),
-            'old_text_preview': _snapshot_text(old_text),
-            'new_text_preview': _snapshot_text(new_text),
+            'old_str_preview': _snapshot_text(old_str),
+            'new_str_preview': _snapshot_text(new_str),
             'replaced_occurrences': replaced,
         },
     )

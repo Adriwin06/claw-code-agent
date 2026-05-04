@@ -520,23 +520,25 @@ def _print_agent_result(
     *,
     show_transcript: bool,
     suppress_final_output: bool = False,
+    show_usage: bool = False,
 ) -> None:
     if not suppress_final_output:
         print(result.final_output)
-    print('\n# Usage')
-    print(f'total_tokens={result.usage.total_tokens}')
-    print(f'input_tokens={result.usage.input_tokens}')
-    print(f'output_tokens={result.usage.output_tokens}')
-    print(f'total_cost_usd={result.total_cost_usd:.6f}')
-    if result.stop_reason:
-        print(f'stop_reason={result.stop_reason}')
-    if result.session_id:
-        print('\n# Session')
-        print(f'session_id={result.session_id}')
-        if result.session_path:
-            print(f'session_path={result.session_path}')
-    if result.scratchpad_directory:
-        print(f'scratchpad_directory={result.scratchpad_directory}')
+    if show_usage:
+        print('\n# Usage')
+        print(f'total_tokens={result.usage.total_tokens}')
+        print(f'input_tokens={result.usage.input_tokens}')
+        print(f'output_tokens={result.usage.output_tokens}')
+        print(f'total_cost_usd={result.total_cost_usd:.6f}')
+        if result.stop_reason:
+            print(f'stop_reason={result.stop_reason}')
+        if result.session_id:
+            print('\n# Session')
+            print(f'session_id={result.session_id}')
+            if result.session_path:
+                print(f'session_path={result.session_path}')
+        if result.scratchpad_directory:
+            print(f'scratchpad_directory={result.scratchpad_directory}')
     if show_transcript:
         print('\n# Transcript')
         for message in result.transcript:
@@ -553,6 +555,7 @@ def _run_agent_turn(
     stored_session: StoredAgentSession | None = None,
     stream_output: TextIO | None = None,
     result_printer: Callable[..., None] = _print_agent_result,
+    show_usage: bool = False,
 ):
     renderer = (
         _AgentLiveRenderer(stream_output)
@@ -580,10 +583,28 @@ def _run_agent_turn(
             suppress_final_output=bool(
                 renderer is not None and renderer.streamed_assistant_output
             ),
+            show_usage=show_usage,
         )
     else:
         result_printer(result, show_transcript=show_transcript)
     return result
+
+
+def _setup_readline() -> None:
+    try:
+        import readline as _rl  # noqa: F401 — side-effect import
+        import atexit
+        import os
+
+        history_path = Path.home() / '.claw_history'
+        try:
+            _rl.read_history_file(str(history_path))
+        except (FileNotFoundError, OSError):
+            pass
+        _rl.set_history_length(1000)
+        atexit.register(_rl.write_history_file, str(history_path))
+    except (ImportError, OSError):
+        pass
 
 
 def _run_agent_chat_loop(
@@ -592,6 +613,7 @@ def _run_agent_chat_loop(
     initial_prompt: str | None,
     resume_session_id: str | None,
     show_transcript: bool,
+    show_usage: bool = False,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
     stream_output: TextIO | None = None,
@@ -600,10 +622,12 @@ def _run_agent_chat_loop(
     active_session_id = resume_session_id
     first_prompt = initial_prompt
 
-    output_func('# Agent Chat')
-    output_func("Enter a prompt. Use '/exit' or '/quit' to stop.")
+    _setup_readline()
+
     if active_session_id:
-        output_func(f'resuming_session_id={active_session_id}')
+        output_func(f'Resuming session {active_session_id}. Type /exit to quit.')
+    else:
+        output_func("Claw Code Agent — type your task below. Use /exit or Ctrl-D to quit.")
 
     while True:
         if first_prompt is not None:
@@ -611,19 +635,18 @@ def _run_agent_chat_loop(
             first_prompt = None
         else:
             try:
-                prompt = input_func('user> ')
+                prompt = input_func('\n> ')
             except EOFError:
-                output_func('chat_ended=eof')
+                output_func('')
                 return 0
             except KeyboardInterrupt:
-                output_func('\nchat_ended=interrupt')
+                output_func('')
                 return 130
 
         normalized = prompt.strip()
         if not normalized:
             continue
         if normalized in {'/exit', '/quit'}:
-            output_func('chat_ended=user_exit')
             return 0
 
         if active_session_id:
@@ -635,6 +658,7 @@ def _run_agent_chat_loop(
                 agent,
                 prompt,
                 show_transcript=show_transcript,
+                show_usage=show_usage,
                 stored_session=stored_session,
                 stream_output=stream_output,
                 result_printer=result_printer,
@@ -644,6 +668,7 @@ def _run_agent_chat_loop(
                 agent,
                 prompt,
                 show_transcript=show_transcript,
+                show_usage=show_usage,
                 stream_output=stream_output,
                 result_printer=result_printer,
             )

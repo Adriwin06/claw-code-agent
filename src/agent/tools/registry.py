@@ -77,11 +77,11 @@ def default_tool_registry() -> dict[str, AgentTool]:
     tools = [
         AgentTool(
             name='list_dir',
-            description='List files and directories under a workspace path.',
+            description='List files and directories under a workspace path. Use this to explore the directory structure.',
             parameters={
                 'type': 'object',
                 'properties': {
-                    'path': {'type': 'string', 'description': 'Relative path from workspace root.'},
+                    'path': {'type': 'string', 'description': 'Relative path from workspace root. Defaults to the workspace root.'},
                     'max_entries': {'type': 'integer', 'minimum': 1, 'maximum': 500},
                 },
             },
@@ -89,13 +89,17 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='read_file',
-            description='Read the contents of a UTF-8 text file inside the workspace.',
+            description=(
+                'Read a file in the workspace. Output includes line numbers. '
+                'Use start_line and end_line to read a specific range. '
+                'Always read files before editing them.'
+            ),
             parameters={
                 'type': 'object',
                 'properties': {
                     'path': {'type': 'string', 'description': 'Relative file path from workspace root.'},
-                    'start_line': {'type': 'integer', 'minimum': 1},
-                    'end_line': {'type': 'integer', 'minimum': 1},
+                    'start_line': {'type': 'integer', 'minimum': 1, 'description': 'First line to read (1-indexed, inclusive).'},
+                    'end_line': {'type': 'integer', 'minimum': 1, 'description': 'Last line to read (1-indexed, inclusive).'},
                 },
                 'required': ['path'],
             },
@@ -103,7 +107,11 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='write_file',
-            description='Write a complete file inside the workspace. Creates parent directories when needed.',
+            description=(
+                'Write the complete contents of a file. Creates the file and any parent directories if they do not exist. '
+                'Use edit_file for targeted edits to existing files — only use write_file when creating a new file '
+                'or completely replacing an existing one.'
+            ),
             parameters={
                 'type': 'object',
                 'properties': {
@@ -116,16 +124,21 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='edit_file',
-            description='Replace text inside a workspace file using exact string matching.',
+            description=(
+                'Replace a specific string in a file with a new string using exact matching. '
+                'old_str must match the file content exactly — include enough surrounding context to uniquely identify the location. '
+                'Prefer this over write_file for targeted edits to existing files. '
+                'Always read the file first so old_str is accurate.'
+            ),
             parameters={
                 'type': 'object',
                 'properties': {
                     'path': {'type': 'string'},
-                    'old_text': {'type': 'string'},
-                    'new_text': {'type': 'string'},
-                    'replace_all': {'type': 'boolean'},
+                    'old_str': {'type': 'string', 'description': 'The exact text to replace. Must appear exactly once unless replace_all is true.'},
+                    'new_str': {'type': 'string', 'description': 'The replacement text.'},
+                    'replace_all': {'type': 'boolean', 'description': 'Replace all occurrences instead of only the first.'},
                 },
-                'required': ['path', 'old_text', 'new_text'],
+                'required': ['path', 'old_str', 'new_str'],
             },
             handler=_edit_file,
         ),
@@ -147,11 +160,11 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='glob_search',
-            description='Find files matching a glob pattern inside the workspace.',
+            description='Find files matching a glob pattern inside the workspace. Use to locate files by name or extension.',
             parameters={
                 'type': 'object',
                 'properties': {
-                    'pattern': {'type': 'string'},
+                    'pattern': {'type': 'string', 'description': 'Glob pattern, e.g. "**/*.py" or "src/**/*.ts".'},
                 },
                 'required': ['pattern'],
             },
@@ -159,13 +172,13 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='grep_search',
-            description='Search for a string or regular expression inside workspace files.',
+            description='Search for a regex pattern or literal string inside workspace files. Returns matching lines with file path and line number.',
             parameters={
                 'type': 'object',
                 'properties': {
-                    'pattern': {'type': 'string'},
-                    'path': {'type': 'string'},
-                    'literal': {'type': 'boolean'},
+                    'pattern': {'type': 'string', 'description': 'Regex pattern or literal string to search for.'},
+                    'path': {'type': 'string', 'description': 'Directory or file path to search within. Defaults to the workspace root.'},
+                    'literal': {'type': 'boolean', 'description': 'Treat pattern as a literal string instead of a regex.'},
                     'max_matches': {'type': 'integer', 'minimum': 1, 'maximum': 500},
                 },
                 'required': ['pattern'],
@@ -174,7 +187,11 @@ def default_tool_registry() -> dict[str, AgentTool]:
         ),
         AgentTool(
             name='bash',
-            description='Run a shell command in the workspace. Use sparingly and prefer dedicated file tools for edits.',
+            description=(
+                'Run a shell command in the workspace. '
+                'Use for building, testing, running scripts, and operations that have no dedicated tool. '
+                'Prefer read_file/edit_file/write_file for file operations.'
+            ),
             parameters={
                 'type': 'object',
                 'properties': {
