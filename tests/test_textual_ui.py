@@ -20,9 +20,11 @@ from src.textual_ui import (
     build_working_section_instance_id,
     build_slash_command_suggestions,
     build_conversation_history_items,
+    conversation_turns_render_signature,
     extract_slash_command_query,
     filter_slash_command_suggestions,
     render_details_panel,
+    render_working_entries_markdown,
     render_slash_command_suggestion_detail,
     restore_conversation_turns,
     should_route_key_to_prompt,
@@ -60,6 +62,27 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(single_section, 'working-conversation-1-turn-1')
         self.assertEqual(multi_section, 'working-conversation-1-turn-1-section-2')
         self.assertNotIn(':', multi_section)
+
+    def test_conversation_turns_render_signature_tracks_mutated_entry_content(self) -> None:
+        turn = ConversationTurn(
+            turn_id='turn-1',
+            user_prompt='Delegate',
+            entries=[
+                ConversationEntry(
+                    entry_id='entry-1',
+                    kind='delegate_output',
+                    title='Sub-Agent Output: scan',
+                    content='first',
+                    merge_key='delegate-output:1:scan',
+                )
+            ],
+        )
+
+        before = conversation_turns_render_signature((turn,))
+        turn.entries[0].content += ' second'
+        after = conversation_turns_render_signature((turn,))
+
+        self.assertNotEqual(before, after)
 
     def test_should_route_key_to_prompt_only_for_printable_chars_when_prompt_unfocused(self) -> None:
         self.assertTrue(
@@ -534,17 +557,16 @@ class TextualUiTests(unittest.TestCase):
         )
 
         titles = [entry.title for entry in bridge.turns[0].entries]
-        self.assertIn('Sub-Agent Started: scan', titles)
-        self.assertIn('Sub-Agent Live: scan', titles)
+        self.assertIn('Sub-Agent Progress: scan', titles)
         self.assertIn('Sub-Agent: scan', titles)
-        live_entry = next(
+        progress_entry = next(
             entry
             for entry in bridge.turns[0].entries
-            if entry.title == 'Sub-Agent Live: scan'
+            if entry.title == 'Sub-Agent Progress: scan'
         )
-        self.assertIn('model call started', live_entry.content)
-        self.assertIn('tool started: bash pwd', live_entry.content)
-        self.assertIn('tool finished: bash ok=True exit_code=0', live_entry.content)
+        self.assertEqual(progress_entry.kind, 'delegate_progress')
+        self.assertIn('tool finished: bash ok=True exit_code=0', progress_entry.content)
+        self.assertNotIn('model call started', progress_entry.content)
         result_entry = bridge.turns[0].entries[-1]
         self.assertIn('output_preview=Repository scan complete.', result_entry.content)
         self.assertEqual(state.phase, 'Delegating')
@@ -552,6 +574,100 @@ class TextualUiTests(unittest.TestCase):
             any(item.label == 'Sub-agent finished' for item in bridge.activity_items)
         )
         self.assertIn('[delegate] started scan', ''.join(chunks))
+
+    def test_event_bridge_renders_live_delegate_markdown_output(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+
+        bridge.begin_prompt('Use a sub-agent')
+        bridge.handle_event(
+            {
+                'type': 'tool_start',
+                'tool_name': 'Agent',
+                'tool_call_id': 'call-agent',
+                'arguments': {
+                    'subagent_type': 'Explore',
+                    'prompt': 'Inspect everything and return a markdown report.',
+                },
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_start',
+                'label': 'scan',
+                'batch_index': 1,
+                'prompt_preview': 'Inspect everything and return a markdown report.',
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'tool_start',
+                'tool_name': 'list_dir',
+                'arguments': {'path': 'src'},
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'content_delta',
+                'delta': '# Scan\n\n- **Done**',
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_event',
+                'label': 'scan',
+                'batch_index': 1,
+                'child_event_type': 'content_delta',
+                'delta': '\n- Next item',
+            }
+        )
+        bridge.handle_event(
+            {
+                'type': 'delegate_subtask_result',
+                'label': 'scan',
+                'batch_index': 1,
+                'session_id': 'child-session',
+                'turns': 1,
+                'tool_calls': 0,
+                'stop_reason': 'stop',
+                'output': '# Scan\n\n- **Done**\n- Next item',
+                'output_preview': '# Scan ...',
+            }
+        )
+
+        output_entry = next(
+            entry
+            for entry in bridge.turns[0].entries
+            if entry.kind == 'delegate_output'
+        )
+        self.assertEqual(output_entry.title, 'Sub-Agent Output: scan')
+        self.assertEqual(output_entry.content, '# Scan\n\n- **Done**\n- Next item')
+        self.assertEqual(output_entry.status, 'ok')
+        result_entry = bridge.turns[0].entries[-1]
+        self.assertEqual(result_entry.kind, 'delegate_result')
+        self.assertNotIn('output_preview=', result_entry.content)
+
+        rendered = render_working_entries_markdown(
+            bridge.turns[0].entries,
+            include_live_state=False,
+        )
+        self.assertIn('Explore', rendered)
+        self.assertIn('# Scan', rendered)
+        self.assertIn('- **Done**', rendered)
+        self.assertNotIn('```text\n# Scan', rendered)
+        self.assertNotIn('prompt=', rendered)
+        self.assertNotIn('call-agent', rendered)
+        self.assertNotIn('tool started:', rendered)
 
     def test_event_bridge_compacts_delegate_tool_start_details(self) -> None:
         chunks: list[str] = []
@@ -578,10 +694,46 @@ class TextualUiTests(unittest.TestCase):
 
         entry = bridge.turns[0].entries[-1]
         self.assertEqual(entry.title, 'Sub-Agent Requested: Plan')
-        self.assertIn('prompt_preview=', entry.content)
+        self.assertIn('subagent_type=Plan', entry.content)
+        self.assertNotIn('prompt_preview=', entry.content)
         self.assertNotIn('arguments:', entry.content)
-        self.assertLess(len(entry.content), 900)
+        self.assertLess(len(entry.content), 240)
         self.assertIn('[delegate] subagent=Plan', ''.join(chunks))
+
+    def test_event_bridge_delegate_tool_result_is_not_rendered_as_tool_code_block(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=lambda _text: None)
+
+        bridge.begin_prompt('Delegate planning')
+        bridge.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'Agent',
+                'tool_call_id': 'call-agent',
+                'ok': True,
+                'content_preview': 'Delegated agent completed the subtask.',
+                'metadata': {
+                    'action': 'Agent',
+                    'subagent_type': 'Plan',
+                    'completed_children': 1,
+                    'failed_children': 0,
+                    'child_stop_reason': 'stop',
+                },
+            }
+        )
+
+        entry = bridge.turns[0].entries[-1]
+        self.assertEqual(entry.kind, 'delegate_result')
+        self.assertEqual(entry.title, 'Sub-Agent Tool Result: Agent')
+        rendered = render_working_entries_markdown(
+            [entry],
+            include_live_state=False,
+        )
+        self.assertNotIn('```text', rendered)
 
     def test_event_bridge_compacts_web_fetch_result_details(self) -> None:
         state = AgentTuiState(

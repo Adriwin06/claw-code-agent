@@ -51,6 +51,7 @@ class AgentTuiEventBridge:
         self._activity: list[ActivityItem] = []
         self._activity_index: dict[str, int] = {}
         self._tool_stream_buffers: dict[str, str] = {}
+        self._delegate_output_buffers: dict[str, str] = {}
         self._active_turn_id: str | None = None
 
     @property
@@ -114,6 +115,7 @@ class AgentTuiEventBridge:
         self._close_open_blocks()
         self._announced_tool_plans.clear()
         self._tool_stream_buffers.clear()
+        self._delegate_output_buffers.clear()
         self.state.busy = True
         self.state.status = 'Running'
         self.state.phase = 'Preparing'
@@ -553,25 +555,13 @@ class AgentTuiEventBridge:
         self._activity.clear()
         self._activity_index.clear()
         self._tool_stream_buffers.clear()
+        self._delegate_output_buffers.clear()
         self.state.activity_events = 0
         self._publish_activity()
         self._publish_state()
 
     def _handle_delegate_subtask_start(self, event: dict[str, object]) -> None:
         label = _preview_value(event.get('label')) or 'subtask'
-        batch_index = _preview_value(event.get('batch_index'))
-        prompt_preview = _preview_value(event.get('prompt_preview'), max_chars=220)
-        depends_on = self._render_list_field(event.get('depends_on'))
-        resume_session_id = _preview_value(event.get('resume_session_id'))
-        content_lines = [
-            f'label={label}',
-            f'batch_index={batch_index or ""}',
-            f'depends_on={depends_on}',
-        ]
-        if resume_session_id:
-            content_lines.append(f'resume_session_id={resume_session_id}')
-        if prompt_preview:
-            content_lines.append(f'prompt={prompt_preview}')
         self.state.status = f'Sub-agent: {label}'
         self.state.phase = 'Delegating'
         self.state.phase_detail = f'{label} started'
@@ -579,11 +569,12 @@ class AgentTuiEventBridge:
             assistant_status='Delegating',
             phase_label=f'Sub-agent: {label}',
         )
-        self._append_turn_notice(
-            kind='status',
-            title=f'Sub-Agent Started: {label}',
-            content='\n'.join(content_lines),
+        self._upsert_turn_entry(
+            kind='delegate_progress',
+            title=f'Sub-Agent Progress: {label}',
+            content='starting',
             status='running',
+            merge_key=self._delegate_progress_key(event),
         )
         self._upsert_activity(
             self._delegate_activity_key(event),
@@ -597,6 +588,9 @@ class AgentTuiEventBridge:
         self._publish_state()
 
     def _handle_delegate_subtask_event(self, event: dict[str, object]) -> None:
+        if event.get('child_event_type') == 'content_delta':
+            self._handle_delegate_content_delta(event)
+            return
         label = _preview_value(event.get('label')) or 'subtask'
         summary = self._render_delegate_subtask_event(event)
         if not summary:
@@ -609,18 +603,56 @@ class AgentTuiEventBridge:
             assistant_status='Delegating',
             phase_label=f'Sub-agent: {label}',
         )
-        self._append_turn_entry(
-            kind='status',
-            title=f'Sub-Agent Live: {label}',
-            content=summary + '\n',
+        self._upsert_turn_entry(
+            kind='delegate_progress',
+            title=f'Sub-Agent Progress: {label}',
+            content=summary,
             status=status,
-            merge_key=f'delegate-live:{event.get("batch_index", "")}:{label}',
+            merge_key=self._delegate_progress_key(event),
         )
         self._upsert_activity(
             self._delegate_activity_key(event),
             label='Sub-agent running',
             detail=f'{label}: {summary}',
             status=status,
+        )
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_state()
+
+    def _handle_delegate_content_delta(self, event: dict[str, object]) -> None:
+        label = _preview_value(event.get('label')) or 'subtask'
+        delta = event.get('delta')
+        if not isinstance(delta, str) or not delta:
+            delta = _preview_value(event.get('delta_preview'), max_chars=180)
+        if not delta:
+            return
+        delta = sanitize_assistant_display_text(delta)
+        if not delta:
+            return
+        output_key = self._delegate_output_key(event)
+        previous = self._delegate_output_buffers.get(output_key, '')
+        combined = previous + delta
+        self._delegate_output_buffers[output_key] = combined
+        self.state.status = f'Sub-agent: {label}'
+        self.state.phase = 'Delegating'
+        self.state.phase_detail = f'{label} is responding'
+        self._update_active_turn(
+            assistant_status='Delegating',
+            phase_label=f'Sub-agent: {label}',
+        )
+        self._append_or_merge_turn_entry(
+            kind='delegate_output',
+            title=f'Sub-Agent Output: {label}',
+            content=delta,
+            status='running',
+            merge_key=output_key,
+        )
+        self._upsert_activity(
+            self._delegate_activity_key(event),
+            label='Sub-agent running',
+            detail=f'{label}: {_preview_multiline(combined)}',
+            status='running',
         )
         self._publish_turns()
         self._publish_activity()
@@ -661,6 +693,25 @@ class AgentTuiEventBridge:
         label = _preview_value(event.get('label')) or 'subtask'
         stop_reason = _preview_value(event.get('stop_reason')) or 'stop'
         output_preview = _preview_value(event.get('output_preview'), max_chars=260)
+        full_output = self._delegate_result_output(event)
+        output_key = self._delegate_output_key(event)
+        result_status = (
+            'ok' if stop_reason not in {'backend_error', 'budget_exceeded'} else 'error'
+        )
+        if full_output:
+            existing_output = self._find_turn_entry_by_merge_key(output_key)
+            if existing_output is None:
+                self._append_turn_entry(
+                    kind='delegate_output',
+                    title=f'Sub-Agent Output: {label}',
+                    content=full_output,
+                    status=result_status,
+                    merge_key=output_key,
+                )
+            else:
+                existing_output.content = full_output
+                existing_output.status = result_status
+            self._delegate_output_buffers[output_key] = full_output
         content = (
             f'label={label}\n'
             f'batch_index={event.get("batch_index", "")}\n'
@@ -668,13 +719,13 @@ class AgentTuiEventBridge:
             f'turns={event.get("turns", 0)} tool_calls={event.get("tool_calls", 0)}\n'
             f'stop_reason={stop_reason}'
         )
-        if output_preview:
+        if output_preview and not full_output:
             content += f'\noutput_preview={output_preview}'
         self._append_turn_notice(
-            kind='status',
+            kind='delegate_result',
             title=f'Sub-Agent: {label}',
             content=content,
-            status='ok' if stop_reason not in {'backend_error', 'budget_exceeded'} else 'error',
+            status=result_status,
         )
         self._upsert_activity(
             f'delegate_child:{label}',
@@ -775,6 +826,23 @@ class AgentTuiEventBridge:
         label = _preview_value(event.get('label')) or 'subtask'
         batch_index = _preview_value(event.get('batch_index')) or 'unknown'
         return f'delegate_child:{batch_index}:{label}'
+
+    def _delegate_output_key(self, event: dict[str, object]) -> str:
+        label = _preview_value(event.get('label')) or 'subtask'
+        batch_index = _preview_value(event.get('batch_index')) or 'unknown'
+        return f'delegate-output:{batch_index}:{label}'
+
+    def _delegate_progress_key(self, event: dict[str, object]) -> str:
+        label = _preview_value(event.get('label')) or 'subtask'
+        batch_index = _preview_value(event.get('batch_index')) or 'unknown'
+        return f'delegate-progress:{batch_index}:{label}'
+
+    def _delegate_result_output(self, event: dict[str, object]) -> str:
+        for key in ('output', 'final_output'):
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                return sanitize_assistant_display_text(value)
+        return ''
 
     def _render_list_field(self, value: object) -> str:
         if isinstance(value, list):
@@ -1029,6 +1097,7 @@ class AgentTuiEventBridge:
         tool_name = event.get('tool_name')
         ok = bool(event.get('ok'))
         tool_label = _preview_value(tool_name) or 'tool'
+        delegate_tool = self._is_delegate_tool(tool_name)
         rendered_result = self._render_tool_result(event)
         rendered_result_detail = self._render_tool_result_detail(event, rendered_result)
         tool_call_id = (
@@ -1044,14 +1113,18 @@ class AgentTuiEventBridge:
             phase_label='Processing result',
         )
         self._append_turn_notice(
-            kind='tool_result',
-            title=f'Tool Result: {tool_label}',
+            kind='delegate_result' if delegate_tool else 'tool_result',
+            title=(
+                f'Sub-Agent Tool Result: {tool_label}'
+                if delegate_tool
+                else f'Tool Result: {tool_label}'
+            ),
             content=rendered_result_detail,
             status='ok' if ok else 'error',
         )
         self._upsert_activity(
             f'tool:{tool_call_id}',
-            label='Tool finished',
+            label='Sub-agent tool finished' if delegate_tool else 'Tool finished',
             detail=rendered_result,
             status='ok' if ok else 'error',
         )
@@ -1201,15 +1274,12 @@ class AgentTuiEventBridge:
             or 'general'
         )
         label = _preview_value(arguments.get('label'), max_chars=80)
-        prompt = _preview_value(arguments.get('prompt'), max_chars=160)
         subtasks = arguments.get('subtasks')
         parts = [f'[delegate] subagent={subagent_type}']
         if label:
             parts.append(f'label={label}')
         if isinstance(subtasks, list):
             parts.append(f'subtasks={len(subtasks)}')
-        elif prompt:
-            parts.append(f'prompt={prompt}')
         return ' '.join(parts)
 
     def _render_delegate_arguments(self, arguments: dict[str, object]) -> list[str]:
@@ -1224,9 +1294,6 @@ class AgentTuiEventBridge:
             value = arguments.get(key)
             if value is not None:
                 lines.append(f'{key}={_preview_value(value, max_chars=160)}')
-        prompt = _preview_value(arguments.get('prompt'), max_chars=420)
-        if prompt:
-            lines.append(f'prompt_preview={prompt}')
         subtasks = arguments.get('subtasks')
         if isinstance(subtasks, list):
             lines.append(f'subtasks={len(subtasks)}')
@@ -1236,11 +1303,9 @@ class AgentTuiEventBridge:
                         _preview_value(item.get('label'), max_chars=80)
                         or f'subtask_{index}'
                     )
-                    preview = _preview_value(item.get('prompt'), max_chars=220)
-                    lines.append(f'- {label}: {preview}')
+                    lines.append(f'- {label}')
                 else:
-                    preview = _preview_value(item, max_chars=220)
-                    lines.append(f'- subtask_{index}: {preview}')
+                    lines.append(f'- subtask_{index}')
             if len(subtasks) > 5:
                 lines.append(f'- ... plus {len(subtasks) - 5} more')
         return lines
@@ -1366,6 +1431,74 @@ class AgentTuiEventBridge:
                 merge_key=merge_key,
             )
         )
+
+    def _append_or_merge_turn_entry(
+        self,
+        *,
+        kind: str,
+        title: str,
+        content: str = '',
+        status: str = 'info',
+        merge_key: str | None = None,
+    ) -> None:
+        turn = self._active_turn()
+        if turn is None:
+            return
+        if merge_key:
+            for entry in reversed(turn.entries):
+                if entry.merge_key == merge_key:
+                    entry.kind = kind
+                    entry.title = title
+                    entry.content += content
+                    entry.status = status
+                    return
+        self._append_turn_entry(
+            kind=kind,
+            title=title,
+            content=content,
+            status=status,
+            merge_key=merge_key,
+        )
+
+    def _upsert_turn_entry(
+        self,
+        *,
+        kind: str,
+        title: str,
+        content: str = '',
+        status: str = 'info',
+        merge_key: str | None = None,
+    ) -> None:
+        turn = self._active_turn()
+        if turn is None:
+            return
+        if merge_key:
+            for entry in reversed(turn.entries):
+                if entry.merge_key == merge_key:
+                    entry.kind = kind
+                    entry.title = title
+                    entry.content = content
+                    entry.status = status
+                    return
+        self._append_turn_entry(
+            kind=kind,
+            title=title,
+            content=content,
+            status=status,
+            merge_key=merge_key,
+        )
+
+    def _find_turn_entry_by_merge_key(
+        self,
+        merge_key: str,
+    ) -> ConversationEntry | None:
+        turn = self._active_turn()
+        if turn is None:
+            return None
+        for entry in reversed(turn.entries):
+            if entry.merge_key == merge_key:
+                return entry
+        return None
 
     def _append_turn_notice(
         self,

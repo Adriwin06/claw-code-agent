@@ -234,6 +234,7 @@ def execute_delegate_agent(
                 wrapped[key] = child_event[key]
         delta = child_event.get('delta')
         if isinstance(delta, str) and delta:
+            wrapped['delta'] = delta
             wrapped['delta_preview'] = agent._preview_text(delta, 180)
         arguments_payload = child_event.get('arguments')
         if isinstance(arguments_payload, dict):
@@ -357,6 +358,17 @@ def execute_delegate_agent(
                     session_id=resume_session_id,
                 )
                 if synthesize_model_events:
+                    if failed_result.final_output:
+                        emit_child_event(
+                            {
+                                'type': 'content_delta',
+                                'delta': failed_result.final_output,
+                            },
+                            index=index,
+                            subtask_label=subtask_label,
+                            batch_index=batch_index,
+                            dependencies=dependencies,
+                        )
                     emit_child_event(
                         {
                             'type': 'message_stop',
@@ -376,6 +388,7 @@ def execute_delegate_agent(
                         'turns': failed_result.turns,
                         'tool_calls': failed_result.tool_calls,
                         'stop_reason': failed_result.stop_reason or 'resume_load_error',
+                        'output': failed_result.final_output,
                         'output_preview': agent._preview_text(failed_result.final_output, 220),
                         'resume_used': True,
                         'resumed_from_session_id': resume_session_id,
@@ -396,6 +409,17 @@ def execute_delegate_agent(
                 event_handler=child_event_handler,
             )
         if synthesize_model_events:
+            if result.final_output:
+                emit_child_event(
+                    {
+                        'type': 'content_delta',
+                        'delta': result.final_output,
+                    },
+                    index=index,
+                    subtask_label=subtask_label,
+                    batch_index=batch_index,
+                    dependencies=dependencies,
+                )
             emit_child_event(
                 {
                     'type': 'message_stop',
@@ -419,6 +443,7 @@ def execute_delegate_agent(
             'turns': result.turns,
             'tool_calls': result.tool_calls,
             'stop_reason': result.stop_reason or 'stop',
+            'output': result.final_output,
             'output_preview': agent._preview_text(result.final_output, 220),
             'resume_used': resume_used,
             'resumed_from_session_id': (
@@ -476,6 +501,7 @@ def execute_delegate_agent(
                     'turns': child_result.turns,
                     'tool_calls': child_result.tool_calls,
                     'stop_reason': skip_reason,
+                    'output': child_result.final_output,
                     'output_preview': agent._preview_text(child_result.final_output, 220),
                     'resume_used': False,
                     'resumed_from_session_id': '',

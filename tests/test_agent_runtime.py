@@ -618,7 +618,7 @@ class AgentRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(
             [event.get('child_event_type') for event in child_events],
-            ['message_start', 'tool_start', 'tool_result', 'message_stop'],
+            ['message_start', 'tool_start', 'tool_result', 'content_delta', 'message_stop'],
         )
         self.assertEqual(child_events[1].get('tool_name'), 'bash')
         self.assertEqual(child_events[1].get('arguments'), {'command': 'pwd'})
@@ -626,8 +626,54 @@ class AgentRuntimeTests(unittest.TestCase):
             child_events[2].get('metadata'),
             {'action': 'bash', 'exit_code': 0},
         )
-        self.assertEqual(child_events[3].get('finish_reason'), 'stop')
+        self.assertEqual(child_events[3].get('delta'), 'Child completed.')
+        self.assertEqual(child_events[4].get('finish_reason'), 'stop')
         self.assertIn('output_preview=Child completed.', result.content)
+
+    def test_delegate_agent_wraps_full_child_markdown_output(self) -> None:
+        events: list[dict[str, object]] = []
+        markdown = '# Child Result\n\n- **Done**'
+
+        def _fake_run(child: LocalCodingAgent, prompt: str, *, event_handler=None) -> AgentRunResult:
+            _ = child
+            _ = prompt
+            if event_handler is not None:
+                event_handler({'type': 'content_delta', 'delta': markdown})
+            return AgentRunResult(
+                final_output=markdown,
+                turns=1,
+                tool_calls=0,
+                transcript=(),
+                stop_reason='stop',
+                session_id='child-session',
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                    base_url='http://127.0.0.1:8000/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace, stream_model_responses=True),
+            )
+            with patch.object(LocalCodingAgent, 'run', autospec=True, side_effect=_fake_run):
+                result = agent._execute_delegate_agent(
+                    {
+                        'description': 'inspect workspace',
+                        'prompt': 'Inspect the repository.',
+                    },
+                    event_handler=events.append,
+                )
+
+        content_event = next(
+            event
+            for event in events
+            if event.get('type') == 'delegate_subtask_event'
+            and event.get('child_event_type') == 'content_delta'
+        )
+        self.assertEqual(content_event.get('delta'), markdown)
+        self.assertEqual(result.metadata['child_results'][0]['output'], markdown)
 
     def test_non_ollama_tool_schema_keeps_full_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

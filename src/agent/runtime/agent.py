@@ -1723,6 +1723,7 @@ class LocalCodingAgent:
                         'index': child.get('index'),
                         'session_id': child.get('session_id'),
                         'stop_reason': child.get('stop_reason'),
+                        'output': child.get('output'),
                         'output_preview': child.get('output_preview'),
                         'tool_calls': child.get('tool_calls'),
                         'turns': child.get('turns'),

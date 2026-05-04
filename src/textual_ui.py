@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
+import time
 from pathlib import Path
 from threading import Event
-import time
 from typing import Sequence
 
 from src.agent.commands.slash import find_slash_command
@@ -131,6 +132,239 @@ def render_details_panel(
 
 def _preview_activity_detail(detail: str, *, max_chars: int = 86) -> str:
     return _preview_value(detail, max_chars=max_chars)
+
+
+def render_working_entries_markdown(
+    entries: Sequence[ConversationEntry],
+    *,
+    include_live_state: bool,
+    phase: str = '',
+    phase_detail: str = '',
+) -> str:
+    if _has_delegate_entries(entries):
+        return _render_delegate_working_markdown(
+            entries,
+            include_live_state=include_live_state,
+            phase=phase,
+            phase_detail=phase_detail,
+        )
+    lines: list[str] = []
+    if include_live_state:
+        lines.extend(
+            [
+                f'**State:** {phase}',
+                '',
+                phase_detail or phase,
+                '',
+            ]
+        )
+    for entry in entries:
+        heading = _working_entry_heading(entry)
+        lines.append(f'**{heading}**')
+        body = entry.content.strip() or '(empty)'
+        if entry.kind in {'tool', 'tool_output', 'tool_result'}:
+            lines.extend(['', '```text', body.rstrip(), '```', ''])
+        else:
+            lines.extend(['', body, ''])
+    rendered = '\n'.join(lines).strip()
+    return rendered or '_No internal work details._'
+
+
+def _has_delegate_entries(entries: Sequence[ConversationEntry]) -> bool:
+    return any(_is_delegate_entry(entry) for entry in entries)
+
+
+def _is_delegate_entry(entry: ConversationEntry) -> bool:
+    if entry.kind.startswith('delegate_'):
+        return True
+    if entry.title.startswith(('Sub-Agent', 'Delegate ')):
+        return True
+    return entry.content.lstrip().startswith('[delegate]')
+
+
+def _render_delegate_working_markdown(
+    entries: Sequence[ConversationEntry],
+    *,
+    include_live_state: bool,
+    phase: str,
+    phase_detail: str,
+) -> str:
+    output_entries = [entry for entry in entries if entry.kind == 'delegate_output']
+    result_entries = [entry for entry in entries if entry.kind == 'delegate_result']
+    progress_entries = [entry for entry in entries if entry.kind == 'delegate_progress']
+    warning_entries = [
+        entry for entry in entries if entry.kind in {'warning', 'error'} and entry.content.strip()
+    ]
+
+    agent_name = _delegate_agent_name(entries)
+    label = _delegate_task_label(entries)
+    status = _delegate_status(entries, include_live_state=include_live_state)
+    stats = _delegate_result_stats(result_entries)
+    latest_progress = _delegate_latest_progress(progress_entries)
+
+    heading_parts = [agent_name]
+    if label and label != agent_name:
+        heading_parts.append(label)
+    heading_parts.append(status)
+    if stats:
+        heading_parts.append(stats)
+    lines = [f'**{" · ".join(heading_parts)}**']
+
+    if include_live_state and not output_entries:
+        detail = latest_progress or phase_detail or phase or 'running'
+        lines.extend(['', detail])
+    elif latest_progress and not output_entries:
+        lines.extend(['', latest_progress])
+
+    for entry in output_entries:
+        body = entry.content.strip()
+        if not body:
+            continue
+        if len(output_entries) > 1:
+            output_label = _delegate_label_from_title(entry.title) or 'Output'
+            lines.extend(['', f'**{output_label}**', '', body])
+        else:
+            lines.extend(['', body])
+
+    for entry in warning_entries:
+        lines.extend(['', f'**{_working_entry_heading(entry)}**', '', entry.content.strip()])
+
+    rendered = '\n'.join(lines).strip()
+    return rendered or '_Sub-agent is starting._'
+
+
+def _delegate_agent_name(entries: Sequence[ConversationEntry]) -> str:
+    for entry in entries:
+        if entry.title.startswith('Sub-Agent Requested:'):
+            name = entry.title.split(':', 1)[1].strip()
+            if name:
+                return name
+        for pattern in (r'\bsubagent=([^\s]+)', r'\bsubagent_type=([^\s]+)'):
+            match = re.search(pattern, entry.content)
+            if match:
+                return match.group(1)
+    return 'Sub-agent'
+
+
+def _delegate_task_label(entries: Sequence[ConversationEntry]) -> str:
+    for entry in entries:
+        if entry.kind in {'delegate_output', 'delegate_progress', 'delegate_result'}:
+            label = _delegate_label_from_title(entry.title)
+            if label:
+                return label
+    for entry in entries:
+        match = re.search(r'\blabel=([^\s]+)', entry.content)
+        if match:
+            return match.group(1)
+    return ''
+
+
+def _delegate_label_from_title(title: str) -> str:
+    if ':' not in title:
+        return ''
+    prefix, _, suffix = title.partition(':')
+    if prefix.startswith('Sub-Agent'):
+        return suffix.strip()
+    return ''
+
+
+def _delegate_status(
+    entries: Sequence[ConversationEntry],
+    *,
+    include_live_state: bool,
+) -> str:
+    for entry in reversed(entries):
+        if entry.kind.startswith('delegate_') and entry.status == 'error':
+            return 'failed'
+    for entry in reversed(entries):
+        if entry.kind == 'delegate_result' and entry.status == 'ok':
+            return 'completed'
+    if include_live_state or any(
+        entry.kind.startswith('delegate_') and entry.status == 'running'
+        for entry in entries
+    ):
+        return 'running'
+    return 'completed'
+
+
+def _delegate_result_stats(entries: Sequence[ConversationEntry]) -> str:
+    for entry in reversed(entries):
+        turns = re.search(r'\bturns=([0-9]+)', entry.content)
+        tools = re.search(r'\btool_calls=([0-9]+)', entry.content)
+        stop = re.search(r'\bstop_reason=([^\s]+)', entry.content)
+        parts: list[str] = []
+        if turns:
+            parts.append(f'turns {turns.group(1)}')
+        if tools:
+            parts.append(f'tools {tools.group(1)}')
+        if stop and stop.group(1) not in {'stop', 'completed'}:
+            parts.append(stop.group(1))
+        if parts:
+            return ', '.join(parts)
+    return ''
+
+
+def _delegate_latest_progress(entries: Sequence[ConversationEntry]) -> str:
+    for entry in reversed(entries):
+        content = entry.content.strip()
+        if content:
+            return content
+    return ''
+
+
+def _working_entry_heading(entry: ConversationEntry) -> str:
+    title = entry.title.strip()
+    if title:
+        return title
+    if entry.kind == 'thinking':
+        return 'Thinking'
+    if entry.kind == 'tool':
+        return 'Tool Call'
+    if entry.kind == 'tool_output':
+        return 'Tool Output'
+    if entry.kind == 'tool_result':
+        return 'Tool Result'
+    if entry.kind == 'delegate_output':
+        return 'Sub-Agent Output'
+    if entry.kind == 'delegate_result':
+        return 'Sub-Agent Result'
+    if entry.kind == 'error':
+        return 'Error'
+    if entry.kind == 'warning':
+        return 'Warning'
+    if entry.kind == 'status':
+        return 'Status'
+    return entry.title
+
+
+def conversation_turns_render_signature(
+    turns: Sequence[ConversationTurn],
+) -> tuple[object, ...]:
+    return tuple(
+        (
+            turn.turn_id,
+            turn.user_prompt,
+            turn.assistant_response,
+            turn.assistant_status,
+            turn.phase_label,
+            turn.tool_count,
+            turn.restored,
+            turn.stop_reason,
+            turn.session_id,
+            tuple(
+                (
+                    entry.entry_id,
+                    entry.kind,
+                    entry.title,
+                    entry.content,
+                    entry.status,
+                    entry.merge_key,
+                )
+                for entry in turn.entries
+            ),
+        )
+        for turn in turns
+    )
 
 
 def run_agent_tui(
@@ -312,46 +546,15 @@ def run_agent_tui(
             *,
             include_live_state: bool,
         ) -> str:
-            lines: list[str] = []
-            if include_live_state:
-                lines.extend(
-                    [
-                        f'**State:** {self._phase}',
-                        '',
-                        self._phase_detail or self._phase,
-                        '',
-                    ]
-                )
-            for entry in entries:
-                heading = self._working_entry_heading(entry)
-                lines.append(f'**{heading}**')
-                body = entry.content.strip() or '(empty)'
-                if entry.kind in {'tool', 'tool_output', 'tool_result'}:
-                    lines.extend(['```text', body.rstrip(), '```', ''])
-                else:
-                    lines.extend([body, ''])
-            rendered = '\n'.join(lines).strip()
-            return rendered or '_No internal work details._'
+            return render_working_entries_markdown(
+                entries,
+                include_live_state=include_live_state,
+                phase=self._phase,
+                phase_detail=self._phase_detail,
+            )
 
         def _working_entry_heading(self, entry: ConversationEntry) -> str:
-            title = entry.title.strip()
-            if title:
-                return title
-            if entry.kind == 'thinking':
-                return 'Thinking'
-            if entry.kind == 'tool':
-                return 'Tool Call'
-            if entry.kind == 'tool_output':
-                return 'Tool Output'
-            if entry.kind == 'tool_result':
-                return 'Tool Result'
-            if entry.kind == 'error':
-                return 'Error'
-            if entry.kind == 'warning':
-                return 'Warning'
-            if entry.kind == 'status':
-                return 'Status'
-            return entry.title
+            return _working_entry_heading(entry)
 
         def _working_section_id(self, *, section_index: int, section_count: int) -> str:
             return build_working_section_instance_id(
@@ -456,7 +659,7 @@ def run_agent_tui(
         ) -> None:
             render_signature = (
                 conversation_id,
-                turns,
+                self._turns_render_signature(turns),
                 selected_turn_id,
                 phase,
                 phase_detail,
@@ -476,6 +679,12 @@ def run_agent_tui(
             self._spinner_index = spinner_index
             self._collapsed_sections = dict(collapsed_sections)
             self.refresh(recompose=True, layout=True)
+
+        def _turns_render_signature(
+            self,
+            turns: tuple[ConversationTurn, ...],
+        ) -> tuple[object, ...]:
+            return conversation_turns_render_signature(turns)
 
         def compose(self) -> ComposeResult:
             if not self._turns:
