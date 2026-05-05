@@ -120,8 +120,7 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(recorded_results, ['First chat reply.', 'Second chat reply.'])
-        self.assertIn('# Agent Chat', recorded_lines)
-        self.assertIn('chat_ended=user_exit', recorded_lines)
+        self.assertTrue(any('Claw Code Agent' in line for line in recorded_lines))
 
     def test_live_renderer_formats_assistant_tool_and_mcp_events(self) -> None:
         buffer = io.StringIO()

@@ -439,17 +439,23 @@ def _read_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     text = target.read_text(encoding='utf-8', errors='replace')
     start_line = arguments.get('start_line')
     end_line = arguments.get('end_line')
-    if start_line is None and end_line is None:
-        return _truncate_output(text, context.max_output_chars)
     if start_line is not None and (isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1):
         raise ToolExecutionError('start_line must be an integer >= 1')
     if end_line is not None and (isinstance(end_line, bool) or not isinstance(end_line, int) or end_line < 1):
         raise ToolExecutionError('end_line must be an integer >= 1')
     lines = text.splitlines()
+    total_lines = len(lines)
     start_idx = max((start_line or 1) - 1, 0)
-    end_idx = end_line or len(lines)
+    end_idx = end_line if end_line is not None else total_lines
     selected = lines[start_idx:end_idx]
-    rendered = '\n'.join(f'{start_idx + idx + 1}: {line}' for idx, line in enumerate(selected))
+    rel = target.relative_to(context.root)
+    if start_line is not None or end_line is not None:
+        actual_end = min(end_idx, total_lines)
+        header = f'# File: {rel} (lines {start_idx + 1}-{actual_end} of {total_lines})'
+    else:
+        header = f'# File: {rel} ({total_lines} lines)'
+    numbered = '\n'.join(f'{start_idx + idx + 1}: {line}' for idx, line in enumerate(selected))
+    rendered = f'{header}\n{numbered}'
     return _truncate_output(rendered, context.max_output_chars)
 
 
@@ -494,25 +500,44 @@ def _edit_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     target = _resolve_path(_require_string(arguments, 'path'), context, allow_missing=False)
     if not target.is_file():
         raise ToolExecutionError(f'Path is not a file: {target}')
-    old_text = arguments.get('old_text')
-    new_text = arguments.get('new_text')
+    # Accept old_str (primary, Claude Code convention) or old_text (legacy alias)
+    _raw_old = arguments.get('old_str')
+    old_str = _raw_old if _raw_old is not None else arguments.get('old_text')
+    _raw_new = arguments.get('new_str')
+    new_str = _raw_new if _raw_new is not None else arguments.get('new_text')
     replace_all = arguments.get('replace_all', False)
-    if not isinstance(old_text, str):
-        raise ToolExecutionError('old_text must be a string')
-    if not isinstance(new_text, str):
-        raise ToolExecutionError('new_text must be a string')
+    if not isinstance(old_str, str):
+        raise ToolExecutionError('old_str must be a string')
+    if not isinstance(new_str, str):
+        raise ToolExecutionError('new_str must be a string')
     if not isinstance(replace_all, bool):
         raise ToolExecutionError('replace_all must be a boolean')
     current = target.read_text(encoding='utf-8', errors='replace')
-    occurrences = current.count(old_text)
+    occurrences = current.count(old_str)
     if occurrences == 0:
-        raise ToolExecutionError('old_text was not found in the target file')
+        first_line = old_str.splitlines()[0].strip() if old_str.strip() else ''
+        hint = ''
+        if first_line:
+            file_lines = current.splitlines()
+            nearby = [
+                f'  line {i + 1}: {line}'
+                for i, line in enumerate(file_lines)
+                if first_line[:60] in line
+            ][:5]
+            if nearby:
+                hint = '\n\nLines containing the start of old_str:\n' + '\n'.join(nearby)
+        raise ToolExecutionError(
+            f'old_str not found in {target.name!r}. '
+            f'It must match the file content exactly (including whitespace and indentation).'
+            + hint
+        )
     if occurrences > 1 and not replace_all:
         raise ToolExecutionError(
-            f'old_text matched {occurrences} times; pass replace_all=true to replace every match'
+            f'old_str matched {occurrences} times; pass replace_all=true to replace every match, '
+            f'or include more surrounding context to uniquely identify the location'
         )
     before_sha256 = hashlib.sha256(current.encode('utf-8')).hexdigest()
-    updated = current.replace(old_text, new_text) if replace_all else current.replace(old_text, new_text, 1)
+    updated = current.replace(old_str, new_str) if replace_all else current.replace(old_str, new_str, 1)
     target.write_text(updated, encoding='utf-8')
     rel = target.relative_to(context.root)
     replaced = occurrences if replace_all else 1
@@ -528,9 +553,61 @@ def _edit_file(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
             'after_size': len(updated),
             'before_preview': _snapshot_text(current),
             'after_preview': _snapshot_text(updated),
-            'old_text_preview': _snapshot_text(old_text),
-            'new_text_preview': _snapshot_text(new_text),
+            'old_str_preview': _snapshot_text(old_str),
+            'new_str_preview': _snapshot_text(new_str),
             'replaced_occurrences': replaced,
+        },
+    )
+
+
+def _multi_edit(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
+    """Apply multiple sequential edits to a single file in one tool call."""
+    _ensure_write_allowed(context)
+    target = _resolve_path(_require_string(arguments, 'path'), context, allow_missing=False)
+    if not target.is_file():
+        raise ToolExecutionError(f'Path is not a file: {target}')
+    raw_edits = arguments.get('edits')
+    if not isinstance(raw_edits, list) or not raw_edits:
+        raise ToolExecutionError('edits must be a non-empty array of {old_str, new_str} objects')
+    current = target.read_text(encoding='utf-8', errors='replace')
+    before_sha256 = hashlib.sha256(current.encode('utf-8')).hexdigest()
+    updated = current
+    for i, edit in enumerate(raw_edits):
+        if not isinstance(edit, dict):
+            raise ToolExecutionError(f'edits[{i}] must be an object with old_str and new_str')
+        _raw_old = edit.get('old_str')
+        old_str = _raw_old if _raw_old is not None else edit.get('old_text')
+        _raw_new = edit.get('new_str')
+        new_str = _raw_new if _raw_new is not None else edit.get('new_text')
+        if not isinstance(old_str, str):
+            raise ToolExecutionError(f'edits[{i}].old_str must be a string')
+        if not isinstance(new_str, str):
+            raise ToolExecutionError(f'edits[{i}].new_str must be a string')
+        occurrences = updated.count(old_str)
+        if occurrences == 0:
+            raise ToolExecutionError(
+                f'edits[{i}].old_str was not found in the file. '
+                f'Note: edits are applied sequentially, so earlier edits may affect later matches.'
+            )
+        if occurrences > 1:
+            raise ToolExecutionError(
+                f'edits[{i}].old_str matched {occurrences} times; '
+                f'include more surrounding context to uniquely identify the location'
+            )
+        updated = updated.replace(old_str, new_str, 1)
+    target.write_text(updated, encoding='utf-8')
+    rel = target.relative_to(context.root)
+    after_sha256 = hashlib.sha256(updated.encode('utf-8')).hexdigest()
+    return (
+        f'edited {rel}; applied {len(raw_edits)} edit(s)',
+        {
+            'action': 'multi_edit',
+            'path': str(rel),
+            'before_sha256': before_sha256,
+            'after_sha256': after_sha256,
+            'before_size': len(current),
+            'after_size': len(updated),
+            'edits_applied': len(raw_edits),
         },
     )
 
@@ -666,9 +743,30 @@ def _grep_search(arguments: dict[str, Any], context: ToolExecutionContext) -> st
     return '\n'.join(hits) if hits else '(no matches)'
 
 
+def _format_bash_output(stdout: str, stderr: str, exit_code: int) -> str:
+    """Format bash output cleanly: show exit code only on failure, label stderr."""
+    parts: list[str] = []
+    if exit_code != 0:
+        parts.append(f'[exit {exit_code}]')
+    if stdout.strip():
+        parts.append(stdout.rstrip())
+    if stderr.strip():
+        parts.append(f'[stderr]\n{stderr.rstrip()}')
+    if not parts:
+        parts.append('[no output]')
+    return '\n'.join(parts)
+
+
 def _run_bash(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     command = _require_string(arguments, 'command')
     _ensure_shell_allowed(command, context)
+    raw_timeout = arguments.get('timeout')
+    if raw_timeout is not None:
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+            raise ToolExecutionError('timeout must be a positive number (seconds)')
+        timeout_seconds = max(1.0, min(float(raw_timeout), 600.0))
+    else:
+        timeout_seconds = context.command_timeout_seconds
     bash_command, working_directory = _build_bash_invocation(
         command,
         context.root,
@@ -680,27 +778,21 @@ def _run_bash(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
         cwd=working_directory,
         capture_output=True,
         text=True,
-        timeout=context.command_timeout_seconds,
+        timeout=timeout_seconds,
         env=_build_subprocess_env(context),
     )
     stdout = completed.stdout or ''
     stderr = completed.stderr or ''
-    payload = [
-        f'exit_code={completed.returncode}',
-        '[stdout]',
-        stdout.rstrip(),
-        '[stderr]',
-        stderr.rstrip(),
-    ]
+    output = _format_bash_output(stdout, stderr, completed.returncode)
     return (
-        _truncate_output('\n'.join(payload).strip(), context.max_output_chars),
+        _truncate_output(output, context.max_output_chars),
         {
             'action': 'bash',
             'command': command,
             'exit_code': completed.returncode,
             'stdout_preview': _snapshot_text(stdout),
             'stderr_preview': _snapshot_text(stderr),
-            'output_preview': _snapshot_text('\n'.join(payload).strip()),
+            'output_preview': _snapshot_text(output),
         },
     )
 
@@ -2003,6 +2095,13 @@ def _stream_bash(
     try:
         command = _require_string(arguments, 'command')
         _ensure_shell_allowed(command, context)
+        raw_timeout = arguments.get('timeout')
+        if raw_timeout is not None:
+            if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+                raise ToolExecutionError('timeout must be a positive number (seconds)')
+            timeout_seconds = max(1.0, min(float(raw_timeout), 600.0))
+        else:
+            timeout_seconds = context.command_timeout_seconds
         bash_command, working_directory = _build_bash_invocation(
             command,
             context.root,
@@ -2041,7 +2140,7 @@ def _stream_bash(
             _start_stream_reader(process.stderr, 'stderr', stream_queue)
         )
 
-    deadline = time.monotonic() + context.command_timeout_seconds
+    deadline = time.monotonic() + timeout_seconds
     timeout_error: str | None = None
     closed_streams = 0
 
@@ -2050,7 +2149,7 @@ def _stream_bash(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timeout_error = (
-                    f'Command timed out after {context.command_timeout_seconds:.1f}s: {command}'
+                    f'Command timed out after {timeout_seconds:.1f}s: {command}'
                 )
                 process.kill()
                 break
@@ -2105,19 +2204,13 @@ def _stream_bash(
 
     stdout = ''.join(stdout_chunks)
     stderr = ''.join(stderr_chunks)
-    payload = [
-        f'exit_code={exit_code}',
-        '[stdout]',
-        stdout.rstrip(),
-        '[stderr]',
-        stderr.rstrip(),
-    ]
+    output = _format_bash_output(stdout, stderr, exit_code)
     yield ToolStreamUpdate(
         kind='result',
         result=ToolExecutionResult(
             name='bash',
             ok=True,
-            content=_truncate_output('\n'.join(payload).strip(), context.max_output_chars),
+            content=_truncate_output(output, context.max_output_chars),
             metadata={
                 'action': 'bash',
                 'command': command,
@@ -2125,7 +2218,7 @@ def _stream_bash(
                 'streamed': True,
                 'stdout_preview': _snapshot_text(stdout),
                 'stderr_preview': _snapshot_text(stderr),
-                'output_preview': _snapshot_text('\n'.join(payload).strip()),
+                'output_preview': _snapshot_text(output),
             },
         ),
     )

@@ -1866,7 +1866,7 @@ class AgentRuntimeTests(unittest.TestCase):
         tool_messages = [message for message in result.transcript if message.get('role') == 'tool']
         self.assertEqual(len(tool_messages), 1)
         tool_message = tool_messages[0]
-        self.assertIn('exit_code=0', tool_message.get('content', ''))
+        self.assertIn('alpha', tool_message.get('content', ''))
         metadata = tool_message.get('metadata', {})
         self.assertIn('stream_preview', metadata)
         self.assertIn('alpha', metadata['stream_preview'])

@@ -890,6 +890,7 @@ def _handle_agent(args: argparse.Namespace) -> int:
         agent,
         args.prompt,
         show_transcript=args.show_transcript,
+        show_usage=getattr(args, 'show_usage', True),
     )
     return 0
 
@@ -950,6 +951,7 @@ def _handle_agent_chat(args: argparse.Namespace) -> int:
         initial_prompt=args.prompt,
         resume_session_id=args.resume_session_id,
         show_transcript=args.show_transcript,
+        show_usage=getattr(args, 'show_usage', False),
     )
 
 
@@ -972,6 +974,7 @@ def _handle_agent_resume(args: argparse.Namespace) -> int:
         agent,
         args.prompt,
         show_transcript=args.show_transcript,
+        show_usage=getattr(args, 'show_usage', True),
         stored_session=stored_session,
     )
     return 0

@@ -59,7 +59,7 @@ class AgentPromptingTests(unittest.TestCase):
                 runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
             )
             prompt = agent.render_system_prompt()
-        self.assertIn('Claw Code Python', prompt)
+        self.assertIn('expert software engineer', prompt)
         self.assertIn('# System', prompt)
         self.assertIn('# Environment', prompt)
 

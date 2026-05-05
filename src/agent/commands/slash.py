@@ -414,6 +414,11 @@ def get_slash_command_specs() -> tuple[SlashCommandSpec, ...]:
             description='Restore the conversation to a previous point.',
             handler=_handle_rewind,
         ),
+        SlashCommandSpec(
+            names=('init',),
+            description='Analyze this project and generate a CLAUDE.md file with project overview, commands, and development notes.',
+            handler=_handle_init,
+        ),
     )
 
 
@@ -1548,3 +1553,48 @@ def _local_result(input_text: str, output: str) -> SlashCommandResult:
         output=output,
         transcript=transcript,
     )
+
+
+_INIT_PROMPT = """\
+Analyze this project and create a CLAUDE.md file at the workspace root.
+
+CLAUDE.md is automatically loaded on every session as project context. Keep it concise and actionable.
+
+Include the following sections (omit any that don't apply):
+
+## Overview
+One or two sentences describing what this project does.
+
+## Tech stack
+Key languages, frameworks, and major dependencies.
+
+## Repository layout
+Key top-level directories and what each contains (3-8 entries, skip obvious ones).
+
+## Common commands
+The actual commands to install dependencies, build, test, and lint. Read package.json, \
+pyproject.toml, Makefile, or equivalent to get the real commands.
+
+## Development notes
+Conventions, gotchas, or important things to know (optional — only include if genuinely useful).
+
+Steps:
+1. Explore: list_dir the root, read key config files (package.json, pyproject.toml, README.md, Makefile, cargo.toml, etc.)
+2. Run `git log --oneline -5` if shell is available for project history context
+3. Write CLAUDE.md using write_file
+4. Keep it under 80 lines — short and actionable beats comprehensive
+"""
+
+
+def _handle_init(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
+    """Analyze the project and generate a CLAUDE.md file."""
+    cwd = agent.runtime_config.cwd
+    claude_md = cwd / 'CLAUDE.md'
+    force = '--force' in args
+    if claude_md.exists() and not force:
+        return _local_result(
+            input_text,
+            f'CLAUDE.md already exists at {claude_md}.\n'
+            f'Use /init --force to regenerate it.',
+        )
+    return _prompt_result(input_text, _INIT_PROMPT)

@@ -113,6 +113,11 @@ def _env_float(*names: str, default: float) -> float:
         return default
 
 
+def _env_flag_disabled(name: str) -> bool:
+    """Return True if the named env var is set to a truthy disable value (1/true/yes)."""
+    return os.environ.get(name, '').strip().lower() in ('1', 'true', 'yes')
+
+
 def _env_optional_int(*names: str) -> int | None:
     raw = _env_first(*names)
     if not isinstance(raw, str):
@@ -301,8 +306,33 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     parser.add_argument('--cwd', default='.')
     parser.add_argument('--add-dir', action='append', default=[])
     parser.add_argument('--disable-claude-md', action='store_true')
-    parser.add_argument('--allow-write', action='store_true')
-    parser.add_argument('--allow-shell', action='store_true')
+    # File writes and shell commands are allowed by default. Use --no-write / --no-shell to disable.
+    _write_default = not _env_flag_disabled('CLAW_NO_WRITE')
+    _shell_default = not _env_flag_disabled('CLAW_NO_SHELL')
+    parser.add_argument(
+        '--allow-write',
+        action='store_true',
+        default=_write_default,
+        help='Allow the agent to write files (default: on; disable with CLAW_NO_WRITE=1)',
+    )
+    parser.add_argument(
+        '--no-write',
+        action='store_false',
+        dest='allow_write',
+        help='Disallow file writes',
+    )
+    parser.add_argument(
+        '--allow-shell',
+        action='store_true',
+        default=_shell_default,
+        help='Allow the agent to run shell commands (default: on; disable with CLAW_NO_SHELL=1)',
+    )
+    parser.add_argument(
+        '--no-shell',
+        action='store_false',
+        dest='allow_shell',
+        help='Disallow shell commands',
+    )
     parser.add_argument('--unsafe', action='store_true')
     parser.add_argument('--stream', action='store_true')
     parser.add_argument('--auto-snip-threshold', type=int)
@@ -504,6 +534,7 @@ def _add_agent_resume_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('prompt')
     parser.add_argument('--max-turns', type=int)
     parser.add_argument('--show-transcript', action='store_true')
+    parser.add_argument('--show-usage', action='store_true', help='print token/cost usage after the turn')
     parser.add_argument('--model')
     parser.add_argument('--base-url')
     parser.add_argument('--api-key')
