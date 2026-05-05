@@ -119,6 +119,15 @@ _COMPACT_OLLAMA_TOOL_NAMES: tuple[str, ...] = (
     'delegate_agent',
     'Skill',
 )
+_COMPACT_OLLAMA_SEARCH_TOOL_NAMES: tuple[str, ...] = (
+    'web_search',
+)
+_COMPACT_OLLAMA_MCP_TOOL_NAMES: tuple[str, ...] = (
+    'mcp_list_resources',
+    'mcp_read_resource',
+    'mcp_list_tools',
+    'mcp_call_tool',
+)
 
 
 class _RuntimeEventRecorder:
@@ -350,9 +359,18 @@ class LocalCodingAgent:
         session: AgentSessionState | None = None,
     ) -> set[str]:
         _ = session
-        return {
-            name for name in _COMPACT_OLLAMA_TOOL_NAMES if name in self.tool_registry
-        }
+        names = set(_COMPACT_OLLAMA_TOOL_NAMES)
+        if (
+            self.search_runtime is not None
+            and self.search_runtime.has_search_runtime()
+        ):
+            names.update(_COMPACT_OLLAMA_SEARCH_TOOL_NAMES)
+        if (
+            self.mcp_runtime is not None
+            and (self.mcp_runtime.resources or self.mcp_runtime.servers)
+        ):
+            names.update(_COMPACT_OLLAMA_MCP_TOOL_NAMES)
+        return {name for name in names if name in self.tool_registry}
 
     def _apply_hook_policy_budget_overrides(
         self,

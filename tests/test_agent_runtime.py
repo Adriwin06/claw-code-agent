@@ -518,7 +518,61 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('tool_search', tool_names)
         self.assertIn('web_fetch', tool_names)
         self.assertNotIn('mcp_list_tools', tool_names)
+        self.assertNotIn('web_search', tool_names)
         self.assertNotIn('account_login', tool_names)
+
+    def test_ollama_compacted_schema_keeps_configured_mcp_and_search_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'sagemath': {
+                                'transport': 'streamable-http',
+                                'url': 'http://127.0.0.1:18000/mcp',
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            (workspace / '.claw-search.json').write_text(
+                json.dumps(
+                    {
+                        'providers': [
+                            {
+                                'name': 'local-search',
+                                'provider': 'searxng',
+                                'baseUrl': 'http://127.0.0.1:8080',
+                            }
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(
+                    model='gemma4:e4b',
+                    base_url='http://127.0.0.1:11434/v1',
+                ),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            session = agent.build_session(None)
+            session.append_user('Search and evaluate with SageMath')
+            tool_specs = agent._build_tool_specs_for_session(session)
+
+        tool_names = {
+            spec.get('function', {}).get('name')
+            for spec in tool_specs
+            if isinstance(spec, dict)
+        }
+        self.assertIn('web_search', tool_names)
+        self.assertIn('mcp_list_resources', tool_names)
+        self.assertIn('mcp_read_resource', tool_names)
+        self.assertIn('mcp_list_tools', tool_names)
+        self.assertIn('mcp_call_tool', tool_names)
+        self.assertEqual(set(agent._tool_registry_for_prompt()), tool_names)
 
     def test_delegate_agent_inherits_unlimited_turns_from_parent_runtime(self) -> None:
         observed_max_turns: list[int | None] = []

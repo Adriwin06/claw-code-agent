@@ -289,6 +289,7 @@ def get_mcp_guidance_section(prompt_context: PromptContext) -> str:
         items.extend(
             [
                 'When using the sagemath MCP server, evaluate_expression does not accept separate variable bindings such as x=123 as a standalone argument.',
+                'A valid SageMath evaluation call is mcp_call_tool with {"server":"sagemath","tool_name":"evaluate_expression","arguments":{"expression":"2 + 2","numeric":true}}.',
                 'For SageMath numeric evaluation at a specific point, substitute inside the expression itself, for example ((sin(x) * e^(x/2)) / (sqrt(x) + cos(x))).subs(x=1573890), and pass numeric=true.',
                 'If a SageMath expression still contains a free variable like x, expect a symbolic result or a numeric-evaluation error instead of a final number.',
             ]

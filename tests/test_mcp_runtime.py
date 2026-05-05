@@ -513,6 +513,80 @@ class MCPRuntimeTests(unittest.TestCase):
         self.assertIn('echo:tool-run', call_result.content)
         self.assertEqual(call_result.metadata.get('action'), 'mcp_call_tool')
 
+    def test_mcp_call_tool_accepts_tool_args_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            server_path = self._write_fake_stdio_server(workspace)
+            (workspace / '.claw-mcp.json').write_text(
+                json.dumps(
+                    {
+                        'mcpServers': {
+                            'remote': {
+                                'command': sys.executable,
+                                'args': ['-u', str(server_path)],
+                            }
+                        }
+                    }
+                ),
+                encoding='utf-8',
+            )
+            runtime = MCPRuntime.from_workspace(workspace)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                mcp_runtime=runtime,
+            )
+            call_result = execute_tool(
+                default_tool_registry(),
+                'mcp_call_tool',
+                {
+                    'tool_name': 'echo',
+                    'server': 'remote',
+                    'arguments': {},
+                    'tool_args': {'text': 'alias-run'},
+                },
+                context,
+            )
+
+        self.assertTrue(call_result.ok)
+        self.assertIn('echo:alias-run', call_result.content)
+        self.assertIn('"text": "alias-run"', call_result.metadata.get('arguments_preview', ''))
+
+    def test_mcp_call_tool_marks_mcp_error_results_as_failed(self) -> None:
+        class ErrorRuntime:
+            resources = ()
+            servers = (object(),)
+
+            def call_tool(self, tool_name, *, arguments=None, server_name=None, max_chars=12000):
+                return (
+                    'remote tool failed',
+                    {
+                        'server_name': server_name or 'remote',
+                        'tool_name': tool_name,
+                        'is_error': True,
+                    },
+                )
+
+        context = build_tool_context(
+            AgentRuntimeConfig(cwd=Path.cwd()),
+            mcp_runtime=ErrorRuntime(),
+        )
+        result = execute_tool(
+            default_tool_registry(),
+            'mcp_call_tool',
+            {
+                'tool_name': 'evaluate_expression',
+                'server': 'sagemath',
+                'tool_args': {'expression': '2 + 2'},
+            },
+            context,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.content, 'remote tool failed')
+        self.assertEqual(result.metadata.get('action'), 'mcp_call_tool')
+        self.assertEqual(result.metadata.get('requested_server'), 'sagemath')
+        self.assertTrue(result.metadata.get('mcp_is_error'))
+
     def test_mcp_list_tools_reports_unknown_server(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)

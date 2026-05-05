@@ -44,6 +44,15 @@ class ToolPermissionError(RuntimeError):
 class ToolExecutionError(RuntimeError):
     """Raised when a tool cannot complete because of invalid input or state."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.metadata = dict(metadata or {})
+
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
@@ -107,11 +116,14 @@ class AgentTool:
                 metadata={'error_kind': 'permission_denied'},
             )
         except (ToolExecutionError, OSError, subprocess.SubprocessError) as exc:
+            metadata = {'error_kind': 'tool_execution_error'}
+            if isinstance(exc, ToolExecutionError):
+                metadata.update(exc.metadata)
             return ToolExecutionResult(
                 name=self.name,
                 ok=False,
                 content=str(exc),
-                metadata={'error_kind': 'tool_execution_error'},
+                metadata=metadata,
             )
 
 
@@ -341,6 +353,24 @@ def _snapshot_text(text: str, limit: int = 240) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + '...'
+
+
+def _coerce_object_argument(value: Any, *, label: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            return {}
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ToolExecutionError(f'{label} must be a JSON object') from exc
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    raise ToolExecutionError(f'{label} must be an object')
 
 
 def _require_string(arguments: dict[str, Any], key: str) -> str:
@@ -1231,15 +1261,17 @@ def _mcp_call_tool(arguments: dict[str, Any], context: ToolExecutionContext) -> 
     server = arguments.get('server')
     if server is not None and not isinstance(server, str):
         raise ToolExecutionError('server must be a string')
-    raw_arguments = arguments.get('arguments', {})
-    if raw_arguments is None:
-        raw_arguments = {}
-    if not isinstance(raw_arguments, dict):
-        raise ToolExecutionError('arguments must be an object')
+    raw_arguments = _mcp_call_tool_arguments_payload(arguments)
     arguments_preview = _snapshot_text(
         json.dumps(raw_arguments, ensure_ascii=True, sort_keys=True)
     )
     max_chars = _coerce_int(arguments, 'max_chars', context.max_output_chars)
+    metadata_base = {
+        'action': 'mcp_call_tool',
+        'tool_name': tool_name,
+        'requested_server': server,
+        'arguments_preview': arguments_preview,
+    }
     try:
         content, metadata = runtime.call_tool(
             tool_name,
@@ -1247,19 +1279,37 @@ def _mcp_call_tool(arguments: dict[str, Any], context: ToolExecutionContext) -> 
             server_name=server,
             max_chars=max_chars,
         )
-    except FileNotFoundError as exc:
-        raise ToolExecutionError(str(exc)) from exc
+    except (FileNotFoundError, OSError) as exc:
+        raise ToolExecutionError(
+            str(exc),
+            metadata=metadata_base,
+        ) from exc
+    result_metadata = {
+        **metadata_base,
+        'server_name': metadata.get('server_name'),
+        'mcp_is_error': metadata.get('is_error'),
+    }
+    if bool(metadata.get('is_error')):
+        raise ToolExecutionError(
+            content or f'MCP tool {tool_name} returned an error.',
+            metadata=result_metadata,
+        )
     return (
         content,
-        {
-            'action': 'mcp_call_tool',
-            'tool_name': tool_name,
-            'server_name': metadata.get('server_name'),
-            'requested_server': server,
-            'arguments_preview': arguments_preview,
-            'mcp_is_error': metadata.get('is_error'),
-        },
+        result_metadata,
     )
+
+
+def _mcp_call_tool_arguments_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+    empty_payload: dict[str, Any] | None = None
+    for key in ('arguments', 'tool_args', 'tool_arguments', 'args'):
+        if key in arguments:
+            payload = _coerce_object_argument(arguments.get(key), label=key)
+            if payload:
+                return payload
+            if empty_payload is None:
+                empty_payload = payload
+    return empty_payload or {}
 
 
 def _remote_status(

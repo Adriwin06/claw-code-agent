@@ -534,6 +534,8 @@ def default_tool_registry() -> dict[str, AgentTool]:
                     'tool_name': {'type': 'string'},
                     'server': {'type': 'string'},
                     'arguments': {'type': 'object'},
+                    'tool_args': {'type': 'object'},
+                    'tool_arguments': {'type': 'object'},
                     'max_chars': {'type': 'integer', 'minimum': 1, 'maximum': 50000},
                 },
                 'required': ['tool_name'],
