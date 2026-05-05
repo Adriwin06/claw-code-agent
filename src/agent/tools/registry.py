@@ -9,6 +9,7 @@ from src.agent.tools.execution import (
     _read_file,
     _write_file,
     _edit_file,
+    _multi_edit,
     _notebook_edit,
     _glob_search,
     _grep_search,
@@ -143,6 +144,35 @@ def default_tool_registry() -> dict[str, AgentTool]:
             handler=_edit_file,
         ),
         AgentTool(
+            name='multi_edit',
+            description=(
+                'Apply multiple sequential edits to a single file in one tool call. '
+                'More efficient than calling edit_file repeatedly when making several changes to the same file. '
+                'Edits are applied in order; each old_str must match the file state after previous edits have been applied.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'path': {'type': 'string', 'description': 'Relative file path from workspace root.'},
+                    'edits': {
+                        'type': 'array',
+                        'description': 'Ordered list of edits to apply.',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'old_str': {'type': 'string', 'description': 'The exact text to replace.'},
+                                'new_str': {'type': 'string', 'description': 'The replacement text.'},
+                            },
+                            'required': ['old_str', 'new_str'],
+                        },
+                        'minItems': 1,
+                    },
+                },
+                'required': ['path', 'edits'],
+            },
+            handler=_multi_edit,
+        ),
+        AgentTool(
             name='notebook_edit',
             description='Edit a Jupyter notebook cell by replacing or appending source in a .ipynb file.',
             parameters={
@@ -196,6 +226,12 @@ def default_tool_registry() -> dict[str, AgentTool]:
                 'type': 'object',
                 'properties': {
                     'command': {'type': 'string'},
+                    'timeout': {
+                        'type': 'number',
+                        'description': 'Override the default command timeout (seconds, 1-600). Use for long-running commands like builds or test suites.',
+                        'minimum': 1,
+                        'maximum': 600,
+                    },
                 },
                 'required': ['command'],
             },
