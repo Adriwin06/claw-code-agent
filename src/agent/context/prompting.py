@@ -157,6 +157,7 @@ def get_doing_tasks_section() -> str:
         'When given a task, think it through, explore the relevant code, then implement a complete solution.',
         'Read relevant code before changing it. Do not propose edits to files you have not inspected.',
         'Make your changes complete — do not leave TODOs, stubs, or half-finished work unless asked.',
+        'Do not end a response by promising future work. If work remains, call the next needed tool or continue the task now; only stop when the task is complete or blocked.',
         'Do not add features, refactors, abstractions, comments, or tests beyond what the task requires.',
         'Prefer editing existing files over creating new files unless a new file is necessary.',
         'When something fails, diagnose the cause before changing direction. Do not loop on the same failing action.',

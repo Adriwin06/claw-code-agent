@@ -187,7 +187,6 @@ class TextualUiTests(unittest.TestCase):
             state,
             turn,
             (ActivityItem(key='latest', label='Tool finished'),),
-            auto_follow=True,
         )
 
         self.assertIn('Run', rendered)
@@ -203,6 +202,8 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('last_activity=Tool finished', rendered)
         self.assertIn('Ctrl+U: reuse selected prompt', rendered)
         self.assertIn('Ctrl+T: rerun selected turn', rendered)
+        self.assertNotIn('auto_follow=', rendered)
+        self.assertNotIn('Ctrl+F: toggle follow', rendered)
 
     def test_restore_conversation_turns_skips_internal_messages_and_tracks_tools(self) -> None:
         turns = restore_conversation_turns(
@@ -1026,6 +1027,58 @@ class TextualUiTests(unittest.TestCase):
 
                 scroll = app.query_one('#conversation-scroll')
                 self.assertGreater(getattr(scroll, 'max_scroll_y', 0), 0)
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_streaming_scroll_sticks_only_when_already_at_bottom(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                app._bridge.begin_prompt('streaming scroll')
+                app._bridge.handle_event({'type': 'content_delta', 'delta': 'line\n' * 120})
+                await pilot.pause(0.2)
+
+                scroll = app.query_one('#conversation-scroll')
+                self.assertGreater(getattr(scroll, 'max_scroll_y', 0), 0)
+                self.assertTrue(app._conversation_at_end())
+
+                app._bridge.handle_event({'type': 'content_delta', 'delta': 'bottom\n' * 40})
+                await pilot.pause(0.2)
+                self.assertTrue(app._conversation_at_end())
+
+                app._scroll_conversation_to_y(2.0)
+                await pilot.pause(0.1)
+                pinned_y = float(getattr(scroll, 'scroll_y', 0.0))
+                self.assertFalse(app._conversation_at_end())
+
+                app._bridge.handle_event({'type': 'content_delta', 'delta': 'preserve\n' * 40})
+                await pilot.pause(0.2)
+                self.assertAlmostEqual(float(getattr(scroll, 'scroll_y', 0.0)), pinned_y, delta=1.0)
 
         asyncio.run(exercise())
 

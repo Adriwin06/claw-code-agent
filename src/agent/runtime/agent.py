@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
@@ -101,6 +102,15 @@ from src.session.microcompact import microcompact_messages as _microcompact_mess
 
 RuntimeEventHandler = Callable[[dict[str, object]], None]
 
+_PENDING_WORK_CONTINUATION_LIMIT = 2
+_PENDING_WORK_CONTINUATION_PATTERN = re.compile(
+    r"(?:^|[.!?:]\s+|\n\s*)"
+    r"(?:(?:next|now|then|after that|afterward|finally)[,\s]+)?"
+    r"(?:i(?:\s+will|'ll|\s+am\s+going\s+to)|we(?:\s+will|'ll|\s+are\s+going\s+to))\s+"
+    r"(?:now\s+)?"
+    r"(?:proceed(?:\s+(?:with|to))?|continue|start|run|execute|perform|test|verify|check|inspect|read|search|look\s+up|call|open|update|edit|write|implement|fix|debug|analy[sz]e|investigate|review|try|use)\b",
+    re.IGNORECASE,
+)
 _COMPACT_OLLAMA_TOOL_SCHEMA_CHAR_LIMIT = 8_000
 _COMPACT_OLLAMA_TOOL_NAMES: tuple[str, ...] = (
     'list_available_tools',
@@ -858,6 +868,7 @@ class LocalCodingAgent:
                 )
             )
         if turn.tool_calls:
+            state.consecutive_pending_work_continuations = 0
             return TurnLoopDirective()
         return self._handle_assistant_only_turn(state, turn)
 
@@ -867,11 +878,20 @@ class LocalCodingAgent:
         turn: AssistantTurn,
     ) -> TurnLoopDirective:
         state.assistant_response_segments.append(turn.content)
-        if self._should_continue_response(turn):
+        continuation_reason = self._continuation_reason_for_response(state, turn)
+        if continuation_reason is not None:
+            if continuation_reason == 'pending_work':
+                state.consecutive_pending_work_continuations += 1
+            continuation_prompt = (
+                self._build_truncation_continuation_prompt()
+                if continuation_reason == 'truncated'
+                else self._build_pending_work_continuation_prompt()
+            )
             state.session.append_user(
-                self._build_truncation_continuation_prompt(),
+                continuation_prompt,
                 metadata={
                     'kind': 'continuation_request',
+                    'reason': continuation_reason,
                     'continuation_index': len(state.assistant_response_segments),
                 },
                 message_id=f'continuation_{state.turn_index}',
@@ -879,7 +899,8 @@ class LocalCodingAgent:
             state.stream_events.append(
                 {
                     'type': 'continuation_request',
-                    'reason': turn.finish_reason,
+                    'reason': continuation_reason,
+                    'finish_reason': turn.finish_reason,
                     'continuation_index': len(state.assistant_response_segments),
                 }
             )
@@ -947,14 +968,60 @@ class LocalCodingAgent:
     ) -> bool:
         return self._is_truncated_response(turn)
 
+    def _continuation_reason_for_response(
+        self,
+        state: PromptRunState,
+        turn: AssistantTurn,
+    ) -> str | None:
+        if self._is_truncated_response(turn):
+            return 'truncated'
+        if self._has_pending_promised_work(state, turn):
+            return 'pending_work'
+        return None
+
     def _is_truncated_response(self, turn: AssistantTurn) -> bool:
         return turn.finish_reason in {'length', 'max_tokens'}
+
+    def _has_pending_promised_work(
+        self,
+        state: PromptRunState,
+        turn: AssistantTurn,
+    ) -> bool:
+        if turn.finish_reason != 'stop':
+            return False
+        if self.runtime_config.output_schema is not None:
+            return False
+        if state.consecutive_pending_work_continuations >= _PENDING_WORK_CONTINUATION_LIMIT:
+            return False
+        content = self._normalize_pending_work_text(turn.content)
+        if not content:
+            return False
+        return _PENDING_WORK_CONTINUATION_PATTERN.search(content) is not None
+
+    def _normalize_pending_work_text(self, content: str) -> str:
+        return (
+            content.replace('\u2018', "'")
+            .replace('\u2019', "'")
+            .replace('\u201c', '"')
+            .replace('\u201d', '"')
+            .strip()
+        )
 
     def _build_truncation_continuation_prompt(self) -> str:
         return (
             '<system-reminder>\n'
             'Your previous answer was truncated because the model stopped early. '
             'Continue exactly where you left off. Do not repeat completed text.\n'
+            '</system-reminder>'
+        )
+
+    def _build_pending_work_continuation_prompt(self) -> str:
+        return (
+            '<system-reminder>\n'
+            'Your previous response said more work remained, but it ended without '
+            'calling a tool or finishing the task. Continue now. If the next step '
+            'requires a tool, call that tool in this turn. Only provide a final '
+            'answer when the requested work is complete or you are blocked.\n'
             '</system-reminder>'
         )
 

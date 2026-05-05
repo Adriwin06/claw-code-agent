@@ -37,6 +37,7 @@ class AgentPromptingTests(unittest.TestCase):
         self.assertIn('# System', prompt)
         self.assertIn('# Doing tasks', prompt)
         self.assertIn('# Using your tools', prompt)
+        self.assertIn('Do not end a response by promising future work', prompt)
         self.assertIn('# Environment', prompt)
         self.assertIn('__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__', prompt)
         self.assertIn('Primary working directory:', prompt)

@@ -28,6 +28,7 @@ class PromptRunState:
     assistant_response_segments: list[str] = field(default_factory=list)
     last_content: str = ''
     turn_index: int = 0
+    consecutive_pending_work_continuations: int = 0
 
 
 @dataclass(frozen=True)

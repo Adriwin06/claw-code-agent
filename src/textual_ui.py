@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 from pathlib import Path
 from threading import Event
 from typing import Sequence
@@ -46,8 +45,6 @@ def render_details_panel(
     state: AgentTuiState,
     turn: ConversationTurn | None,
     activity_items: Sequence[ActivityItem],
-    *,
-    auto_follow: bool,
 ) -> str:
     max_turns_label = 'unlimited' if state.max_turns is None else str(state.max_turns)
     workspace_path = Path(state.workspace)
@@ -68,7 +65,6 @@ def render_details_panel(
         f'max_turns={max_turns_label}',
         f'command_timeout_seconds={state.command_timeout_seconds:.1f}',
         f'session_id={state.session_id or "none"}',
-        f'auto_follow={auto_follow}',
         f'busy={state.busy}',
         f'last_tool={state.last_tool or "none"}',
         f'last_stop_reason={_friendly_stop_reason(state.last_stop_reason)}',
@@ -120,7 +116,6 @@ def render_details_panel(
             'Ctrl+U: reuse selected prompt',
             'Ctrl+T: rerun selected turn',
             'Ctrl+N: new conversation',
-            'Ctrl+F: toggle follow',
             'Ctrl+D: delete conversation',
             '/new /prev /next /retry /reuse /delete',
             'Ctrl+C: stop current run',
@@ -768,13 +763,7 @@ def run_agent_tui(
             margin-bottom: 1;
         }
 
-        #run-toolbar {
-            height: auto;
-            margin-bottom: 1;
-        }
-
-        #actions-toolbar Button,
-        #run-toolbar Button {
+        #actions-toolbar Button {
             width: 1fr;
             min-width: 10;
         }
@@ -890,8 +879,20 @@ def run_agent_tui(
             background: #111923;
         }
 
-        #prompt {
+        #prompt-row {
+            height: auto;
             margin: 0 1 1 1;
+        }
+
+        #prompt {
+            width: 1fr;
+            margin: 0;
+        }
+
+        #stop-run-button {
+            width: 10;
+            min-width: 8;
+            margin-left: 1;
         }
         """
         BINDINGS = [
@@ -904,7 +905,6 @@ def run_agent_tui(
             ('ctrl+t', 'retry_selected_turn', 'Retry'),
             ('ctrl+d', 'delete_conversation', 'Delete'),
             ('ctrl+r', 'refresh_panels', 'Refresh'),
-            ('ctrl+f', 'toggle_auto_follow', 'Follow'),
             ('ctrl+c', 'stop_generation', 'Stop'),
             ('ctrl+h', 'focus_history', 'History'),
         ]
@@ -946,11 +946,9 @@ def run_agent_tui(
             self._history_items: tuple[ConversationHistoryItem, ...] = ()
             self._activity_items: tuple[ActivityItem, ...] = ()
             self._selected_turn_id: str | None = None
-            self._auto_follow = True
-            self._follow_scroll_pending = False
+            self._scroll_to_end_pending = False
             self._restore_scroll_pending = False
             self._restore_scroll_y: float | None = None
-            self._last_follow_scroll_at = 0.0
             self._cancel_requested = Event()
             self._active_worker = None
             self._spinner_index = 0
@@ -985,17 +983,16 @@ def run_agent_tui(
                         yield Button('Reuse', id='reuse-prompt-button')
                         yield Button('Retry', id='retry-turn-button')
                         yield Button('Delete', id='delete-conversation-button')
-                    with Horizontal(id='run-toolbar'):
-                        yield Button('Stop', id='stop-run-button')
-                        yield Button('Follow On', id='follow-button')
                     yield Static(id='details')
             with Horizontal(id='command-picker'):
                 yield OptionList(id='command-options')
                 yield Static(id='command-description')
-            yield Input(
-                placeholder='Type a task, /retry, /reuse, /new, /delete, or another slash command',
-                id='prompt',
-            )
+            with Horizontal(id='prompt-row'):
+                yield Input(
+                    placeholder='Type a task, /retry, /reuse, /new, /delete, or another slash command',
+                    id='prompt',
+                )
+                yield Button('Stop', id='stop-run-button')
             yield Footer()
 
         def on_mount(self) -> None:
@@ -1089,11 +1086,11 @@ def run_agent_tui(
 
         def on_mouse_scroll_up(self, event) -> None:
             if self._event_targets_conversation(event):
-                self._set_auto_follow(False)
+                self._cancel_pending_scroll_to_end()
 
         def on_mouse_scroll_down(self, event) -> None:
             if self._event_targets_conversation(event):
-                self.call_after_refresh(self._sync_auto_follow_after_user_scroll)
+                self._cancel_pending_scroll_to_end()
 
         def _handle_conversation_scroll_key(self, event: events.Key, prompt: Input) -> bool:
             key = event.key
@@ -1104,18 +1101,19 @@ def run_agent_tui(
             event.stop()
             event.prevent_default()
             if key == 'pageup':
-                self._set_auto_follow(False)
+                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_by_pages(-1)
                 return True
             if key == 'pagedown':
+                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_by_pages(1)
-                self.call_after_refresh(self._sync_auto_follow_after_user_scroll)
                 return True
             if key == 'home':
-                self._set_auto_follow(False)
+                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_to_y(0.0)
                 return True
-            self._set_auto_follow(True, scroll=True)
+            self._cancel_pending_scroll_to_end()
+            self._scroll_conversation_to_current_end()
             return True
 
         def _route_key_to_prompt(self, event: events.Key, prompt: Input) -> bool:
@@ -1188,9 +1186,6 @@ def run_agent_tui(
                 self.action_stop_generation()
                 event.stop()
                 return
-            if event.button.id == 'follow-button':
-                self.action_toggle_auto_follow()
-                event.stop()
 
         def action_focus_prompt(self) -> None:
             self.query_one('#prompt', Input).focus()
@@ -1218,9 +1213,6 @@ def run_agent_tui(
 
         def action_refresh_panels(self) -> None:
             self._refresh_all_panels()
-
-        def action_toggle_auto_follow(self) -> None:
-            self._set_auto_follow(not self._auto_follow, scroll=True)
 
         def action_stop_generation(self) -> None:
             if not self._state.busy:
@@ -1475,7 +1467,7 @@ def run_agent_tui(
             else:
                 self._set_command_picker_visible(False)
             self._refresh_details_panel()
-            self._refresh_conversation_view(allow_auto_follow=False)
+            self._refresh_conversation_view()
             if not state.busy:
                 self._persist_history()
 
@@ -1584,9 +1576,10 @@ def run_agent_tui(
                     return turn
             return self._conversation_turns[-1]
 
-        def _refresh_conversation_view(self, *, allow_auto_follow: bool = True) -> None:
+        def _refresh_conversation_view(self, *, allow_stick_to_bottom: bool = True) -> None:
             scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
             previous_scroll_y = getattr(scroll_container, 'scroll_y', 0.0)
+            was_at_end = self._conversation_at_end()
             last_turn_id = (
                 self._conversation_turns[-1].turn_id if self._conversation_turns else None
             )
@@ -1604,7 +1597,7 @@ def run_agent_tui(
                 spinner_index=self._spinner_index,
                 collapsed_sections=self._collapsed_sections,
             )
-            if allow_auto_follow and self._auto_follow and selected_latest_turn:
+            if allow_stick_to_bottom and selected_latest_turn and was_at_end:
                 self._schedule_conversation_scroll_to_end()
                 return
             self._schedule_conversation_scroll_restore(previous_scroll_y)
@@ -1642,40 +1635,13 @@ def run_agent_tui(
             retry_button.disabled = not can_use_turn
             stop_button.disabled = not self._state.busy
             delete_button.disabled = self._state.busy
-            self._refresh_follow_button()
             self.query_one('#details', Static).update(
                 render_details_panel(
                     self._state,
                     turn,
                     self._activity_items,
-                    auto_follow=self._auto_follow,
                 )
             )
-
-        def _set_auto_follow(self, enabled: bool, *, scroll: bool = False) -> None:
-            changed = self._auto_follow != enabled
-            self._auto_follow = enabled
-            if not enabled:
-                self._follow_scroll_pending = False
-            if changed:
-                self._refresh_follow_button()
-                self._refresh_details_panel()
-            if enabled and scroll:
-                self._schedule_conversation_scroll_to_end(force=True)
-
-        def _refresh_follow_button(self) -> None:
-            try:
-                button = self.query_one('#follow-button', Button)
-            except Exception:
-                return
-            label = 'Follow On' if self._auto_follow else 'Follow Off'
-            try:
-                button.label = label
-            except Exception:
-                try:
-                    button.update(label)
-                except Exception:
-                    return
 
         def _event_targets_conversation(self, event) -> bool:
             target = getattr(event, 'widget', None)
@@ -1701,9 +1667,8 @@ def run_agent_tui(
                 return True
             return max_scroll_y - scroll_y <= 1.0
 
-        def _sync_auto_follow_after_user_scroll(self) -> None:
-            if self._conversation_at_end():
-                self._set_auto_follow(True)
+        def _cancel_pending_scroll_to_end(self) -> None:
+            self._scroll_to_end_pending = False
 
         def _scroll_conversation_by_pages(self, pages: int) -> None:
             container = self._conversation_scroll_container()
@@ -1726,10 +1691,7 @@ def run_agent_tui(
             except Exception:
                 return
 
-        def _scroll_conversation_to_end(self) -> None:
-            self._follow_scroll_pending = False
-            if not self._auto_follow:
-                return
+        def _scroll_conversation_to_current_end(self) -> None:
             container = self.query_one('#conversation-scroll', VerticalScroll)
             try:
                 container.scroll_end(animate=False, immediate=True)
@@ -1741,23 +1703,21 @@ def run_agent_tui(
             except AttributeError:
                 return
 
-        def _schedule_conversation_scroll_to_end(self, *, force: bool = False) -> None:
+        def _scroll_conversation_to_end(self) -> None:
+            if not self._scroll_to_end_pending:
+                return
+            self._scroll_to_end_pending = False
+            self._scroll_conversation_to_current_end()
+
+        def _schedule_conversation_scroll_to_end(self) -> None:
             self._restore_scroll_y = None
-            if self._follow_scroll_pending:
+            if self._scroll_to_end_pending:
                 return
-            now = time.monotonic()
-            if (
-                not force
-                and self._state.busy
-                and now - self._last_follow_scroll_at < 0.35
-            ):
-                return
-            self._last_follow_scroll_at = now
-            self._follow_scroll_pending = True
+            self._scroll_to_end_pending = True
             self.call_after_refresh(self._scroll_conversation_to_end)
 
         def _schedule_conversation_scroll_restore(self, scroll_y: float) -> None:
-            if self._follow_scroll_pending:
+            if self._scroll_to_end_pending:
                 return
             self._restore_scroll_y = scroll_y
             if self._restore_scroll_pending:
@@ -1767,7 +1727,7 @@ def run_agent_tui(
 
         def _restore_conversation_scroll(self) -> None:
             self._restore_scroll_pending = False
-            if self._follow_scroll_pending:
+            if self._scroll_to_end_pending:
                 return
             scroll_y = self._restore_scroll_y
             self._restore_scroll_y = None
@@ -1794,7 +1754,7 @@ def run_agent_tui(
             if self._state.busy:
                 return
             self._cancel_requested.clear()
-            self._set_auto_follow(True, scroll=True)
+            self._schedule_conversation_scroll_to_end()
             self._bridge.begin_prompt(prompt, session_id=self._active_session_id)
             self._active_worker = self._run_prompt(prompt)
 

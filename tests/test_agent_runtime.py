@@ -221,6 +221,169 @@ class AgentRuntimeTests(unittest.TestCase):
             any(event.get('type') == 'continuation_request' for event in result.events)
         )
 
+    def test_agent_continues_when_stop_response_promises_more_work(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'I will inspect hello.txt first.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "hello.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': (
+                                'I have read hello.txt. Next, I will inspect '
+                                'details.txt before answering.'
+                            ),
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Inspecting details.txt now.',
+                            'tool_calls': [
+                                {
+                                    'id': 'call_2',
+                                    'type': 'function',
+                                    'function': {
+                                        'name': 'read_file',
+                                        'arguments': '{"path": "details.txt"}',
+                                    },
+                                }
+                            ],
+                        },
+                        'finish_reason': 'tool_calls',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Final analysis: hello.txt and details.txt are present.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        recorded_payloads: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
+            (workspace / 'details.txt').write_text('more detail\n', encoding='utf-8')
+            with patch(
+                'src.agent.agent_runtime.build_llm_client',
+                side_effect=make_recording_urlopen_side_effect(responses, recorded_payloads),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run('Analyze both files before answering.')
+
+        self.assertEqual(result.final_output, 'Final analysis: hello.txt and details.txt are present.')
+        self.assertEqual(result.tool_calls, 2)
+        continuation_events = [
+            event for event in result.events if event.get('type') == 'continuation_request'
+        ]
+        self.assertEqual(len(continuation_events), 1)
+        self.assertEqual(continuation_events[0].get('reason'), 'pending_work')
+        third_request_messages = recorded_payloads[2]['messages']
+        assert isinstance(third_request_messages, list)
+        self.assertTrue(
+            any(
+                isinstance(message, dict)
+                and 'Your previous response said more work remained' in str(message.get('content', ''))
+                for message in third_request_messages
+            )
+        )
+
+    def test_pending_work_continuation_is_limited_without_tool_progress(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Next, I will inspect the repository.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Now, I will run the repository checks.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Then, I will summarize the findings.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            with patch(
+                'src.agent.agent_runtime.build_llm_client',
+                side_effect=make_urlopen_side_effect(responses),
+            ):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(
+                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
+                        base_url='http://127.0.0.1:8000/v1',
+                    ),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace, max_turns=None),
+                )
+                result = agent.run('Inspect the repository.')
+
+        continuation_events = [
+            event for event in result.events if event.get('type') == 'continuation_request'
+        ]
+        self.assertEqual(len(continuation_events), 2)
+        self.assertEqual(result.turns, 3)
+        self.assertEqual(result.stop_reason, 'stop')
+
     def test_write_tool_is_blocked_without_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = AgentRuntimeConfig(cwd=Path(tmp_dir))
@@ -716,8 +879,8 @@ class AgentRuntimeTests(unittest.TestCase):
                         {
                             'delta': {
                                 'content': (
-                                    'I have read hello.txt. Next, I will analyze what could be '
-                                    'improved in the rest of the codebase.'
+                                    'I have read hello.txt. The rest of the codebase is '
+                                    'outside this test fixture.'
                                 )
                             },
                             'finish_reason': None,
@@ -1317,8 +1480,8 @@ class AgentRuntimeTests(unittest.TestCase):
                         'message': {
                             'role': 'assistant',
                             'content': (
-                                'I have read hello.txt. Next, I will analyze what could be '
-                                'improved in the rest of the codebase.'
+                                'I have read hello.txt. The rest of the codebase is '
+                                'outside this test fixture.'
                             ),
                         },
                         'finish_reason': 'completed',
@@ -1376,8 +1539,8 @@ class AgentRuntimeTests(unittest.TestCase):
                     yield StreamEvent(
                         type='content_delta',
                         delta=(
-                            'I have read hello.txt. Next, I will analyze what could be '
-                            'improved in the rest of the codebase.'
+                            'I have read hello.txt. The rest of the codebase is '
+                            'outside this test fixture.'
                         ),
                     )
                     yield StreamEvent(type='usage', usage=UsageStats(input_tokens=7, output_tokens=6))
@@ -1433,8 +1596,8 @@ class AgentRuntimeTests(unittest.TestCase):
                 if self.complete_calls == 2:
                     return AssistantTurn(
                         content=(
-                            'I have read hello.txt. Next, I will analyze what could be '
-                            'improved in the rest of the codebase.'
+                            'I have read hello.txt. The rest of the codebase is '
+                            'outside this test fixture.'
                         ),
                         finish_reason='completed',
                         usage=UsageStats(input_tokens=7, output_tokens=6),
