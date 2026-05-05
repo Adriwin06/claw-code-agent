@@ -29,7 +29,6 @@ from src.agent.context.prompting import (
     render_system_prompt,
 )
 from src.agent.runtime.model_turn import (
-    normalize_finish_reason,
     query_model_turn,
 )
 from src.agent.context.pressure import (
@@ -868,22 +867,9 @@ class LocalCodingAgent:
         turn: AssistantTurn,
     ) -> TurnLoopDirective:
         state.assistant_response_segments.append(turn.content)
-        truncated_response = self._is_truncated_response(turn)
-        if self._should_continue_response(
-            turn,
-            prompt=state.effective_prompt,
-            tool_calls_so_far=state.tool_calls,
-            current_response=''.join(state.assistant_response_segments),
-            continuation_count=len(state.assistant_response_segments),
-        ):
-            if not truncated_response and state.assistant_response_segments:
-                state.assistant_response_segments[-1] = (
-                    state.assistant_response_segments[-1].rstrip() + '\n\n'
-                )
+        if self._should_continue_response(turn):
             state.session.append_user(
-                self._build_continuation_prompt(
-                    truncated=truncated_response,
-                ),
+                self._build_truncation_continuation_prompt(),
                 metadata={
                     'kind': 'continuation_request',
                     'continuation_index': len(state.assistant_response_segments),
@@ -958,127 +944,17 @@ class LocalCodingAgent:
     def _should_continue_response(
         self,
         turn: AssistantTurn,
-        *,
-        prompt: str = '',
-        tool_calls_so_far: int = 0,
-        current_response: str = '',
-        continuation_count: int = 0,
     ) -> bool:
-        if self._is_truncated_response(turn):
-            return True
-        if (
-            normalize_finish_reason(
-                turn.finish_reason,
-                has_tool_calls=bool(turn.tool_calls),
-                content=turn.content,
-            )
-            != 'stop'
-        ):
-            return False
-        if tool_calls_so_far <= 0:
-            return False
-        latest_response = (turn.content or '').strip()
-        response_text = (current_response or latest_response).strip()
-        if self._looks_like_unfinished_working_response(latest_response):
-            return continuation_count <= 2
-        prompt_text = prompt.lower()
-        if not any(
-            keyword in prompt_text
-            for keyword in (
-                'analy',
-                'review',
-                'audit',
-                'architect',
-                'improv',
-                'investigat',
-                'debug',
-                'refactor',
-            )
-        ):
-            return False
-        if continuation_count != 1:
-            return False
-        if len(response_text) >= 900:
-            return False
-        lowered_response = response_text.lower()
-        if any(
-            marker in lowered_response
-            for marker in (
-                'summary of recommended action',
-                'next steps',
-                'recommendations',
-                'recommended action',
-                'here are',
-                'to improve',
-            )
-        ):
-            return False
-        if any(marker in response_text for marker in ('\n1.', '\n2.', '\n- ', '\n## ')):
-            return False
-        if response_text.endswith('?'):
-            return False
-        return True
-
-    def _looks_like_unfinished_working_response(self, response_text: str) -> bool:
-        lowered = response_text.lower()
-        tail = lowered[-900:]
-        explicit_markers = (
-            'incomplete response',
-            'i apologize for the incomplete',
-            'i will now',
-            'i am now',
-            'i am running',
-            "i'm running",
-            'i will proceed',
-            "i'll proceed",
-            'i will continue',
-            "i'll continue",
-            'i will rerun',
-            'i will re-run',
-            "i'll rerun",
-            "i'll re-run",
-            'rerunning the tool call',
-            're-running the tool call',
-            'next, i will',
-            'now, i will',
-            'after that, i will',
-            'then, i will',
-        )
-        if any(marker in tail for marker in explicit_markers):
-            return True
-        action_markers = (
-            'perform a web search',
-            'run a web search',
-            'test the web search',
-            'test the search',
-            'run the tool call',
-            'running the tool call',
-            'tool call again',
-            'call the tool',
-            'use the tool',
-            'inspect the file',
-            'read the file',
-            'list the files',
-            'evaluate ',
-        )
-        return any(marker in tail for marker in action_markers)
+        return self._is_truncated_response(turn)
 
     def _is_truncated_response(self, turn: AssistantTurn) -> bool:
         return turn.finish_reason in {'length', 'max_tokens'}
 
-    def _build_continuation_prompt(self, *, truncated: bool) -> str:
-        if truncated:
-            return (
-                '<system-reminder>\n'
-                'Your previous answer was truncated because the model stopped early. '
-                'Continue exactly where you left off. Do not repeat completed text.\n'
-                '</system-reminder>'
-            )
+    def _build_truncation_continuation_prompt(self) -> str:
         return (
             '<system-reminder>\n'
-            'Your previous answer appears to stop at an intermediate summary. '
-            'Continue working on the user\'s request until you either provide a complete answer '
-            'or determine that you need to use another tool. Do not stop after a brief partial analysis.\n'
+            'Your previous answer was truncated because the model stopped early. '
+            'Continue exactly where you left off. Do not repeat completed text.\n'
             '</system-reminder>'
         )
 

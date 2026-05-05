@@ -155,7 +155,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(len(result.transcript), 5)
         self.assertGreaterEqual(len(result.file_history), 0)
 
-    def test_agent_auto_continues_short_analysis_after_tool_use(self) -> None:
+    def test_agent_does_not_auto_continue_non_truncated_stop_after_tool_use(self) -> None:
         responses = [
             {
                 'choices': [
@@ -215,235 +215,11 @@ class AgentRuntimeTests(unittest.TestCase):
                 result = agent.run('Analyze the architecture and recommend improvements.')
 
         self.assertIn('Based on hello.txt, the structure is simple.', result.final_output)
-        self.assertIn('Improvements: add clearer interfaces', result.final_output)
+        self.assertNotIn('Improvements: add clearer interfaces', result.final_output)
         self.assertEqual(result.tool_calls, 1)
-
-    def test_agent_continues_long_unfinished_working_response_after_tool_use(self) -> None:
-        unfinished = (
-            'Codebase Analysis Summary\n\n'
-            + ('The architecture has several modules and runtime concerns. ' * 18)
-            + '\n\nI apologize for the incomplete response. I will now perform a web search '
-            'to test the functionality.'
+        self.assertFalse(
+            any(event.get('type') == 'continuation_request' for event in result.events)
         )
-        responses = [
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'I will inspect the file first.',
-                            'tool_calls': [
-                                {
-                                    'id': 'call_1',
-                                    'type': 'function',
-                                    'function': {
-                                        'name': 'read_file',
-                                        'arguments': '{"path": "hello.txt"}',
-                                    },
-                                }
-                            ],
-                        },
-                        'finish_reason': 'tool_calls',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': unfinished,
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'Final result after continuing the unfinished work.',
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-        ]
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            workspace = Path(tmp_dir)
-            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
-                agent = LocalCodingAgent(
-                    model_config=ModelConfig(
-                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
-                        base_url='http://127.0.0.1:8000/v1',
-                    ),
-                    runtime_config=AgentRuntimeConfig(cwd=workspace),
-                )
-                result = agent.run('Analyze the architecture and test search.')
-
-        self.assertIn('Codebase Analysis Summary', result.final_output)
-        self.assertIn('Final result after continuing', result.final_output)
-        self.assertEqual(result.tool_calls, 1)
-        continuation_messages = [
-            message for message in result.transcript
-            if message.get('metadata', {}).get('kind') == 'continuation_request'
-        ]
-        self.assertEqual(len(continuation_messages), 1)
-
-    def test_agent_allows_second_explicit_unfinished_continuation(self) -> None:
-        first_unfinished = (
-            'Codebase Analysis Summary\n\n'
-            + ('The architecture has several modules and runtime concerns. ' * 18)
-            + '\n\nI will now inspect the search behavior before finalizing.'
-        )
-        second_unfinished = (
-            'The search behavior still needs one more verification pass. '
-            'I will continue by summarizing the final result.'
-        )
-        responses = [
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'I will inspect the file first.',
-                            'tool_calls': [
-                                {
-                                    'id': 'call_1',
-                                    'type': 'function',
-                                    'function': {
-                                        'name': 'read_file',
-                                        'arguments': '{"path": "hello.txt"}',
-                                    },
-                                }
-                            ],
-                        },
-                        'finish_reason': 'tool_calls',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': first_unfinished,
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': second_unfinished,
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'Final result after the second continuation.',
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-        ]
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            workspace = Path(tmp_dir)
-            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
-                agent = LocalCodingAgent(
-                    model_config=ModelConfig(
-                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
-                        base_url='http://127.0.0.1:8000/v1',
-                    ),
-                    runtime_config=AgentRuntimeConfig(cwd=workspace),
-                )
-                result = agent.run('Analyze the architecture and test search.')
-
-        self.assertIn('Final result after the second continuation.', result.final_output)
-        continuation_messages = [
-            message for message in result.transcript
-            if message.get('metadata', {}).get('kind') == 'continuation_request'
-        ]
-        self.assertEqual(len(continuation_messages), 2)
-
-    def test_agent_continues_explicit_tool_retry_even_without_analysis_prompt_keywords(self) -> None:
-        responses = [
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'I will test the MCP tool first.',
-                            'tool_calls': [
-                                {
-                                    'id': 'call_1',
-                                    'type': 'function',
-                                    'function': {
-                                        'name': 'read_file',
-                                        'arguments': '{"path": "hello.txt"}',
-                                    },
-                                }
-                            ],
-                        },
-                        'finish_reason': 'tool_calls',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'I am running the tool call again to verify the fix.',
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'Retry completed with the updated parameters.',
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ]
-            },
-        ]
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            workspace = Path(tmp_dir)
-            (workspace / 'hello.txt').write_text('hello world\n', encoding='utf-8')
-            with patch('src.agent.agent_runtime.build_llm_client', side_effect=make_urlopen_side_effect(responses)):
-                agent = LocalCodingAgent(
-                    model_config=ModelConfig(
-                        model='Qwen/Qwen3-Coder-30B-A3B-Instruct',
-                        base_url='http://127.0.0.1:8000/v1',
-                    ),
-                    runtime_config=AgentRuntimeConfig(cwd=workspace, max_turns=None),
-                )
-                result = agent.run('Rerun it then, why did you stop?')
-
-        self.assertIn('I am running the tool call again', result.final_output)
-        self.assertIn('Retry completed with the updated parameters.', result.final_output)
-        continuation_messages = [
-            message for message in result.transcript
-            if message.get('metadata', {}).get('kind') == 'continuation_request'
-        ]
-        self.assertEqual(len(continuation_messages), 1)
 
     def test_write_tool_is_blocked_without_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -910,7 +686,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(result.final_output, 'Streaming works.')
         self.assertEqual(result.stop_reason, 'stop')
 
-    def test_agent_stream_continues_partial_response_when_finish_reason_is_omitted(self) -> None:
+    def test_agent_stream_treats_omitted_finish_reason_as_stop_after_tool_use(self) -> None:
         responses = [
             [
                 {
@@ -950,19 +726,6 @@ class AgentRuntimeTests(unittest.TestCase):
                     'usage': {'prompt_tokens': 9, 'completion_tokens': 8},
                 },
             ],
-            [
-                {
-                    'choices': [
-                        {
-                            'delta': {
-                                'content': 'The test workspace is minimal, so there is nothing else to improve.'
-                            },
-                            'finish_reason': None,
-                        }
-                    ],
-                    'usage': {'prompt_tokens': 6, 'completion_tokens': 6},
-                },
-            ],
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -983,8 +746,8 @@ class AgentRuntimeTests(unittest.TestCase):
                 )
                 result = agent.run('Analyze the codebase and tell me what could be improved.')
         self.assertIn('I have read hello.txt.', result.final_output)
-        self.assertIn('there is nothing else to improve.', result.final_output)
-        self.assertTrue(
+        self.assertNotIn('there is nothing else to improve.', result.final_output)
+        self.assertFalse(
             any(event.get('type') == 'continuation_request' for event in result.events)
         )
         self.assertEqual(result.tool_calls, 1)
@@ -1524,7 +1287,7 @@ class AgentRuntimeTests(unittest.TestCase):
             )
         )
 
-    def test_agent_continues_when_provider_uses_completed_finish_reason(self) -> None:
+    def test_agent_treats_provider_completed_finish_reason_as_stop(self) -> None:
         responses = [
             {
                 'choices': [
@@ -1563,18 +1326,6 @@ class AgentRuntimeTests(unittest.TestCase):
                 ],
                 'usage': {'prompt_tokens': 7, 'completion_tokens': 6},
             },
-            {
-                'choices': [
-                    {
-                        'message': {
-                            'role': 'assistant',
-                            'content': 'The test workspace is minimal, so there is nothing else to improve.',
-                        },
-                        'finish_reason': 'stop',
-                    }
-                ],
-                'usage': {'prompt_tokens': 5, 'completion_tokens': 4},
-            },
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -1592,13 +1343,13 @@ class AgentRuntimeTests(unittest.TestCase):
                 )
                 result = agent.run('Analyze the codebase and tell me what could be improved.')
         self.assertIn('I have read hello.txt.', result.final_output)
-        self.assertIn('there is nothing else to improve.', result.final_output)
-        self.assertTrue(
+        self.assertNotIn('there is nothing else to improve.', result.final_output)
+        self.assertFalse(
             any(event.get('type') == 'continuation_request' for event in result.events)
         )
         self.assertEqual(result.tool_calls, 1)
 
-    def test_agent_stream_continues_when_backend_returns_raw_completed_finish_reason(self) -> None:
+    def test_agent_stream_treats_raw_completed_finish_reason_as_stop(self) -> None:
         class RawCompletedStreamingClient(ScriptedLLMClient):
             def __init__(self) -> None:
                 super().__init__()
@@ -1632,14 +1383,6 @@ class AgentRuntimeTests(unittest.TestCase):
                     yield StreamEvent(type='usage', usage=UsageStats(input_tokens=7, output_tokens=6))
                     yield StreamEvent(type='message_stop', finish_reason='completed')
                     return
-                if self.stream_calls == 3:
-                    yield StreamEvent(
-                        type='content_delta',
-                        delta='The test workspace is minimal, so there is nothing else to improve.',
-                    )
-                    yield StreamEvent(type='usage', usage=UsageStats(input_tokens=5, output_tokens=4))
-                    yield StreamEvent(type='message_stop', finish_reason='stop')
-                    return
                 raise AssertionError('Unexpected extra streaming model call')
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1659,12 +1402,12 @@ class AgentRuntimeTests(unittest.TestCase):
                 )
                 result = agent.run('Analyze the codebase and tell me what could be improved.')
         self.assertIn('I have read hello.txt.', result.final_output)
-        self.assertIn('there is nothing else to improve.', result.final_output)
-        self.assertTrue(
+        self.assertNotIn('there is nothing else to improve.', result.final_output)
+        self.assertFalse(
             any(event.get('type') == 'continuation_request' for event in result.events)
         )
         self.assertEqual(result.tool_calls, 1)
-        self.assertEqual(client.stream_calls, 3)
+        self.assertEqual(client.stream_calls, 2)
 
     def test_agent_normalizes_raw_completed_finish_reason_from_completion_client(self) -> None:
         class RawCompletedClient(ScriptedLLMClient):
@@ -1697,12 +1440,7 @@ class AgentRuntimeTests(unittest.TestCase):
                         usage=UsageStats(input_tokens=7, output_tokens=6),
                     )
                 if self.complete_calls == 3:
-                    return AssistantTurn(
-                        content='The test workspace is minimal, so there is nothing else to improve.',
-                        finish_reason='stop',
-                        usage=UsageStats(input_tokens=5, output_tokens=4),
-                    )
-                raise AssertionError('Unexpected extra completion model call')
+                    raise AssertionError('Unexpected extra completion model call')
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)
@@ -1718,12 +1456,12 @@ class AgentRuntimeTests(unittest.TestCase):
                 )
                 result = agent.run('Analyze the codebase and tell me what could be improved.')
         self.assertIn('I have read hello.txt.', result.final_output)
-        self.assertIn('there is nothing else to improve.', result.final_output)
-        self.assertTrue(
+        self.assertNotIn('there is nothing else to improve.', result.final_output)
+        self.assertFalse(
             any(event.get('type') == 'continuation_request' for event in result.events)
         )
         self.assertEqual(result.tool_calls, 1)
-        self.assertEqual(client.complete_calls, 3)
+        self.assertEqual(client.complete_calls, 2)
 
     def test_agent_records_file_history_for_write_tool(self) -> None:
         responses = [
