@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Sequence
 
 from .formatting import _preview_value, sanitize_assistant_display_text
+
+
+_UI_PROMPT_CONTEXT_PATTERN = re.compile(
+    r'\n{0,2}<system-reminder>\nClaw UI prompt context:.*?</system-reminder>\s*',
+    re.DOTALL,
+)
 
 
 @dataclass
@@ -92,6 +99,10 @@ def _should_hide_session_message(payload: dict[str, object]) -> bool:
     return content.lstrip().startswith('<system-reminder>')
 
 
+def sanitize_user_prompt_display_text(content: str) -> str:
+    return _UI_PROMPT_CONTEXT_PATTERN.sub('', content).strip()
+
+
 def restore_conversation_turns(
     messages: Sequence[dict[str, object]],
 ) -> tuple[ConversationTurn, ...]:
@@ -110,10 +121,11 @@ def restore_conversation_turns(
             else None
         )
         if role == 'user':
+            display_content = sanitize_user_prompt_display_text(content)
             restored_index += 1
             current_turn = ConversationTurn(
                 turn_id=f'restored-{restored_index}',
-                user_prompt=content,
+                user_prompt=display_content or '(empty prompt)',
                 assistant_status='Restored',
                 phase_label='Restored',
                 restored=True,

@@ -9,6 +9,17 @@ from .conversation import (
     SidebarItem,
     build_conversation_history_items,
     restore_conversation_turns,
+    sanitize_user_prompt_display_text,
+)
+from .attachments import (
+    PromptAttachment,
+    build_display_prompt_with_attachments,
+    build_prompt_with_references,
+    copy_external_attachment,
+    parse_pasted_file_paths,
+    render_attachment_summary,
+    render_prompt_reference_context,
+    workspace_reference_for_pasted_path,
 )
 from .formatting import _friendly_stop_reason, _preview_multiline, _preview_value
 from .ids import (
@@ -24,6 +35,15 @@ from .slash_commands import (
     filter_slash_command_suggestions,
     render_slash_command_suggestion_detail,
 )
+from .workspace_files import (
+    WorkspacePathReference,
+    WorkspacePathSuggestion,
+    build_workspace_path_suggestions,
+    extract_workspace_path_references,
+    extract_workspace_reference_query,
+    filter_workspace_path_suggestions,
+    render_workspace_path_suggestion_detail,
+)
 
 __all__ = [
     'ActivityItem',
@@ -33,16 +53,32 @@ __all__ = [
     'ConversationTurn',
     'SidebarItem',
     'SlashCommandSuggestion',
+    'WorkspacePathReference',
+    'WorkspacePathSuggestion',
+    'PromptAttachment',
     'AgentTuiState',
     'build_conversation_history_items',
+    'build_display_prompt_with_attachments',
+    'build_prompt_with_references',
     'build_slash_command_suggestions',
+    'build_workspace_path_suggestions',
     'build_working_section_id',
     'build_working_section_instance_id',
+    'copy_external_attachment',
     'extract_slash_command_query',
+    'extract_workspace_path_references',
+    'extract_workspace_reference_query',
     'filter_slash_command_suggestions',
+    'filter_workspace_path_suggestions',
+    'parse_pasted_file_paths',
+    'render_attachment_summary',
+    'render_prompt_reference_context',
     'render_slash_command_suggestion_detail',
+    'render_workspace_path_suggestion_detail',
     'restore_conversation_turns',
+    'sanitize_user_prompt_display_text',
     'should_route_key_to_prompt',
+    'workspace_reference_for_pasted_path',
     'hydrate_state_from_stored_session',
     '_friendly_stop_reason',
     '_preview_multiline',

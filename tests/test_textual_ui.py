@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,17 +18,28 @@ from src.textual_ui import (
     ConversationEntry,
     ConversationThread,
     ConversationTurn,
+    PromptAttachment,
+    build_display_prompt_with_attachments,
+    build_prompt_with_references,
+    copy_external_attachment,
     build_working_section_id,
     build_working_section_instance_id,
     build_slash_command_suggestions,
+    build_workspace_path_suggestions,
     build_conversation_history_items,
     conversation_turns_render_signature,
     extract_slash_command_query,
+    extract_workspace_path_references,
+    extract_workspace_reference_query,
     filter_slash_command_suggestions,
+    filter_workspace_path_suggestions,
+    parse_pasted_file_paths,
     render_details_panel,
     render_working_entries_markdown,
     render_slash_command_suggestion_detail,
+    render_workspace_path_suggestion_detail,
     restore_conversation_turns,
+    sanitize_user_prompt_display_text,
     should_route_key_to_prompt,
 )
 from src.ui.conversation_store import ConversationHistoryStore, workspace_history_key
@@ -132,6 +145,152 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('Show estimated session context usage', rendered)
         self.assertIn('/usage', rendered)
         self.assertIn('Tab: insert command', rendered)
+
+    def test_workspace_reference_query_detects_active_at_token(self) -> None:
+        query = extract_workspace_reference_query('open @src/agen', cursor_position=14)
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertEqual(query.query, 'src/agen')
+        self.assertEqual(query.start_index, 5)
+        self.assertEqual(query.end_index, 14)
+        self.assertIsNone(extract_workspace_reference_query('dev@example.com'))
+
+    def test_workspace_path_suggestions_include_files_and_folders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'src' / 'agent').mkdir(parents=True)
+            (workspace / 'src' / 'agent' / 'runtime.py').write_text('print(1)\n', encoding='utf-8')
+
+            suggestions = build_workspace_path_suggestions(workspace)
+            matches = filter_workspace_path_suggestions('src/ag', suggestions)
+            rendered = render_workspace_path_suggestion_detail(matches[0])
+
+        self.assertTrue(any(item.path == 'src/agent' and item.kind == 'directory' for item in suggestions))
+        self.assertTrue(any(item.path == 'src/agent/runtime.py' for item in suggestions))
+        self.assertEqual(matches[0].path, 'src/agent')
+        self.assertIn('@src/agent/', rendered)
+        self.assertIn('Tab/Enter: insert path reference', rendered)
+
+    @unittest.skipIf(shutil.which('git') is None, 'git is required for ignore tests')
+    def test_workspace_path_suggestions_hide_gitignored_paths_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            subprocess.run(
+                ['git', 'init'],
+                cwd=workspace,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            (workspace / '.gitignore').write_text(
+                'ignored.txt\nignored-dir/\n.venv-local/\n',
+                encoding='utf-8',
+            )
+            (workspace / 'kept.txt').write_text('keep\n', encoding='utf-8')
+            (workspace / 'ignored.txt').write_text('ignore\n', encoding='utf-8')
+            (workspace / 'ignored-dir').mkdir()
+            (workspace / 'ignored-dir' / 'secret.txt').write_text('secret\n', encoding='utf-8')
+            (workspace / '.venv-local').mkdir()
+            (workspace / '.venv-local' / 'hidden.py').write_text('hidden\n', encoding='utf-8')
+
+            hidden = build_workspace_path_suggestions(workspace)
+            visible = build_workspace_path_suggestions(workspace, hide_gitignored=False)
+
+        hidden_paths = {item.path for item in hidden}
+        visible_paths = {item.path for item in visible}
+        self.assertIn('kept.txt', hidden_paths)
+        self.assertNotIn('ignored.txt', hidden_paths)
+        self.assertNotIn('ignored-dir', hidden_paths)
+        self.assertNotIn('ignored-dir/secret.txt', hidden_paths)
+        self.assertNotIn('.venv-local/hidden.py', hidden_paths)
+        self.assertIn('ignored.txt', visible_paths)
+        self.assertIn('ignored-dir/secret.txt', visible_paths)
+        self.assertIn('.venv-local/hidden.py', visible_paths)
+
+    def test_extract_workspace_path_references_resolves_quoted_and_plain_mentions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'src').mkdir()
+            (workspace / 'src' / 'agent.py').write_text('print(1)\n', encoding='utf-8')
+            (workspace / 'docs space').mkdir()
+
+            references = extract_workspace_path_references(
+                'Use @src/agent.py and @"docs space"',
+                workspace,
+            )
+
+        self.assertEqual([reference.path for reference in references], ['src/agent.py', 'docs space'])
+        self.assertEqual(references[0].kind, 'file')
+        self.assertEqual(references[1].kind, 'directory')
+
+    def test_prompt_context_preserves_display_prompt_for_restored_history(self) -> None:
+        attachment = PromptAttachment(
+            original_path='C:/Users/Ada/Pictures/shot.png',
+            workspace_path='.port_sessions/attachments/prompt-1/shot.png',
+            name='shot.png',
+            kind='image',
+            size_bytes=2048,
+            mime_type='image/png',
+        )
+        prompt = build_prompt_with_references(
+            'Describe this @src/app.py',
+            attachments=(attachment,),
+        )
+        display_prompt = build_display_prompt_with_attachments(
+            'Describe this @src/app.py',
+            (attachment,),
+        )
+
+        self.assertIn('Claw UI prompt context:', prompt)
+        self.assertIn('copied_to=.port_sessions/attachments/prompt-1/shot.png', prompt)
+        self.assertIn('Attached files:', display_prompt)
+        self.assertIn('shot.png (image, 2.0 KB)', display_prompt)
+        self.assertEqual(sanitize_user_prompt_display_text(prompt), 'Describe this @src/app.py')
+        turns = restore_conversation_turns(
+            (
+                {'role': 'user', 'content': prompt},
+                {'role': 'assistant', 'content': 'It is a screenshot.'},
+            )
+        )
+        self.assertEqual(turns[0].user_prompt, 'Describe this @src/app.py')
+
+    def test_parse_pasted_file_paths_accepts_file_uri_and_quoted_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            image = workspace / 'shot 1.png'
+            document = workspace / 'notes.txt'
+            image.write_bytes(b'png')
+            document.write_text('notes', encoding='utf-8')
+
+            paths = parse_pasted_file_paths(
+                f'"{image}"\nfile:///{document.as_posix()}'
+            )
+
+        self.assertEqual({path.name for path in paths}, {'shot 1.png', 'notes.txt'})
+
+    def test_copy_external_attachment_copies_file_into_workspace_session_area(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            workspace = root / 'workspace'
+            external = root / 'outside' / 'shot.png'
+            workspace.mkdir()
+            external.parent.mkdir()
+            external.write_bytes(b'png')
+
+            attachment = copy_external_attachment(
+                external,
+                workspace,
+                batch_id='prompt 1',
+            )
+
+            self.assertIsNotNone(attachment)
+            assert attachment is not None
+            copied = workspace / attachment.workspace_path
+            self.assertTrue(copied.exists())
+            self.assertEqual(copied.read_bytes(), b'png')
+            self.assertEqual(attachment.kind, 'image')
+            self.assertIn('.port_sessions/attachments/prompt_1/shot.png', attachment.workspace_path)
 
     def test_state_from_agent_renders_core_runtime_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -981,6 +1140,112 @@ class TextualUiTests(unittest.TestCase):
                 self.assertFalse(prompt.disabled)
                 await pilot.press('a', 'b')
                 self.assertEqual(prompt.value, 'ab')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_prompt_supports_shift_enter_multiline_submit_with_enter(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+        submitted: list[tuple[str, str | None]] = []
+
+        def capture_submit(prompt: str, *, runtime_prompt: str | None = None) -> None:
+            submitted.append((prompt, runtime_prompt))
+
+        app._submit_prompt = capture_submit  # type: ignore[method-assign]
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                prompt = app.query_one('#prompt')
+                await pilot.click('#prompt')
+                await pilot.press('a', 'shift+enter', 'b')
+                self.assertEqual(prompt.value, 'a\nb')
+                self.assertEqual(submitted, [])
+
+                await pilot.press('enter')
+
+                self.assertEqual(submitted, [('a\nb', 'a\nb')])
+                self.assertEqual(prompt.value, '')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_prompt_submits_external_path_as_attachment(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        try:
+            root = Path(tmp.name)
+            workspace = root / 'workspace'
+            external = root / 'external' / 'shot.png'
+            workspace.mkdir()
+            external.parent.mkdir()
+            external.write_bytes(b'png')
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='demo-model'),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            run_agent_tui(
+                agent,
+                history_store=ConversationHistoryStore(root / '.claw-code-test'),
+            )
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+        submitted: list[tuple[str, str | None]] = []
+
+        def capture_submit(prompt: str, *, runtime_prompt: str | None = None) -> None:
+            submitted.append((prompt, runtime_prompt))
+
+        app._submit_prompt = capture_submit  # type: ignore[method-assign]
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                prompt = app.query_one('#prompt')
+                prompt.value = str(external)
+
+                await pilot.press('enter')
+
+                self.assertEqual(len(submitted), 1)
+                display_prompt, runtime_prompt = submitted[0]
+                self.assertIn('Attached files:', display_prompt)
+                self.assertIn('shot.png (image, 3 B)', display_prompt)
+                self.assertIsNotNone(runtime_prompt)
+                assert runtime_prompt is not None
+                self.assertIn('Claw UI prompt context:', runtime_prompt)
+                self.assertIn('copied_to=.port_sessions/attachments/', runtime_prompt)
 
         asyncio.run(exercise())
 

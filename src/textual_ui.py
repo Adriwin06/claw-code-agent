@@ -9,6 +9,15 @@ from src.agent.commands.slash import find_slash_command
 from src.agent.runtime.agent import LocalCodingAgent
 from src.agent.models.types import AgentRunResult
 from src.session.session_store import StoredAgentSession, load_agent_session
+from .ui.attachments import (
+    PromptAttachment,
+    build_display_prompt_with_attachments,
+    build_prompt_with_references,
+    copy_external_attachment,
+    parse_pasted_file_paths,
+    render_attachment_summary,
+    workspace_reference_for_pasted_path,
+)
 from .ui.conversation import (
     ActivityItem,
     ConversationEntry,
@@ -18,6 +27,7 @@ from .ui.conversation import (
     SidebarItem,
     build_conversation_history_items,
     restore_conversation_turns,
+    sanitize_user_prompt_display_text,
 )
 from .ui.conversation_store import (
     ConversationHistoryStore,
@@ -39,12 +49,22 @@ from .ui.slash_commands import (
     filter_slash_command_suggestions,
     render_slash_command_suggestion_detail,
 )
+from .ui.workspace_files import (
+    WorkspacePathSuggestion,
+    build_workspace_path_suggestions,
+    extract_workspace_path_references,
+    extract_workspace_reference_query,
+    filter_workspace_path_suggestions,
+    render_workspace_path_suggestion_detail,
+)
 
 
 def render_details_panel(
     state: AgentTuiState,
     turn: ConversationTurn | None,
     activity_items: Sequence[ActivityItem],
+    *,
+    hide_gitignored_paths: bool = True,
 ) -> str:
     max_turns_label = 'unlimited' if state.max_turns is None else str(state.max_turns)
     workspace_path = Path(state.workspace)
@@ -118,6 +138,9 @@ def render_details_panel(
             'Ctrl+N: new conversation',
             'Ctrl+D: delete conversation',
             '/new /prev /next /retry /reuse /delete',
+            '@path: reference workspace files or folders',
+            f'Ctrl+G: {"show" if hide_gitignored_paths else "hide"} gitignored @ files',
+            'Paste/drop file paths: attach external files',
             'Ctrl+C: stop current run',
             'PgUp/PgDn: scroll conversation',
         ]
@@ -382,10 +405,10 @@ def run_agent_tui(
             Collapsible,
             Footer,
             Header,
-            Input,
             Markdown as TextualMarkdown,
             OptionList,
             Static,
+            TextArea,
         )
         from textual.widgets.option_list import Option
     except ImportError as exc:  # pragma: no cover - exercised at runtime
@@ -702,6 +725,59 @@ def run_agent_tui(
                     collapsed_sections=self._collapsed_sections,
                 )
 
+    class PromptInput(TextArea):
+        def __init__(self, *args, placeholder: str = '', **kwargs) -> None:
+            _ = placeholder
+            super().__init__(*args, soft_wrap=True, show_line_numbers=False, **kwargs)
+
+        @property
+        def value(self) -> str:
+            return self.text
+
+        @value.setter
+        def value(self, text: str) -> None:
+            self.load_text(text)
+
+        @property
+        def cursor_position(self) -> int:
+            row, column = self.cursor_location
+            lines = self.text.split('\n')
+            return sum(len(line) + 1 for line in lines[:row]) + column
+
+        @cursor_position.setter
+        def cursor_position(self, offset: int) -> None:
+            self.move_cursor(self._location_from_offset(offset))
+
+        def insert_text_at_cursor(self, text: str) -> None:
+            result = self.insert(text, maintain_selection_offset=False)
+            self.move_cursor(result.end_location)
+
+        async def _on_key(self, event: events.Key) -> None:
+            handler = getattr(self.app, '_handle_prompt_editor_key', None)
+            if callable(handler) and handler(event):
+                event.stop()
+                event.prevent_default()
+                return
+            await super()._on_key(event)
+
+        async def _on_paste(self, event: events.Paste) -> None:
+            handler = getattr(self.app, '_handle_prompt_paste', None)
+            if callable(handler) and handler(event.text):
+                event.stop()
+                event.prevent_default()
+                return
+            await super()._on_paste(event)
+
+        def _location_from_offset(self, offset: int) -> tuple[int, int]:
+            remaining = max(0, min(offset, len(self.text)))
+            lines = self.text.split('\n')
+            for row, line in enumerate(lines):
+                line_length = len(line)
+                if remaining <= line_length:
+                    return row, remaining
+                remaining -= line_length + 1
+            return len(lines) - 1, len(lines[-1]) if lines else 0
+
     class AgentTuiApp(App[None]):
         TITLE = 'Claw Code Agent'
         CSS = """
@@ -879,6 +955,26 @@ def run_agent_tui(
             background: #111923;
         }
 
+        #attachment-shelf {
+            height: auto;
+            margin: 0 1;
+            border: round #d29922;
+            background: #111923;
+            padding: 0 1;
+        }
+
+        #attachment-summary {
+            width: 1fr;
+            height: auto;
+            color: #e6edf3;
+        }
+
+        #clear-attachments-button {
+            width: 9;
+            min-width: 8;
+            margin-left: 1;
+        }
+
         #prompt-row {
             height: auto;
             margin: 0 1 1 1;
@@ -886,6 +982,8 @@ def run_agent_tui(
 
         #prompt {
             width: 1fr;
+            height: 5;
+            min-height: 3;
             margin: 0;
         }
 
@@ -893,6 +991,7 @@ def run_agent_tui(
             width: 10;
             min-width: 8;
             margin-left: 1;
+            height: 3;
         }
         """
         BINDINGS = [
@@ -907,6 +1006,7 @@ def run_agent_tui(
             ('ctrl+r', 'refresh_panels', 'Refresh'),
             ('ctrl+c', 'stop_generation', 'Stop'),
             ('ctrl+h', 'focus_history', 'History'),
+            ('ctrl+g', 'toggle_gitignored_workspace_paths', 'Ignored'),
         ]
 
         def __init__(
@@ -926,6 +1026,13 @@ def run_agent_tui(
             self._state = AgentTuiState.from_agent(runtime_agent)
             self._command_suggestions = build_slash_command_suggestions()
             self._visible_command_suggestions: list[SlashCommandSuggestion] = []
+            self._hide_gitignored_workspace_paths = True
+            self._workspace_path_suggestions = self._build_workspace_path_suggestions()
+            self._visible_workspace_path_suggestions: list[WorkspacePathSuggestion] = []
+            self._active_workspace_reference_query = None
+            self._picker_mode: str | None = None
+            self._prompt_attachments: tuple[PromptAttachment, ...] = ()
+            self._attachment_batch_id = ''
             snapshot = self._history_store.load_workspace(self._workspace)
             self._conversations = list(snapshot.conversations)
             if not self._conversations:
@@ -947,6 +1054,7 @@ def run_agent_tui(
             self._activity_items: tuple[ActivityItem, ...] = ()
             self._selected_turn_id: str | None = None
             self._scroll_to_end_pending = False
+            self._scroll_to_end_token = 0
             self._restore_scroll_pending = False
             self._restore_scroll_y: float | None = None
             self._cancel_requested = Event()
@@ -987,9 +1095,12 @@ def run_agent_tui(
             with Horizontal(id='command-picker'):
                 yield OptionList(id='command-options')
                 yield Static(id='command-description')
+            with Horizontal(id='attachment-shelf'):
+                yield Static(id='attachment-summary')
+                yield Button('Clear', id='clear-attachments-button')
             with Horizontal(id='prompt-row'):
-                yield Input(
-                    placeholder='Type a task, /retry, /reuse, /new, /delete, or another slash command',
+                yield PromptInput(
+                    placeholder='Type a task, / command, @ workspace path, or paste/drop file paths',
                     id='prompt',
                 )
                 yield Button('Stop', id='stop-run-button')
@@ -998,6 +1109,7 @@ def run_agent_tui(
         def on_mount(self) -> None:
             self.set_interval(0.25, self._tick_spinner)
             self._set_command_picker_visible(False)
+            self._refresh_attachment_shelf()
             if self._restored_session is not None:
                 restored_turns = restore_conversation_turns(self._restored_session.messages)
                 self._bridge.restore_history(restored_turns)
@@ -1016,43 +1128,60 @@ def run_agent_tui(
             if self._first_prompt:
                 self._submit_prompt(self._first_prompt)
 
-        def on_input_changed(self, event: Input.Changed) -> None:
-            if event.input.id != 'prompt':
+        def on_text_area_changed(self, event: TextArea.Changed) -> None:
+            if event.text_area.id != 'prompt':
                 return
-            self._refresh_command_picker(event.value)
+            self._refresh_command_picker(
+                event.text_area.text,
+                cursor_position=getattr(event.text_area, 'cursor_position', None),
+            )
 
-        def on_input_submitted(self, event: Input.Submitted) -> None:
-            prompt = event.value.strip()
-            self.query_one('#prompt', Input).value = ''
+        def _submit_prompt_from_editor(self) -> None:
+            prompt_editor = self.query_one('#prompt', PromptInput)
+            prompt = prompt_editor.value.strip()
+            prompt_editor.value = ''
             self._refresh_command_picker('')
-            if not prompt:
+            path_prompt = self._prompt_text_as_only_paths(prompt)
+            if path_prompt:
+                workspace_mentions, attachments = self._attachments_from_paths(path_prompt)
+                if workspace_mentions or attachments:
+                    self._add_prompt_attachments(attachments)
+                    prompt = ' '.join(workspace_mentions) or ''
+            if not prompt and not self._prompt_attachments:
                 return
-            if prompt in {'/exit', '/quit'}:
+            if prompt in {'/exit', '/quit'} and not self._prompt_attachments:
                 self.exit()
                 return
             lowered_prompt = prompt.lower()
-            if lowered_prompt in {'/new', '/new-chat', '/new-conversation'}:
+            if lowered_prompt in {'/new', '/new-chat', '/new-conversation'} and not self._prompt_attachments:
                 self.action_new_conversation()
                 return
-            if lowered_prompt in {'/back', '/prev', '/previous'}:
+            if lowered_prompt in {'/back', '/prev', '/previous'} and not self._prompt_attachments:
                 self.action_previous_conversation()
                 return
-            if lowered_prompt in {'/next', '/forward'}:
+            if lowered_prompt in {'/next', '/forward'} and not self._prompt_attachments:
                 self.action_next_conversation()
                 return
-            if lowered_prompt in {'/retry', '/rerun'}:
+            if lowered_prompt in {'/retry', '/rerun'} and not self._prompt_attachments:
                 self.action_retry_selected_turn()
                 return
-            if lowered_prompt in {'/reuse', '/edit-selected'}:
+            if lowered_prompt in {'/reuse', '/edit-selected'} and not self._prompt_attachments:
                 self.action_reuse_selected_prompt()
                 return
-            if lowered_prompt in {'/delete', '/delete-conversation'}:
+            if lowered_prompt in {'/delete', '/delete-conversation'} and not self._prompt_attachments:
                 self.action_delete_conversation()
                 return
-            self._submit_prompt(prompt)
+            display_prompt = prompt or 'Please inspect the attached file(s).'
+            runtime_prompt = self._runtime_prompt_from_display_prompt(display_prompt)
+            display_prompt = build_display_prompt_with_attachments(
+                display_prompt,
+                self._prompt_attachments,
+            )
+            self._clear_prompt_attachments()
+            self._submit_prompt(display_prompt, runtime_prompt=runtime_prompt)
 
         def on_key(self, event: events.Key) -> None:
-            prompt = self.query_one('#prompt', Input)
+            prompt = self.query_one('#prompt', PromptInput)
             if self._handle_conversation_scroll_key(event, prompt):
                 return
             if self._route_key_to_prompt(event, prompt):
@@ -1084,6 +1213,56 @@ def run_agent_tui(
                 event.prevent_default()
                 self._apply_highlighted_command()
 
+        def _handle_prompt_editor_key(self, event: events.Key) -> bool:
+            prompt = self.query_one('#prompt', PromptInput)
+            if event.key == 'shift+enter':
+                prompt.insert_text_at_cursor('\n')
+                self._refresh_command_picker(
+                    prompt.value,
+                    cursor_position=prompt.cursor_position,
+                )
+                return True
+            if self._command_picker_visible and event.key == 'down':
+                self._move_command_selection(1)
+                return True
+            if self._command_picker_visible and event.key == 'up':
+                self._move_command_selection(-1)
+                return True
+            if self._command_picker_visible and event.key == 'tab':
+                self._apply_highlighted_command()
+                return True
+            if self._command_picker_visible and event.key == 'escape':
+                self._set_command_picker_visible(False)
+                return True
+            if event.key == 'enter':
+                if self._command_picker_visible and self._should_accept_completion_on_enter(
+                    prompt.value
+                ):
+                    self._apply_highlighted_command()
+                    return True
+                self._submit_prompt_from_editor()
+                return True
+            return False
+
+        def on_paste(self, event: events.Paste) -> None:
+            prompt = self.query_one('#prompt', PromptInput)
+            if self.focused is prompt:
+                return
+            if self._handle_prompt_paste(event.text):
+                event.stop()
+                event.prevent_default()
+                return
+            if self._state.busy:
+                return
+            prompt.focus()
+            prompt.insert_text_at_cursor(event.text)
+            self._refresh_command_picker(
+                prompt.value,
+                cursor_position=prompt.cursor_position,
+            )
+            event.stop()
+            event.prevent_default()
+
         def on_mouse_scroll_up(self, event) -> None:
             if self._event_targets_conversation(event):
                 self._cancel_pending_scroll_to_end()
@@ -1092,7 +1271,7 @@ def run_agent_tui(
             if self._event_targets_conversation(event):
                 self._cancel_pending_scroll_to_end()
 
-        def _handle_conversation_scroll_key(self, event: events.Key, prompt: Input) -> bool:
+        def _handle_conversation_scroll_key(self, event: events.Key, prompt: PromptInput) -> bool:
             key = event.key
             if key not in {'pageup', 'pagedown', 'home', 'end'}:
                 return False
@@ -1116,7 +1295,7 @@ def run_agent_tui(
             self._scroll_conversation_to_current_end()
             return True
 
-        def _route_key_to_prompt(self, event: events.Key, prompt: Input) -> bool:
+        def _route_key_to_prompt(self, event: events.Key, prompt: PromptInput) -> bool:
             if not should_route_key_to_prompt(
                 character=getattr(event, 'character', None),
                 prompt_focused=self.focused is prompt,
@@ -1125,7 +1304,8 @@ def run_agent_tui(
                 return False
             prompt.focus()
             prompt.value = f'{prompt.value}{event.character}'
-            self._refresh_command_picker(prompt.value)
+            prompt.cursor_position = len(prompt.value)
+            self._refresh_command_picker(prompt.value, cursor_position=prompt.cursor_position)
             event.stop()
             event.prevent_default()
             return True
@@ -1135,6 +1315,13 @@ def run_agent_tui(
             event: OptionList.OptionHighlighted,
         ) -> None:
             if event.option_list.id == 'command-options':
+                if self._picker_mode == 'workspace':
+                    path_suggestion = self._workspace_suggestion_for_option_id(event.option_id)
+                    if path_suggestion is not None:
+                        self.query_one('#command-description', Static).update(
+                            render_workspace_path_suggestion_detail(path_suggestion)
+                        )
+                    return
                 suggestion = self._suggestion_for_option_id(event.option_id)
                 if suggestion is not None:
                     self.query_one('#command-description', Static).update(
@@ -1147,7 +1334,10 @@ def run_agent_tui(
             event: OptionList.OptionSelected,
         ) -> None:
             if event.option_list.id == 'command-options':
-                self._apply_command_suggestion(event.option_id)
+                if self._picker_mode == 'workspace':
+                    self._apply_workspace_path_suggestion(event.option_id)
+                else:
+                    self._apply_command_suggestion(event.option_id)
                 event.stop()
                 return
             if event.option_list.id == 'history-list':
@@ -1186,9 +1376,13 @@ def run_agent_tui(
                 self.action_stop_generation()
                 event.stop()
                 return
+            if event.button.id == 'clear-attachments-button':
+                self._clear_prompt_attachments()
+                event.stop()
+                return
 
         def action_focus_prompt(self) -> None:
-            self.query_one('#prompt', Input).focus()
+            self.query_one('#prompt', PromptInput).focus()
 
         def action_new_conversation(self) -> None:
             if self._state.busy:
@@ -1212,7 +1406,20 @@ def run_agent_tui(
             self._switch_conversation_by_offset(1)
 
         def action_refresh_panels(self) -> None:
+            self._workspace_path_suggestions = self._build_workspace_path_suggestions()
             self._refresh_all_panels()
+
+        def action_toggle_gitignored_workspace_paths(self) -> None:
+            if self._state.busy:
+                return
+            self._hide_gitignored_workspace_paths = not self._hide_gitignored_workspace_paths
+            self._workspace_path_suggestions = self._build_workspace_path_suggestions()
+            prompt = self.query_one('#prompt', PromptInput)
+            self._refresh_command_picker(
+                prompt.value,
+                cursor_position=prompt.cursor_position,
+            )
+            self._refresh_details_panel()
 
         def action_stop_generation(self) -> None:
             if not self._state.busy:
@@ -1232,9 +1439,10 @@ def run_agent_tui(
             turn = self._selected_turn()
             if turn is None:
                 return
-            prompt = self.query_one('#prompt', Input)
+            prompt = self.query_one('#prompt', PromptInput)
             prompt.value = turn.user_prompt
-            self._refresh_command_picker(prompt.value)
+            prompt.cursor_position = len(prompt.value)
+            self._refresh_command_picker(prompt.value, cursor_position=prompt.cursor_position)
             prompt.focus()
 
         def action_retry_selected_turn(self) -> None:
@@ -1298,6 +1506,103 @@ def run_agent_tui(
 
         def _set_command_picker_visible(self, visible: bool) -> None:
             self.query_one('#command-picker', Horizontal).display = visible
+
+        def _build_workspace_path_suggestions(self) -> tuple[WorkspacePathSuggestion, ...]:
+            return build_workspace_path_suggestions(
+                self._workspace,
+                hide_gitignored=self._hide_gitignored_workspace_paths,
+            )
+
+        def _refresh_attachment_shelf(self) -> None:
+            shelf = self.query_one('#attachment-shelf', Horizontal)
+            summary = self.query_one('#attachment-summary', Static)
+            clear_button = self.query_one('#clear-attachments-button', Button)
+            shelf.display = bool(self._prompt_attachments)
+            summary.update(render_attachment_summary(self._prompt_attachments))
+            clear_button.disabled = not self._prompt_attachments or self._state.busy
+
+        def _clear_prompt_attachments(self) -> None:
+            self._prompt_attachments = ()
+            self._attachment_batch_id = ''
+            self._refresh_attachment_shelf()
+
+        def _add_prompt_attachments(self, attachments: Sequence[PromptAttachment]) -> None:
+            if not attachments:
+                return
+            existing_paths = {attachment.workspace_path for attachment in self._prompt_attachments}
+            merged = list(self._prompt_attachments)
+            for attachment in attachments:
+                if attachment.workspace_path in existing_paths:
+                    continue
+                existing_paths.add(attachment.workspace_path)
+                merged.append(attachment)
+            self._prompt_attachments = tuple(merged)
+            self._refresh_attachment_shelf()
+
+        def _handle_prompt_paste(self, text: str) -> bool:
+            if self._state.busy:
+                return False
+            paths = parse_pasted_file_paths(text)
+            if not paths:
+                return False
+            prompt = self.query_one('#prompt', PromptInput)
+            workspace_mentions, attachments = self._attachments_from_paths(paths)
+            if workspace_mentions:
+                insertion = ' '.join(workspace_mentions) + ' '
+                prompt.insert_text_at_cursor(insertion)
+                self._refresh_command_picker(
+                    prompt.value,
+                    cursor_position=getattr(prompt, 'cursor_position', None),
+                )
+            self._add_prompt_attachments(attachments)
+            return bool(workspace_mentions or attachments)
+
+        def _attachments_from_paths(
+            self,
+            paths: Sequence[Path],
+        ) -> tuple[list[str], list[PromptAttachment]]:
+            workspace_mentions: list[str] = []
+            attachments: list[PromptAttachment] = []
+            if not self._attachment_batch_id:
+                self._attachment_batch_id = f'prompt-{len(self._conversation_turns) + 1}'
+            for path in paths:
+                workspace_reference = workspace_reference_for_pasted_path(path, self._workspace)
+                if workspace_reference is not None:
+                    if any(character.isspace() for character in workspace_reference):
+                        workspace_mentions.append(f'@"{workspace_reference}"')
+                    else:
+                        workspace_mentions.append(f'@{workspace_reference}')
+                    continue
+                try:
+                    attachment = copy_external_attachment(
+                        path,
+                        self._workspace,
+                        batch_id=self._attachment_batch_id,
+                    )
+                except OSError:
+                    attachment = None
+                if attachment is not None:
+                    attachments.append(attachment)
+            return workspace_mentions, attachments
+
+        def _prompt_text_as_only_paths(self, text: str) -> tuple[Path, ...]:
+            paths = parse_pasted_file_paths(text)
+            if not paths:
+                return ()
+            lines = [line for line in text.splitlines() if line.strip()]
+            if len(lines) > 1 and len(paths) != len(lines):
+                return ()
+            return paths
+
+        def _runtime_prompt_from_display_prompt(self, prompt: str) -> str:
+            return build_prompt_with_references(
+                prompt,
+                attachments=self._prompt_attachments,
+                workspace_references=extract_workspace_path_references(
+                    prompt,
+                    self._workspace,
+                ),
+            )
 
         def _make_bridge(self, state: AgentTuiState) -> AgentTuiEventBridge:
             return AgentTuiEventBridge(
@@ -1460,12 +1765,14 @@ def run_agent_tui(
             workspace_name = Path(state.workspace).name or state.workspace
             self.sub_title = f'{workspace_name} | {state.status}'
             self._active_conversation().session_id = state.session_id
-            prompt = self.query_one('#prompt', Input)
+            prompt = self.query_one('#prompt', PromptInput)
             prompt.disabled = state.busy
             if not state.busy:
+                self._workspace_path_suggestions = self._build_workspace_path_suggestions()
                 prompt.focus()
             else:
                 self._set_command_picker_visible(False)
+            self._refresh_attachment_shelf()
             self._refresh_details_panel()
             self._refresh_conversation_view()
             if not state.busy:
@@ -1494,39 +1801,83 @@ def run_agent_tui(
             self._activity_items = items
             self._refresh_details_panel()
 
-        def _refresh_command_picker(self, value: str) -> None:
-            suggestions = filter_slash_command_suggestions(
-                value,
-                suggestions=self._command_suggestions,
-            )
-            self._visible_command_suggestions = suggestions
+        def _refresh_command_picker(
+            self,
+            value: str,
+            *,
+            cursor_position: int | None = None,
+        ) -> None:
             option_list = self.query_one('#command-options', OptionList)
             description = self.query_one('#command-description', Static)
             option_list.clear_options()
-            if not suggestions or self._state.busy:
+            self._visible_command_suggestions = []
+            self._visible_workspace_path_suggestions = []
+            self._active_workspace_reference_query = None
+            self._picker_mode = None
+            if self._state.busy:
                 description.update('')
                 self._set_command_picker_visible(False)
                 return
+
+            slash_suggestions = filter_slash_command_suggestions(
+                value,
+                suggestions=self._command_suggestions,
+            )
+            if slash_suggestions:
+                self._visible_command_suggestions = slash_suggestions
+                self._picker_mode = 'slash'
+                option_list.add_options(
+                    Option(suggestion.label, id=suggestion.primary_name)
+                    for suggestion in slash_suggestions
+                )
+                option_list.highlighted = 0
+                description.update(render_slash_command_suggestion_detail(slash_suggestions[0]))
+                self._set_command_picker_visible(True)
+                return
+
+            reference_query = extract_workspace_reference_query(value, cursor_position)
+            if reference_query is None:
+                description.update('')
+                self._set_command_picker_visible(False)
+                return
+            path_suggestions = filter_workspace_path_suggestions(
+                reference_query.query,
+                self._workspace_path_suggestions,
+            )
+            if not path_suggestions:
+                description.update('')
+                self._set_command_picker_visible(False)
+                return
+            self._visible_workspace_path_suggestions = path_suggestions
+            self._active_workspace_reference_query = reference_query
+            self._picker_mode = 'workspace'
             option_list.add_options(
-                Option(suggestion.label, id=suggestion.primary_name)
-                for suggestion in suggestions
+                Option(suggestion.label, id=f'workspace-path-{index}')
+                for index, suggestion in enumerate(path_suggestions)
             )
             option_list.highlighted = 0
-            description.update(render_slash_command_suggestion_detail(suggestions[0]))
+            description.update(render_workspace_path_suggestion_detail(path_suggestions[0]))
             self._set_command_picker_visible(True)
 
         def _move_command_selection(self, delta: int) -> None:
-            if not self._visible_command_suggestions:
+            visible_count = len(
+                self._visible_workspace_path_suggestions
+                if self._picker_mode == 'workspace'
+                else self._visible_command_suggestions
+            )
+            if not visible_count:
                 return
             option_list = self.query_one('#command-options', OptionList)
             current = option_list.highlighted
             if current is None:
                 current = 0
-            next_index = max(0, min(len(self._visible_command_suggestions) - 1, current + delta))
+            next_index = max(0, min(visible_count - 1, current + delta))
             option_list.highlighted = next_index
             option_list.scroll_to_highlight()
 
         def _should_accept_completion_on_enter(self, value: str) -> bool:
+            if self._picker_mode == 'workspace':
+                return bool(self._visible_workspace_path_suggestions)
             if not self._visible_command_suggestions:
                 return False
             query = extract_slash_command_query(value)
@@ -1537,6 +1888,18 @@ def run_agent_tui(
             return find_slash_command(query) is None
 
         def _apply_highlighted_command(self) -> None:
+            if self._picker_mode == 'workspace':
+                if not self._visible_workspace_path_suggestions:
+                    return
+                option_list = self.query_one('#command-options', OptionList)
+                highlighted = option_list.highlighted
+                if (
+                    highlighted is None
+                    or highlighted >= len(self._visible_workspace_path_suggestions)
+                ):
+                    highlighted = 0
+                self._apply_workspace_path_suggestion(f'workspace-path-{highlighted}')
+                return
             if not self._visible_command_suggestions:
                 return
             option_list = self.query_one('#command-options', OptionList)
@@ -1550,9 +1913,24 @@ def run_agent_tui(
             suggestion = self._suggestion_for_option_id(option_id)
             if suggestion is None:
                 return
-            prompt = self.query_one('#prompt', Input)
+            prompt = self.query_one('#prompt', PromptInput)
             prompt.value = suggestion.insertion_text
-            self._refresh_command_picker(prompt.value)
+            prompt.cursor_position = len(prompt.value)
+            self._refresh_command_picker(prompt.value, cursor_position=prompt.cursor_position)
+            prompt.focus()
+
+        def _apply_workspace_path_suggestion(self, option_id: str | None) -> None:
+            suggestion = self._workspace_suggestion_for_option_id(option_id)
+            reference_query = self._active_workspace_reference_query
+            if suggestion is None or reference_query is None:
+                return
+            prompt = self.query_one('#prompt', PromptInput)
+            value = prompt.value
+            start = reference_query.start_index
+            end = reference_query.end_index
+            prompt.value = f'{value[:start]}{suggestion.insertion_text}{value[end:]}'
+            prompt.cursor_position = start + len(suggestion.insertion_text)
+            self._refresh_command_picker(prompt.value, cursor_position=prompt.cursor_position)
             prompt.focus()
 
         def _suggestion_for_option_id(
@@ -1565,6 +1943,20 @@ def run_agent_tui(
                 if suggestion.primary_name == option_id:
                     return suggestion
             return None
+
+        def _workspace_suggestion_for_option_id(
+            self,
+            option_id: str | None,
+        ) -> WorkspacePathSuggestion | None:
+            if option_id is None or not option_id.startswith('workspace-path-'):
+                return None
+            try:
+                index = int(option_id.rsplit('-', 1)[1])
+            except ValueError:
+                return None
+            if index < 0 or index >= len(self._visible_workspace_path_suggestions):
+                return None
+            return self._visible_workspace_path_suggestions[index]
 
         def _selected_turn(self) -> ConversationTurn | None:
             if not self._conversation_turns:
@@ -1640,6 +2032,7 @@ def run_agent_tui(
                     self._state,
                     turn,
                     self._activity_items,
+                    hide_gitignored_paths=self._hide_gitignored_workspace_paths,
                 )
             )
 
@@ -1669,6 +2062,7 @@ def run_agent_tui(
 
         def _cancel_pending_scroll_to_end(self) -> None:
             self._scroll_to_end_pending = False
+            self._scroll_to_end_token += 1
 
         def _scroll_conversation_by_pages(self, pages: int) -> None:
             container = self._conversation_scroll_container()
@@ -1692,7 +2086,10 @@ def run_agent_tui(
                 return
 
         def _scroll_conversation_to_current_end(self) -> None:
-            container = self.query_one('#conversation-scroll', VerticalScroll)
+            try:
+                container = self.query_one('#conversation-scroll', VerticalScroll)
+            except Exception:
+                return
             try:
                 container.scroll_end(animate=False, immediate=True)
             except TypeError:
@@ -1703,18 +2100,29 @@ def run_agent_tui(
             except AttributeError:
                 return
 
-        def _scroll_conversation_to_end(self) -> None:
-            if not self._scroll_to_end_pending:
+        def _scroll_conversation_to_end(self, token: int) -> None:
+            if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
+                return
+            self.set_timer(0.01, lambda: self._finish_scroll_conversation_to_end(token, 0))
+
+        def _finish_scroll_conversation_to_end(self, token: int, attempt: int) -> None:
+            if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
+                return
+            self._scroll_conversation_to_current_end()
+            if attempt < 2:
+                self.set_timer(
+                    0.05 if attempt == 0 else 0.10,
+                    lambda: self._finish_scroll_conversation_to_end(token, attempt + 1),
+                )
                 return
             self._scroll_to_end_pending = False
-            self._scroll_conversation_to_current_end()
 
         def _schedule_conversation_scroll_to_end(self) -> None:
             self._restore_scroll_y = None
-            if self._scroll_to_end_pending:
-                return
             self._scroll_to_end_pending = True
-            self.call_after_refresh(self._scroll_conversation_to_end)
+            self._scroll_to_end_token += 1
+            token = self._scroll_to_end_token
+            self.call_after_refresh(lambda: self._scroll_conversation_to_end(token))
 
         def _schedule_conversation_scroll_restore(self, scroll_y: float) -> None:
             if self._scroll_to_end_pending:
@@ -1750,13 +2158,14 @@ def run_agent_tui(
             self._spinner_index = (self._spinner_index + 1) % 4
             self._refresh_details_panel()
 
-        def _submit_prompt(self, prompt: str) -> None:
+        def _submit_prompt(self, prompt: str, *, runtime_prompt: str | None = None) -> None:
             if self._state.busy:
                 return
+            effective_prompt = runtime_prompt or prompt
             self._cancel_requested.clear()
             self._schedule_conversation_scroll_to_end()
             self._bridge.begin_prompt(prompt, session_id=self._active_session_id)
-            self._active_worker = self._run_prompt(prompt)
+            self._active_worker = self._run_prompt(effective_prompt)
 
         @work(thread=True, exclusive=True)
         def _run_prompt(self, prompt: str) -> None:
