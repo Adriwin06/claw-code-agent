@@ -9,6 +9,7 @@ set -euo pipefail
 #   CLAW_START_SAGEMATH=0       disable the default SageMath sidecar
 #   CLAW_START_SEARCH=0         disable the default SearXNG sidecar
 #   CLAW_HOST_CODE_HOME=...     host directory for persistent TUI history
+#   CLAW_HOST_ATTACHMENTS_ROOT=... host directory mounted read-only for pasted file paths
 #   SAGEMATH_HOST_PORT=18000    host port published by the SageMath sidecar
 #   SEARXNG_HOST_PORT=8080      host port published by the SearXNG sidecar
 
@@ -25,6 +26,54 @@ bool_true() {
 
 is_wsl() {
   grep -qi microsoft /proc/version 2>/dev/null
+}
+
+windows_user_profile_from_wsl() {
+  local profile
+
+  if ! is_wsl || ! command -v cmd.exe >/dev/null 2>&1; then
+    return 1
+  fi
+  profile="$(cmd.exe /C "echo %USERPROFILE%" 2>/dev/null \
+    | tr -d '\r' \
+    | awk 'NF { print; exit }')"
+  if [[ -z "$profile" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$profile"
+}
+
+windows_user_profile_from_wsl_workspace() {
+  local workspace_dir="$1"
+
+  if ! is_wsl; then
+    return 1
+  fi
+
+  awk -F/ '
+    BEGIN { IGNORECASE = 1 }
+    $2 == "mnt" && tolower($4) == "users" && $5 != "" {
+      printf "%s:\\Users\\%s\n", toupper($3), $5
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' <<<"$workspace_dir"
+}
+
+mount_root_for_host_path() {
+  local host_path="$1"
+
+  if is_wsl && [[ "$host_path" =~ ^[A-Za-z]:\\ ]] && command -v wslpath >/dev/null 2>&1; then
+    wslpath -u "$host_path"
+    return
+  fi
+
+  printf '%s\n' "$host_path"
 }
 
 read_env_file_value() {
@@ -155,7 +204,24 @@ CLAW_START_SEARCH="${CLAW_START_SEARCH:-1}"
 SAGEMATH_HOST_PORT="${SAGEMATH_HOST_PORT:-18000}"
 SEARXNG_HOST_PORT="${SEARXNG_HOST_PORT:-8080}"
 DOCKER_IMAGE="claw-code-agent-local"
+CONTAINER_AGENT_SOURCE_ROOT="/agent-source"
 HOST_CLAW_CODE_HOME="${CLAW_HOST_CODE_HOME:-${CLAW_CODE_HOME:-$HOME/.claw-code}}"
+if [[ -n "${CLAW_HOST_ATTACHMENTS_ROOT:-}" ]]; then
+  HOST_ATTACHMENTS_ROOT="$CLAW_HOST_ATTACHMENTS_ROOT"
+elif WINDOWS_USER_PROFILE="$(windows_user_profile_from_wsl)"; then
+  HOST_ATTACHMENTS_ROOT="$WINDOWS_USER_PROFILE"
+elif WINDOWS_USER_PROFILE="$(windows_user_profile_from_wsl_workspace "$WORKSPACE_DIR")"; then
+  HOST_ATTACHMENTS_ROOT="$WINDOWS_USER_PROFILE"
+else
+  HOST_ATTACHMENTS_ROOT="$HOME"
+fi
+HOST_ATTACHMENTS_MOUNT_ROOT="${CLAW_HOST_ATTACHMENTS_MOUNT_ROOT:-$(mount_root_for_host_path "$HOST_ATTACHMENTS_ROOT")}"
+if [[ ! -d "$HOST_ATTACHMENTS_MOUNT_ROOT" ]]; then
+  echo "Warning: host attachment root is not readable: $HOST_ATTACHMENTS_MOUNT_ROOT"
+  echo "Falling back to WSL home for attachment path mounts."
+  HOST_ATTACHMENTS_ROOT="$HOME"
+  HOST_ATTACHMENTS_MOUNT_ROOT="$HOME"
+fi
 
 if docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
@@ -241,7 +307,9 @@ AGENT_SEARXNG_BASE_URL="${CLAW_AGENT_SEARXNG_BASE_URL:-http://${AGENT_SIDECAR_HO
 echo "Launching Claw Code Agent"
 echo "  repo: $REPO_ROOT"
 echo "  workspace: $WORKSPACE_DIR"
+echo "  source: $REPO_ROOT -> $CONTAINER_AGENT_SOURCE_ROOT"
 echo "  history: $HOST_CLAW_CODE_HOME"
+echo "  host attachments: $HOST_ATTACHMENTS_ROOT -> $HOST_ATTACHMENTS_MOUNT_ROOT"
 echo "  command: $LAUNCH_AGENT_COMMAND"
 if bool_true "${CLAW_REBUILD:-}"; then
   echo "  image rebuild: enabled"
@@ -298,8 +366,13 @@ mkdir -p "$HOST_CLAW_CODE_HOME"
 RUN_ENV_ARGS=(
   -e "AGENT_COMMAND=$LAUNCH_AGENT_COMMAND"
   -e "AGENT_CWD=/workspace"
+  -e "AGENT_SOURCE_ROOT=$CONTAINER_AGENT_SOURCE_ROOT"
   -e "CLAW_CODE_HOME=/root/.claw-code"
   -e "CLAW_HOST_WORKSPACE=$WORKSPACE_DIR"
+  -e "CLAW_CONTAINER_WORKSPACE=/workspace"
+  -e "CLAW_HOST_ATTACHMENTS_ROOT=$HOST_ATTACHMENTS_ROOT"
+  -e "CLAW_HOST_ATTACHMENTS_MOUNT_ROOT=$HOST_ATTACHMENTS_MOUNT_ROOT"
+  -e "CLAW_CONTAINER_HOST_ATTACHMENTS_ROOT=/host-attachments"
   -e "AGENT_READ_ONLY=false"
   -e "AGENT_ALLOW_WRITE=true"
   -e "AGENT_ALLOW_SHELL=false"
@@ -328,7 +401,11 @@ docker run \
   "${DOCKER_NETWORK_ARGS[@]}" \
   "${DOCKER_ENV_ARGS[@]}" \
   "${RUN_ENV_ARGS[@]}" \
+  --entrypoint bash \
+  -v "$REPO_ROOT:$CONTAINER_AGENT_SOURCE_ROOT:ro" \
   -v "$HOST_CLAW_CODE_HOME:/root/.claw-code" \
+  -v "$HOST_ATTACHMENTS_MOUNT_ROOT:/host-attachments:ro" \
   -v "$WORKSPACE_DIR:/workspace" \
   -w /workspace \
-  "$DOCKER_IMAGE"
+  "$DOCKER_IMAGE" \
+  "$CONTAINER_AGENT_SOURCE_ROOT/docker/entrypoint.sh"

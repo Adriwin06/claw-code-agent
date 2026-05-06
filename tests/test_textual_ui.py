@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import os
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ from src.textual_ui import (
     ConversationTurn,
     PromptAttachment,
     build_display_prompt_with_attachments,
+    build_prompt_image_blocks,
     build_prompt_with_references,
     copy_external_attachment,
     build_working_section_id,
@@ -28,7 +30,9 @@ from src.textual_ui import (
     build_workspace_path_suggestions,
     build_conversation_history_items,
     conversation_turns_render_signature,
+    extract_prompt_file_paths,
     extract_slash_command_query,
+    extract_unresolved_prompt_file_path_candidates,
     extract_workspace_path_references,
     extract_workspace_reference_query,
     filter_slash_command_suggestions,
@@ -269,6 +273,97 @@ class TextualUiTests(unittest.TestCase):
 
         self.assertEqual({path.name for path in paths}, {'shot 1.png', 'notes.txt'})
 
+    def test_extract_prompt_file_paths_preserves_question_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image = Path(tmp_dir) / "screen capture's shot.png"
+            image.write_bytes(b'png')
+
+            prompt, paths = extract_prompt_file_paths(
+                f'"{image}" What do you think of this UI?'
+            )
+
+        self.assertEqual(prompt, 'What do you think of this UI?')
+        self.assertEqual(tuple(path.name for path in paths), ("screen capture's shot.png",))
+
+    def test_extract_prompt_file_paths_maps_docker_host_attachment_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            container_root = Path(tmp_dir) / 'host-attachments'
+            image = container_root / 'Pictures' / 'shot.png'
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b'png')
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    'CLAW_HOST_ATTACHMENTS_ROOT': r'Z:\Users\Ada',
+                    'CLAW_CONTAINER_HOST_ATTACHMENTS_ROOT': str(container_root),
+                },
+            ):
+                prompt, paths = extract_prompt_file_paths(
+                    r'"Z:\Users\Ada\Pictures\shot.png" Describe it'
+                )
+
+        self.assertEqual(prompt, 'Describe it')
+        self.assertEqual(paths, (image,))
+
+    def test_extract_prompt_file_paths_maps_wsl_mount_attachment_root_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            container_root = Path(tmp_dir) / 'host-attachments'
+            image = container_root / 'Pictures' / 'shot.png'
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b'png')
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    'CLAW_HOST_ATTACHMENTS_ROOT': r'C:\Users\Ada',
+                    'CLAW_HOST_ATTACHMENTS_MOUNT_ROOT': '/mnt/c/Users/Ada',
+                    'CLAW_CONTAINER_HOST_ATTACHMENTS_ROOT': str(container_root),
+                },
+            ):
+                prompt, paths = extract_prompt_file_paths(
+                    '/mnt/c/Users/Ada/Pictures/shot.png Describe it'
+                )
+
+        self.assertEqual(prompt, 'Describe it')
+        self.assertEqual(paths, (image,))
+
+    def test_extract_prompt_file_paths_maps_windows_path_with_wsl_mount_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            container_root = Path(tmp_dir) / 'host-attachments'
+            image = container_root / 'Pictures' / 'shot.png'
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b'png')
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    'CLAW_HOST_ATTACHMENTS_ROOT': r'C:\Users\Ada',
+                    'CLAW_HOST_ATTACHMENTS_MOUNT_ROOT': '/mnt/c/Users/Ada',
+                    'CLAW_CONTAINER_HOST_ATTACHMENTS_ROOT': str(container_root),
+                },
+            ):
+                prompt, paths = extract_prompt_file_paths(
+                    r'"C:\Users\Ada\Pictures\shot.png" Describe it'
+                )
+
+        self.assertEqual(prompt, 'Describe it')
+        self.assertEqual(paths, (image,))
+
+    def test_extract_unresolved_prompt_file_path_candidates_reports_missing_host_path(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                'CLAW_HOST_ATTACHMENTS_ROOT': r'Z:\Users\Ada',
+                'CLAW_CONTAINER_HOST_ATTACHMENTS_ROOT': r'Z:\not-mounted',
+            },
+        ):
+            unresolved = extract_unresolved_prompt_file_path_candidates(
+                r'"Z:\Users\Ada\Pictures\missing.png" Describe it'
+            )
+
+        self.assertEqual(unresolved, (r'Z:\Users\Ada\Pictures\missing.png',))
+
     def test_copy_external_attachment_copies_file_into_workspace_session_area(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -291,6 +386,33 @@ class TextualUiTests(unittest.TestCase):
             self.assertEqual(copied.read_bytes(), b'png')
             self.assertEqual(attachment.kind, 'image')
             self.assertIn('.port_sessions/attachments/prompt_1/shot.png', attachment.workspace_path)
+
+    def test_build_prompt_image_blocks_embeds_attached_images_as_data_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            image_path = workspace / '.port_sessions' / 'attachments' / 'prompt-1' / 'shot.png'
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b'png')
+            attachment = PromptAttachment(
+                original_path='C:/Users/Ada/Pictures/shot.png',
+                workspace_path='.port_sessions/attachments/prompt-1/shot.png',
+                name='shot.png',
+                kind='image',
+                size_bytes=3,
+                mime_type='image/png',
+            )
+
+            blocks = build_prompt_image_blocks((attachment,), workspace)
+
+        self.assertEqual(
+            blocks,
+            (
+                {
+                    'type': 'image_url',
+                    'image_url': {'url': 'data:image/png;base64,cG5n'},
+                },
+            ),
+        )
 
     def test_state_from_agent_renders_core_runtime_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1169,10 +1291,15 @@ class TextualUiTests(unittest.TestCase):
             App.run = original_run
 
         app = captured['app']
-        submitted: list[tuple[str, str | None]] = []
+        submitted: list[tuple[str, str | None, tuple[dict[str, object], ...]]] = []
 
-        def capture_submit(prompt: str, *, runtime_prompt: str | None = None) -> None:
-            submitted.append((prompt, runtime_prompt))
+        def capture_submit(
+            prompt: str,
+            *,
+            runtime_prompt: str | None = None,
+            prompt_blocks: tuple[dict[str, object], ...] = (),
+        ) -> None:
+            submitted.append((prompt, runtime_prompt, prompt_blocks))
 
         app._submit_prompt = capture_submit  # type: ignore[method-assign]
 
@@ -1186,7 +1313,7 @@ class TextualUiTests(unittest.TestCase):
 
                 await pilot.press('enter')
 
-                self.assertEqual(submitted, [('a\nb', 'a\nb')])
+                self.assertEqual(submitted, [('a\nb', 'a\nb', ())])
                 self.assertEqual(prompt.value, '')
 
         asyncio.run(exercise())
@@ -1224,10 +1351,15 @@ class TextualUiTests(unittest.TestCase):
             App.run = original_run
 
         app = captured['app']
-        submitted: list[tuple[str, str | None]] = []
+        submitted: list[tuple[str, str | None, tuple[dict[str, object], ...]]] = []
 
-        def capture_submit(prompt: str, *, runtime_prompt: str | None = None) -> None:
-            submitted.append((prompt, runtime_prompt))
+        def capture_submit(
+            prompt: str,
+            *,
+            runtime_prompt: str | None = None,
+            prompt_blocks: tuple[dict[str, object], ...] = (),
+        ) -> None:
+            submitted.append((prompt, runtime_prompt, prompt_blocks))
 
         app._submit_prompt = capture_submit  # type: ignore[method-assign]
 
@@ -1239,13 +1371,82 @@ class TextualUiTests(unittest.TestCase):
                 await pilot.press('enter')
 
                 self.assertEqual(len(submitted), 1)
-                display_prompt, runtime_prompt = submitted[0]
+                display_prompt, runtime_prompt, prompt_blocks = submitted[0]
                 self.assertIn('Attached files:', display_prompt)
                 self.assertIn('shot.png (image, 3 B)', display_prompt)
                 self.assertIsNotNone(runtime_prompt)
                 assert runtime_prompt is not None
                 self.assertIn('Claw UI prompt context:', runtime_prompt)
                 self.assertIn('copied_to=.port_sessions/attachments/', runtime_prompt)
+                self.assertEqual(len(prompt_blocks), 1)
+                self.assertEqual(prompt_blocks[0].get('type'), 'image_url')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_prompt_submits_embedded_external_path_as_attachment(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        try:
+            root = Path(tmp.name)
+            workspace = root / 'workspace'
+            external = root / 'external' / "screen capture's shot.png"
+            workspace.mkdir()
+            external.parent.mkdir()
+            external.write_bytes(b'png')
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='demo-model'),
+                runtime_config=AgentRuntimeConfig(cwd=workspace),
+            )
+            run_agent_tui(
+                agent,
+                history_store=ConversationHistoryStore(root / '.claw-code-test'),
+            )
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+        submitted: list[tuple[str, str | None, tuple[dict[str, object], ...]]] = []
+
+        def capture_submit(
+            prompt: str,
+            *,
+            runtime_prompt: str | None = None,
+            prompt_blocks: tuple[dict[str, object], ...] = (),
+        ) -> None:
+            submitted.append((prompt, runtime_prompt, prompt_blocks))
+
+        app._submit_prompt = capture_submit  # type: ignore[method-assign]
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                prompt = app.query_one('#prompt')
+                prompt.value = f'"{external}" What do you think of this UI?'
+
+                await pilot.press('enter')
+
+                self.assertEqual(len(submitted), 1)
+                display_prompt, runtime_prompt, prompt_blocks = submitted[0]
+                self.assertIn('What do you think of this UI?', display_prompt)
+                self.assertNotIn(str(external), display_prompt)
+                self.assertIn('Attached files:', display_prompt)
+                self.assertIn("screen_capture_s_shot.png", display_prompt)
+                self.assertIsNotNone(runtime_prompt)
+                assert runtime_prompt is not None
+                self.assertIn('What do you think of this UI?', runtime_prompt)
+                self.assertIn('copied_to=.port_sessions/attachments/', runtime_prompt)
+                self.assertEqual(len(prompt_blocks), 1)
+                self.assertEqual(prompt_blocks[0].get('type'), 'image_url')
 
         asyncio.run(exercise())
 

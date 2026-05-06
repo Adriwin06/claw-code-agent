@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.agent.models.session import AgentSessionState
 from src.agent.agent_session import AgentMessage
 from src.agent.delegate_orchestrator import (
     filter_tools_for_agent,
@@ -1062,6 +1063,83 @@ class AgentRuntimeTests(unittest.TestCase):
         tool_message = next(message for message in result.transcript if message.get('role') == 'tool')
         self.assertIn('blocks', tool_message)
         self.assertEqual(tool_message['blocks'][0]['type'], 'tool_result')
+
+    def test_multimodal_user_blocks_are_sent_to_model_but_transcript_keeps_text_prompt(self) -> None:
+        session = AgentSessionState.create(['System prompt'], None)
+        image_block = {
+            'type': 'image_url',
+            'image_url': {'url': 'data:image/png;base64,cG5n'},
+        }
+        session.append_user(
+            'Describe the image.',
+            blocks=(
+                {'type': 'text', 'text': 'Describe the image.'},
+                image_block,
+            ),
+        )
+
+        openai_message = session.to_openai_messages()[-1]
+        transcript_entry = session.transcript()[-1]
+
+        self.assertIsInstance(openai_message['content'], list)
+        content_parts = openai_message['content']
+        assert isinstance(content_parts, list)
+        self.assertEqual(content_parts[0], {'type': 'text', 'text': 'Describe the image.'})
+        self.assertEqual(content_parts[1], image_block)
+        self.assertEqual(transcript_entry['content'], 'Describe the image.')
+        self.assertIn('blocks', transcript_entry)
+
+    def test_agent_run_passes_prompt_image_blocks_to_model_request(self) -> None:
+        responses = [
+            {
+                'choices': [
+                    {
+                        'message': {
+                            'role': 'assistant',
+                            'content': 'Image described.',
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ],
+                'usage': {'prompt_tokens': 8, 'completion_tokens': 2},
+            }
+        ]
+        recorded_payloads: list[dict[str, object]] = []
+        image_block = {
+            'type': 'image_url',
+            'image_url': {'url': 'data:image/png;base64,cG5n'},
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            client = ScriptedLLMClient(
+                completion_responses=responses,
+                recorded_payloads=recorded_payloads,
+            )
+            with patch('src.agent.agent_runtime.build_llm_client', return_value=client):
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=workspace),
+                )
+                result = agent.run(
+                    'Describe the image.',
+                    prompt_blocks=(image_block,),
+                )
+
+        self.assertEqual(result.final_output, 'Image described.')
+        messages = recorded_payloads[0]['messages']
+        assert isinstance(messages, list)
+        user_message = next(
+            message
+            for message in messages
+            if isinstance(message, dict)
+            and message.get('role') == 'user'
+            and isinstance(message.get('content'), list)
+        )
+        content = user_message.get('content')
+        self.assertIsInstance(content, list)
+        assert isinstance(content, list)
+        self.assertEqual(content[0], {'type': 'text', 'text': 'Describe the image.'})
+        self.assertEqual(content[1], image_block)
 
     def test_agent_inserts_compact_boundary_when_threshold_is_exceeded(self) -> None:
         responses = [

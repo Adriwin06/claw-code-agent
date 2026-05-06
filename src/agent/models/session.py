@@ -24,9 +24,12 @@ class AgentMessage:
     metadata: JSONDict = field(default_factory=dict)
 
     def to_openai_message(self) -> JSONDict:
+        blocks = self.blocks or _derive_blocks(self)
         payload: JSONDict = {
             'role': self.role,
-            'content': self.content,
+            'content': _openai_content_from_blocks(self.content, blocks)
+            if self.role == 'user'
+            else self.content,
         }
         if self.name is not None:
             payload['name'] = self.name
@@ -37,7 +40,16 @@ class AgentMessage:
         return payload
 
     def to_transcript_entry(self) -> JSONDict:
-        payload = self.to_openai_message()
+        payload: JSONDict = {
+            'role': self.role,
+            'content': self.content,
+        }
+        if self.name is not None:
+            payload['name'] = self.name
+        if self.tool_call_id is not None:
+            payload['tool_call_id'] = self.tool_call_id
+        if self.tool_calls:
+            payload['tool_calls'] = list(self.tool_calls)
         blocks = self.blocks or _derive_blocks(self)
         if blocks:
             payload['blocks'] = [dict(block) for block in blocks]
@@ -288,14 +300,16 @@ class AgentSessionState:
         self,
         content: str,
         *,
+        blocks: tuple[JSONDict, ...] | None = None,
         metadata: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> None:
+        user_blocks = blocks if blocks is not None else _text_blocks(content)
         self.messages.append(
             AgentMessage(
                 role='user',
                 content=content,
-                blocks=_text_blocks(content),
+                blocks=user_blocks,
                 metadata=_initialize_message_metadata(
                     role='user',
                     message_id=message_id or f'user_{len(self.messages)}',
@@ -636,6 +650,28 @@ def _text_blocks(text: str) -> tuple[JSONDict, ...]:
     if not text:
         return ()
     return ({'type': 'text', 'text': text},)
+
+
+def _openai_content_from_blocks(content: str, blocks: tuple[JSONDict, ...]) -> str | list[JSONDict]:
+    if not any(block.get('type') == 'image_url' for block in blocks):
+        return content
+    content_parts: list[JSONDict] = []
+    has_text = False
+    for block in blocks:
+        block_type = block.get('type')
+        if block_type == 'text':
+            text = block.get('text')
+            if isinstance(text, str) and text:
+                content_parts.append({'type': 'text', 'text': text})
+                has_text = True
+            continue
+        if block_type == 'image_url':
+            image_url = block.get('image_url')
+            if isinstance(image_url, dict) and isinstance(image_url.get('url'), str):
+                content_parts.append({'type': 'image_url', 'image_url': dict(image_url)})
+    if content and not has_text:
+        content_parts.insert(0, {'type': 'text', 'text': content})
+    return content_parts or content
 
 
 def _assistant_blocks(

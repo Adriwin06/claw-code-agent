@@ -12,8 +12,12 @@ from src.session.session_store import StoredAgentSession, load_agent_session
 from .ui.attachments import (
     PromptAttachment,
     build_display_prompt_with_attachments,
+    build_prompt_image_blocks,
     build_prompt_with_references,
+    copy_clipboard_image_attachment,
     copy_external_attachment,
+    extract_prompt_file_paths,
+    extract_unresolved_prompt_file_path_candidates,
     parse_pasted_file_paths,
     render_attachment_summary,
     workspace_reference_for_pasted_path,
@@ -141,6 +145,7 @@ def render_details_panel(
             '@path: reference workspace files or folders',
             f'Ctrl+G: {"show" if hide_gitignored_paths else "hide"} gitignored @ files',
             'Paste/drop file paths: attach external files',
+            'Ctrl+I: attach clipboard image',
             'Ctrl+C: stop current run',
             'PgUp/PgDn: scroll conversation',
         ]
@@ -1007,6 +1012,7 @@ def run_agent_tui(
             ('ctrl+c', 'stop_generation', 'Stop'),
             ('ctrl+h', 'focus_history', 'History'),
             ('ctrl+g', 'toggle_gitignored_workspace_paths', 'Ignored'),
+            ('ctrl+i', 'attach_clipboard_image', 'ClipImg'),
         ]
 
         def __init__(
@@ -1141,12 +1147,13 @@ def run_agent_tui(
             prompt = prompt_editor.value.strip()
             prompt_editor.value = ''
             self._refresh_command_picker('')
-            path_prompt = self._prompt_text_as_only_paths(prompt)
-            if path_prompt:
-                workspace_mentions, attachments = self._attachments_from_paths(path_prompt)
-                if workspace_mentions or attachments:
-                    self._add_prompt_attachments(attachments)
-                    prompt = ' '.join(workspace_mentions) or ''
+            extracted_prompt = self._extract_prompt_path_attachments(prompt)
+            if extracted_prompt is None:
+                prompt_editor.value = prompt
+                prompt_editor.cursor_position = len(prompt)
+                prompt_editor.focus()
+                return
+            prompt = extracted_prompt
             if not prompt and not self._prompt_attachments:
                 return
             if prompt in {'/exit', '/quit'} and not self._prompt_attachments:
@@ -1173,12 +1180,20 @@ def run_agent_tui(
                 return
             display_prompt = prompt or 'Please inspect the attached file(s).'
             runtime_prompt = self._runtime_prompt_from_display_prompt(display_prompt)
+            prompt_blocks = build_prompt_image_blocks(
+                self._prompt_attachments,
+                self._workspace,
+            )
             display_prompt = build_display_prompt_with_attachments(
                 display_prompt,
                 self._prompt_attachments,
             )
             self._clear_prompt_attachments()
-            self._submit_prompt(display_prompt, runtime_prompt=runtime_prompt)
+            self._submit_prompt(
+                display_prompt,
+                runtime_prompt=runtime_prompt,
+                prompt_blocks=prompt_blocks,
+            )
 
         def on_key(self, event: events.Key) -> None:
             prompt = self.query_one('#prompt', PromptInput)
@@ -1421,6 +1436,21 @@ def run_agent_tui(
             )
             self._refresh_details_panel()
 
+        def action_attach_clipboard_image(self) -> None:
+            if self._state.busy:
+                return
+            if not self._attachment_batch_id:
+                self._attachment_batch_id = f'prompt-{len(self._conversation_turns) + 1}'
+            attachment = copy_clipboard_image_attachment(
+                self._workspace,
+                batch_id=self._attachment_batch_id,
+            )
+            if attachment is None:
+                self._notify_user('No clipboard image was available to attach.')
+                return
+            self._add_prompt_attachments((attachment,))
+            self.query_one('#prompt', PromptInput).focus()
+
         def action_stop_generation(self) -> None:
             if not self._state.busy:
                 return
@@ -1513,6 +1543,14 @@ def run_agent_tui(
                 hide_gitignored=self._hide_gitignored_workspace_paths,
             )
 
+        def _notify_user(self, message: str) -> None:
+            notify = getattr(self, 'notify', None)
+            if callable(notify):
+                try:
+                    notify(message)
+                except Exception:
+                    return
+
         def _refresh_attachment_shelf(self) -> None:
             shelf = self.query_one('#attachment-shelf', Horizontal)
             summary = self.query_one('#attachment-summary', Static)
@@ -1542,13 +1580,18 @@ def run_agent_tui(
         def _handle_prompt_paste(self, text: str) -> bool:
             if self._state.busy:
                 return False
-            paths = parse_pasted_file_paths(text)
+            remaining_text, paths = extract_prompt_file_paths(text)
             if not paths:
                 return False
             prompt = self.query_one('#prompt', PromptInput)
             workspace_mentions, attachments = self._attachments_from_paths(paths)
-            if workspace_mentions:
-                insertion = ' '.join(workspace_mentions) + ' '
+            insertion = self._prompt_text_with_workspace_mentions(
+                remaining_text,
+                workspace_mentions,
+            )
+            if insertion:
+                if prompt.value and not prompt.value.endswith((' ', '\n')):
+                    insertion = f' {insertion}'
                 prompt.insert_text_at_cursor(insertion)
                 self._refresh_command_picker(
                     prompt.value,
@@ -1584,6 +1627,49 @@ def run_agent_tui(
                 if attachment is not None:
                     attachments.append(attachment)
             return workspace_mentions, attachments
+
+        def _extract_prompt_path_attachments(self, prompt: str) -> str | None:
+            remaining_text, paths = extract_prompt_file_paths(prompt)
+            if not paths:
+                unresolved = extract_unresolved_prompt_file_path_candidates(prompt)
+                if unresolved:
+                    self._notify_user(self._attachment_resolution_failure_message(unresolved))
+                    return None
+                return prompt
+            workspace_mentions, attachments = self._attachments_from_paths(paths)
+            if not workspace_mentions and not attachments:
+                self._notify_user('Could not attach the resolved file path.')
+                return None
+            self._add_prompt_attachments(attachments)
+            return self._prompt_text_with_workspace_mentions(
+                remaining_text,
+                workspace_mentions,
+            )
+
+        def _attachment_resolution_failure_message(
+            self,
+            unresolved: Sequence[str],
+        ) -> str:
+            root = unresolved[0] if unresolved else 'that file'
+            if len(root) > 54:
+                root = f'...{root[-51:]}'
+            return (
+                f'Could not attach {root}. Check the launch "host attachments" path '
+                'covers the file, then restart the TUI.'
+            )
+
+        def _prompt_text_with_workspace_mentions(
+            self,
+            prompt: str,
+            workspace_mentions: Sequence[str],
+        ) -> str:
+            prompt = prompt.strip()
+            if not workspace_mentions:
+                return prompt
+            mention_text = ' '.join(workspace_mentions)
+            if not prompt:
+                return mention_text
+            return f'{mention_text} {prompt}'
 
         def _prompt_text_as_only_paths(self, text: str) -> tuple[Path, ...]:
             paths = parse_pasted_file_paths(text)
@@ -2158,17 +2244,27 @@ def run_agent_tui(
             self._spinner_index = (self._spinner_index + 1) % 4
             self._refresh_details_panel()
 
-        def _submit_prompt(self, prompt: str, *, runtime_prompt: str | None = None) -> None:
+        def _submit_prompt(
+            self,
+            prompt: str,
+            *,
+            runtime_prompt: str | None = None,
+            prompt_blocks: tuple[dict[str, object], ...] = (),
+        ) -> None:
             if self._state.busy:
                 return
             effective_prompt = runtime_prompt or prompt
             self._cancel_requested.clear()
             self._schedule_conversation_scroll_to_end()
             self._bridge.begin_prompt(prompt, session_id=self._active_session_id)
-            self._active_worker = self._run_prompt(effective_prompt)
+            self._active_worker = self._run_prompt(effective_prompt, prompt_blocks)
 
         @work(thread=True, exclusive=True)
-        def _run_prompt(self, prompt: str) -> None:
+        def _run_prompt(
+            self,
+            prompt: str,
+            prompt_blocks: tuple[dict[str, object], ...] = (),
+        ) -> None:
             try:
                 stored_session = None
                 if self._active_session_id:
@@ -2179,12 +2275,14 @@ def run_agent_tui(
                 if stored_session is None:
                     result = self._agent.run(
                         prompt,
+                        prompt_blocks=prompt_blocks,
                         event_handler=self._handle_event_from_worker,
                     )
                 else:
                     result = self._agent.resume(
                         prompt,
                         stored_session,
+                        prompt_blocks=prompt_blocks,
                         event_handler=self._handle_event_from_worker,
                     )
                 if self._cancel_requested.is_set():

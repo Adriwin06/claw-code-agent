@@ -446,6 +446,7 @@ class LocalCodingAgent:
         self,
         prompt: str,
         *,
+        prompt_blocks: tuple[dict[str, object], ...] = (),
         event_handler: RuntimeEventHandler | None = None,
     ) -> AgentRunResult:
         self.managed_agent_id = None
@@ -460,6 +461,7 @@ class LocalCodingAgent:
             session_id=session_id,
             scratchpad_directory=scratchpad_directory,
             existing_file_history=(),
+            prompt_blocks=prompt_blocks,
             event_handler=event_handler,
         )
         self._accumulate_usage(result)
@@ -471,6 +473,7 @@ class LocalCodingAgent:
         prompt: str,
         stored_session: StoredAgentSession,
         *,
+        prompt_blocks: tuple[dict[str, object], ...] = (),
         event_handler: RuntimeEventHandler | None = None,
     ) -> AgentRunResult:
         self.managed_agent_id = None
@@ -504,6 +507,7 @@ class LocalCodingAgent:
             session_id=stored_session.session_id,
             scratchpad_directory=scratchpad_directory,
             existing_file_history=stored_session.file_history,
+            prompt_blocks=prompt_blocks,
             event_handler=event_handler,
         )
         self._accumulate_usage(result)
@@ -518,6 +522,7 @@ class LocalCodingAgent:
         session_id: str,
         scratchpad_directory: Path | None,
         existing_file_history: tuple[dict[str, object], ...],
+        prompt_blocks: tuple[dict[str, object], ...],
         event_handler: RuntimeEventHandler | None,
     ) -> AgentRunResult:
         slash_result = preprocess_slash_command(self, prompt)
@@ -558,7 +563,10 @@ class LocalCodingAgent:
                 scratchpad_directory=scratchpad_directory,
             )
         )
-        session.append_user(effective_prompt)
+        session.append_user(
+            effective_prompt,
+            blocks=self._build_user_prompt_blocks(effective_prompt, prompt_blocks),
+        )
         self.last_session = session
         self.active_session_id = session_id
         state = self._build_prompt_run_state(
@@ -778,6 +786,17 @@ class LocalCodingAgent:
             ),
             model_calls=starting_model_calls,
         )
+
+    @staticmethod
+    def _build_user_prompt_blocks(
+        prompt: str,
+        prompt_blocks: tuple[dict[str, object], ...],
+    ) -> tuple[dict[str, object], ...] | None:
+        if not prompt_blocks:
+            return None
+        blocks: list[dict[str, object]] = [{'type': 'text', 'text': prompt}]
+        blocks.extend(dict(block) for block in prompt_blocks if isinstance(block, dict))
+        return tuple(blocks)
 
     def _finalize_run_state_result(
         self,

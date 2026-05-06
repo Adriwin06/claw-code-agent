@@ -16,6 +16,7 @@ AGENT_COMMAND="${AGENT_COMMAND:-agent-chat}"
 AGENT_CWD="${AGENT_CWD:-/workspace}"
 AGENT_READ_ONLY="${AGENT_READ_ONLY:-false}"
 AGENT_VENV="${AGENT_VENV:-}"
+AGENT_SOURCE_ROOT="${AGENT_SOURCE_ROOT:-}"
 
 resolve_python_bin() {
   local candidate_venv="$1"
@@ -48,6 +49,14 @@ case "$AGENT_COMMAND" in
 esac
 
 PYTHON_BIN="$(resolve_python_bin "$AGENT_VENV")"
+if [[ -n "$AGENT_SOURCE_ROOT" ]]; then
+  if [[ ! -d "$AGENT_SOURCE_ROOT/src" ]]; then
+    echo "Configured AGENT_SOURCE_ROOT does not contain src/: $AGENT_SOURCE_ROOT" >&2
+    exit 2
+  fi
+  export PYTHONPATH="$AGENT_SOURCE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+  cd "$AGENT_SOURCE_ROOT"
+fi
 cmd=("$PYTHON_BIN" -m src.main "$AGENT_COMMAND")
 
 if [[ -n "${AGENT_PROMPT:-}" ]]; then
