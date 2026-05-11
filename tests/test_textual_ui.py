@@ -29,6 +29,7 @@ from src.textual_ui import (
     build_slash_command_suggestions,
     build_workspace_path_suggestions,
     build_conversation_history_items,
+    conversation_scroll_is_at_end,
     conversation_turns_render_signature,
     extract_prompt_file_paths,
     extract_slash_command_query,
@@ -44,6 +45,7 @@ from src.textual_ui import (
     render_workspace_path_suggestion_detail,
     restore_conversation_turns,
     sanitize_user_prompt_display_text,
+    should_follow_conversation_bottom,
     should_route_key_to_prompt,
 )
 from src.ui.conversation_store import ConversationHistoryStore, workspace_history_key
@@ -100,6 +102,37 @@ class TextualUiTests(unittest.TestCase):
         after = conversation_turns_render_signature((turn,))
 
         self.assertNotEqual(before, after)
+
+    def test_conversation_scroll_is_at_end_tolerates_small_render_gaps(self) -> None:
+        self.assertTrue(conversation_scroll_is_at_end(99.25, 100.0))
+        self.assertFalse(conversation_scroll_is_at_end(95.0, 100.0))
+        self.assertTrue(conversation_scroll_is_at_end('not-a-number', 100.0))
+
+    def test_should_follow_conversation_bottom_survives_stream_growth_gap(self) -> None:
+        self.assertTrue(
+            should_follow_conversation_bottom(
+                allow_stick_to_bottom=True,
+                selected_latest_turn=True,
+                was_at_end=False,
+                following_bottom=True,
+            )
+        )
+        self.assertFalse(
+            should_follow_conversation_bottom(
+                allow_stick_to_bottom=True,
+                selected_latest_turn=True,
+                was_at_end=False,
+                following_bottom=False,
+            )
+        )
+        self.assertFalse(
+            should_follow_conversation_bottom(
+                allow_stick_to_bottom=True,
+                selected_latest_turn=False,
+                was_at_end=True,
+                following_bottom=True,
+            )
+        )
 
     def test_should_route_key_to_prompt_only_for_printable_chars_when_prompt_unfocused(self) -> None:
         self.assertTrue(
@@ -284,6 +317,21 @@ class TextualUiTests(unittest.TestCase):
 
         self.assertEqual(prompt, 'What do you think of this UI?')
         self.assertEqual(tuple(path.name for path in paths), ("screen capture's shot.png",))
+
+    def test_extract_prompt_file_paths_ignores_normal_pasted_prose(self) -> None:
+        prompt_text = (
+            'Search online what TurboQuant is and make an html website to explain '
+            'what it is and how it works. Then, search what SageMath is and do the '
+            'same for it. Then, write a detailed Markdown document to explain what '
+            'could be improved on both websites.'
+        )
+
+        prompt, paths = extract_prompt_file_paths(prompt_text)
+
+        self.assertEqual(prompt, prompt_text)
+        self.assertEqual(paths, ())
+        self.assertEqual(parse_pasted_file_paths(prompt_text), ())
+        self.assertEqual(extract_unresolved_prompt_file_path_candidates(prompt_text), ())
 
     def test_extract_prompt_file_paths_maps_docker_host_attachment_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

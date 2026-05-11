@@ -66,7 +66,7 @@ def extract_prompt_file_path_matches(text: str) -> tuple[PromptPathMatch, ...]:
         if any(_spans_overlap((start_index, end_index), span) for span in used_spans):
             continue
         path = _existing_path_from_candidate(candidate)
-        if path is None or not path.exists() or not path.is_file():
+        if path is None or not _path_exists(path) or not _path_is_file(path):
             continue
         try:
             key = str(path.resolve())
@@ -100,7 +100,7 @@ def extract_unresolved_prompt_file_path_candidates(text: str) -> tuple[str, ...]
         if not cleaned or not _looks_like_file_path_candidate(cleaned):
             continue
         path = _existing_path_from_candidate(candidate)
-        if path is not None and path.exists() and path.is_file():
+        if path is not None and _path_exists(path) and _path_is_file(path):
             continue
         if cleaned in seen:
             continue
@@ -444,12 +444,26 @@ def _path_from_candidate(candidate: str) -> Path | None:
 
 def _existing_path_from_candidate(candidate: str) -> Path | None:
     path = _path_from_candidate(candidate)
-    if path is not None and path.exists():
+    if path is not None and _path_exists(path):
         return path
     mapped_path = _mapped_host_path_from_candidate(candidate)
-    if mapped_path is not None and mapped_path.exists():
+    if mapped_path is not None and _path_exists(mapped_path):
         return mapped_path
     return path
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except (OSError, ValueError):
+        return False
+
+
+def _path_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
 
 
 def _clean_candidate(candidate: str) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 from pathlib import Path
 from threading import Event
@@ -388,6 +389,36 @@ def conversation_turns_render_signature(
         )
         for turn in turns
     )
+
+
+def conversation_scroll_is_at_end(
+    scroll_y: object,
+    max_scroll_y: object,
+    *,
+    tolerance: float = 1.0,
+) -> bool:
+    try:
+        current_y = float(scroll_y)
+        end_y = float(max_scroll_y)
+    except (TypeError, ValueError):
+        return True
+    return end_y - current_y <= tolerance
+
+
+def should_follow_conversation_bottom(
+    *,
+    allow_stick_to_bottom: bool,
+    selected_latest_turn: bool,
+    was_at_end: bool,
+    following_bottom: bool,
+) -> bool:
+    if not allow_stick_to_bottom or not selected_latest_turn:
+        return False
+    return was_at_end or following_bottom
+
+
+def _utc_log_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
 
 def run_agent_tui(
@@ -1028,6 +1059,7 @@ def run_agent_tui(
             self._first_prompt = first_prompt.strip() if first_prompt else None
             self._active_session_id = resumed_session_id
             self._workspace = self._agent.runtime_config.cwd
+            self._tui_log_path = self._workspace / '.port_sessions' / 'tui-debug.log'
             self._history_store = history_store or ConversationHistoryStore()
             self._state = AgentTuiState.from_agent(runtime_agent)
             self._command_suggestions = build_slash_command_suggestions()
@@ -1059,12 +1091,16 @@ def run_agent_tui(
             self._history_items: tuple[ConversationHistoryItem, ...] = ()
             self._activity_items: tuple[ActivityItem, ...] = ()
             self._selected_turn_id: str | None = None
+            self._conversation_follow_bottom = True
+            self._conversation_pinned_scroll_y: float | None = None
             self._scroll_to_end_pending = False
             self._scroll_to_end_token = 0
+            self._scroll_to_end_smooth = False
             self._restore_scroll_pending = False
             self._restore_scroll_y: float | None = None
             self._cancel_requested = Event()
             self._active_worker = None
+            self._worker_event_counts: dict[str, int] = {}
             self._spinner_index = 0
             self._collapsed_sections: dict[str, bool] = {}
             self._restored_session: StoredAgentSession | None = None
@@ -1113,6 +1149,11 @@ def run_agent_tui(
             yield Footer()
 
         def on_mount(self) -> None:
+            self._debug_log(
+                'mount',
+                session=bool(self._active_session_id),
+                conversations=len(self._conversations),
+            )
             self.set_interval(0.25, self._tick_spinner)
             self._set_command_picker_visible(False)
             self._refresh_attachment_shelf()
@@ -1281,10 +1322,12 @@ def run_agent_tui(
         def on_mouse_scroll_up(self, event) -> None:
             if self._event_targets_conversation(event):
                 self._cancel_pending_scroll_to_end()
+                self.call_after_refresh(self._sync_conversation_follow_to_position)
 
         def on_mouse_scroll_down(self, event) -> None:
             if self._event_targets_conversation(event):
                 self._cancel_pending_scroll_to_end()
+                self.call_after_refresh(self._sync_conversation_follow_to_position)
 
         def _handle_conversation_scroll_key(self, event: events.Key, prompt: PromptInput) -> bool:
             key = event.key
@@ -1307,7 +1350,8 @@ def run_agent_tui(
                 self._scroll_conversation_to_y(0.0)
                 return True
             self._cancel_pending_scroll_to_end()
-            self._scroll_conversation_to_current_end()
+            self._conversation_follow_bottom = True
+            self._scroll_conversation_to_current_end(smooth=True)
             return True
 
         def _route_key_to_prompt(self, event: events.Key, prompt: PromptInput) -> bool:
@@ -1514,6 +1558,7 @@ def run_agent_tui(
                 self._state.session_id = target.session_id
             self._bridge = self._make_bridge(self._state)
             self._selected_turn_id = target.turns[-1].turn_id if target.turns else None
+            self._reset_conversation_scroll_state()
             self._bridge.restore_history(target.turns, announce_activity=False)
             self._persist_history()
             self._refresh_all_panels()
@@ -1700,6 +1745,18 @@ def run_agent_tui(
                 on_activity_change=self._handle_activity_change,
             )
 
+        def _debug_log(self, event: str, **fields: object) -> None:
+            try:
+                self._tui_log_path.parent.mkdir(parents=True, exist_ok=True)
+                parts = [_utc_log_timestamp(), event]
+                for key, value in fields.items():
+                    rendered = _preview_value(value, max_chars=180)
+                    parts.append(f'{key}={rendered}')
+                with self._tui_log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(' '.join(parts).rstrip() + '\n')
+            except Exception:
+                return
+
         def _active_conversation(self) -> ConversationThread:
             for conversation in self._conversations:
                 if conversation.conversation_id == self._active_conversation_id:
@@ -1800,6 +1857,7 @@ def run_agent_tui(
                     self._selected_turn_id = (
                         conversation.turns[-1].turn_id if conversation.turns else None
                     )
+                    self._reset_conversation_scroll_state()
                     self._bridge.restore_history(conversation.turns, announce_activity=False)
                     self._refresh_all_panels()
                     self._persist_history()
@@ -2056,7 +2114,7 @@ def run_agent_tui(
 
         def _refresh_conversation_view(self, *, allow_stick_to_bottom: bool = True) -> None:
             scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
-            previous_scroll_y = getattr(scroll_container, 'scroll_y', 0.0)
+            previous_scroll_y = self._conversation_scroll_y(scroll_container)
             was_at_end = self._conversation_at_end()
             last_turn_id = (
                 self._conversation_turns[-1].turn_id if self._conversation_turns else None
@@ -2075,10 +2133,18 @@ def run_agent_tui(
                 spinner_index=self._spinner_index,
                 collapsed_sections=self._collapsed_sections,
             )
-            if allow_stick_to_bottom and selected_latest_turn and was_at_end:
-                self._schedule_conversation_scroll_to_end()
+            if should_follow_conversation_bottom(
+                allow_stick_to_bottom=allow_stick_to_bottom,
+                selected_latest_turn=selected_latest_turn,
+                was_at_end=was_at_end,
+                following_bottom=self._conversation_follow_bottom,
+            ):
+                self._schedule_conversation_scroll_to_end(smooth=False)
                 return
-            self._schedule_conversation_scroll_restore(previous_scroll_y)
+            self._cancel_pending_scroll_to_end()
+            if self._conversation_pinned_scroll_y is None:
+                self._conversation_pinned_scroll_y = previous_scroll_y
+            self._schedule_conversation_scroll_restore(self._conversation_pinned_scroll_y)
 
         def _refresh_history_list(self) -> None:
             option_list = self.query_one('#history-list', OptionList)
@@ -2137,18 +2203,43 @@ def run_agent_tui(
         def _conversation_scroll_container(self):
             return self.query_one('#conversation-scroll', VerticalScroll)
 
+        def _conversation_scroll_y(self, container=None) -> float:
+            if container is None:
+                container = self._conversation_scroll_container()
+            try:
+                return float(getattr(container, 'scroll_y', 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
         def _conversation_at_end(self) -> bool:
             container = self._conversation_scroll_container()
-            try:
-                scroll_y = float(getattr(container, 'scroll_y', 0.0))
-                max_scroll_y = float(getattr(container, 'max_scroll_y', 0.0))
-            except (TypeError, ValueError):
-                return True
-            return max_scroll_y - scroll_y <= 1.0
+            return conversation_scroll_is_at_end(
+                getattr(container, 'scroll_y', 0.0),
+                getattr(container, 'max_scroll_y', 0.0),
+            )
+
+        def _sync_conversation_follow_to_position(self) -> None:
+            self._conversation_follow_bottom = self._conversation_at_end()
+            self._conversation_pinned_scroll_y = (
+                None
+                if self._conversation_follow_bottom
+                else self._conversation_scroll_y()
+            )
 
         def _cancel_pending_scroll_to_end(self) -> None:
+            self._conversation_follow_bottom = False
             self._scroll_to_end_pending = False
             self._scroll_to_end_token += 1
+            self._scroll_to_end_smooth = False
+
+        def _reset_conversation_scroll_state(self) -> None:
+            self._conversation_follow_bottom = True
+            self._conversation_pinned_scroll_y = None
+            self._restore_scroll_pending = False
+            self._restore_scroll_y = None
+            self._scroll_to_end_pending = False
+            self._scroll_to_end_token += 1
+            self._scroll_to_end_smooth = False
 
         def _scroll_conversation_by_pages(self, pages: int) -> None:
             container = self._conversation_scroll_container()
@@ -2159,32 +2250,51 @@ def run_agent_tui(
             target_y = max(0.0, min(max_y, current_y + (pages * page_height)))
             self._scroll_conversation_to_y(target_y)
 
-        def _scroll_conversation_to_y(self, y: float) -> None:
+        def _scroll_conversation_to_y(self, y: float, *, smooth: bool = False) -> None:
             container = self._conversation_scroll_container()
             try:
-                container.scroll_to(y=y, animate=False, immediate=True)
+                container.scroll_to(y=y, animate=smooth, immediate=not smooth)
             except TypeError:
                 try:
-                    container.scroll_to(y=y, animate=False)
+                    container.scroll_to(y=y, animate=smooth)
+                except TypeError:
+                    try:
+                        container.scroll_to(y=y)
+                    except Exception:
+                        return
                 except Exception:
                     return
             except Exception:
                 return
+            self._sync_conversation_follow_to_position()
 
-        def _scroll_conversation_to_current_end(self) -> None:
+        def _scroll_conversation_to_current_end(self, *, smooth: bool = False) -> None:
             try:
                 container = self.query_one('#conversation-scroll', VerticalScroll)
             except Exception:
                 return
             try:
-                container.scroll_end(animate=False, immediate=True)
+                container.scroll_end(animate=smooth, immediate=not smooth)
             except TypeError:
                 try:
-                    container.scroll_end(animate=False)
+                    container.scroll_end(animate=smooth)
+                except TypeError:
+                    try:
+                        container.scroll_end()
+                    except AttributeError:
+                        return
+                    except Exception:
+                        return
                 except AttributeError:
+                    return
+                except Exception:
                     return
             except AttributeError:
                 return
+            except Exception:
+                return
+            self._conversation_follow_bottom = True
+            self._conversation_pinned_scroll_y = None
 
         def _scroll_conversation_to_end(self, token: int) -> None:
             if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
@@ -2194,19 +2304,28 @@ def run_agent_tui(
         def _finish_scroll_conversation_to_end(self, token: int, attempt: int) -> None:
             if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
                 return
-            self._scroll_conversation_to_current_end()
+            self._scroll_conversation_to_current_end(
+                smooth=self._scroll_to_end_smooth and attempt == 0
+            )
             if attempt < 2:
                 self.set_timer(
-                    0.05 if attempt == 0 else 0.10,
+                    0.04 if attempt == 0 else 0.10,
                     lambda: self._finish_scroll_conversation_to_end(token, attempt + 1),
                 )
                 return
             self._scroll_to_end_pending = False
+            self._scroll_to_end_smooth = False
 
-        def _schedule_conversation_scroll_to_end(self) -> None:
+        def _schedule_conversation_scroll_to_end(self, *, smooth: bool = False) -> None:
             self._restore_scroll_y = None
+            self._conversation_follow_bottom = True
+            self._conversation_pinned_scroll_y = None
+            if self._scroll_to_end_pending:
+                self._scroll_to_end_smooth = smooth
+                return
             self._scroll_to_end_pending = True
             self._scroll_to_end_token += 1
+            self._scroll_to_end_smooth = smooth
             token = self._scroll_to_end_token
             self.call_after_refresh(lambda: self._scroll_conversation_to_end(token))
 
@@ -2237,6 +2356,7 @@ def run_agent_tui(
                     return
             except Exception:
                 return
+            self._conversation_follow_bottom = False
 
         def _tick_spinner(self) -> None:
             if not self._state.busy:
@@ -2255,7 +2375,14 @@ def run_agent_tui(
                 return
             effective_prompt = runtime_prompt or prompt
             self._cancel_requested.clear()
-            self._schedule_conversation_scroll_to_end()
+            self._worker_event_counts.clear()
+            self._debug_log(
+                'submit_prompt',
+                turns=len(self._conversation_turns),
+                session=bool(self._active_session_id),
+                attachments=len(prompt_blocks),
+            )
+            self._schedule_conversation_scroll_to_end(smooth=True)
             self._bridge.begin_prompt(prompt, session_id=self._active_session_id)
             self._active_worker = self._run_prompt(effective_prompt, prompt_blocks)
 
@@ -2265,6 +2392,11 @@ def run_agent_tui(
             prompt: str,
             prompt_blocks: tuple[dict[str, object], ...] = (),
         ) -> None:
+            self._debug_log(
+                'worker_start',
+                session=bool(self._active_session_id),
+                attachments=len(prompt_blocks),
+            )
             try:
                 stored_session = None
                 if self._active_session_id:
@@ -2288,38 +2420,67 @@ def run_agent_tui(
                 if self._cancel_requested.is_set():
                     raise _TuiRunCancelled()
             except _TuiRunCancelled:
+                self._debug_log('worker_cancelled')
                 self.call_from_thread(self._finish_cancelled_prompt)
                 return
             except BaseException as exc:
+                self._debug_log('worker_failed', error=repr(exc))
                 self.call_from_thread(self._finish_failed_prompt, exc)
                 return
+            self._debug_log(
+                'worker_finished',
+                turns=result.turns,
+                tools=result.tool_calls,
+                stop=result.stop_reason,
+            )
             self.call_from_thread(self._finish_prompt, result)
 
         def _handle_event_from_worker(self, event: dict[str, object]) -> None:
             if self._cancel_requested.is_set():
                 raise _TuiRunCancelled()
+            event_type = str(event.get('type') or 'unknown')
+            count = self._worker_event_counts.get(event_type, 0) + 1
+            self._worker_event_counts[event_type] = count
+            if event_type != 'content_delta' or count in {1, 25, 100} or count % 250 == 0:
+                self._debug_log('worker_event', type=event_type, count=count)
             self.call_from_thread(self._bridge.handle_event, dict(event))
 
         def _finish_cancelled_prompt(self) -> None:
+            self._debug_log('finish_cancelled_start')
             self._active_worker = None
             self._cancel_requested.clear()
             self._bridge.cancel('Stopped by user')
             self._persist_history()
+            self._debug_log('finish_cancelled_done')
 
         def _finish_failed_prompt(self, error: BaseException) -> None:
+            self._debug_log('finish_failed_start', error=repr(error))
             self._active_worker = None
             self._cancel_requested.clear()
             self._bridge.fail(error)
             self._persist_history()
+            self._debug_log('finish_failed_done')
 
         def _finish_prompt(self, result: AgentRunResult) -> None:
+            self._debug_log(
+                'finish_prompt_start',
+                turns=result.turns,
+                tools=result.tool_calls,
+                stop=result.stop_reason,
+            )
             self._active_worker = None
             if self._cancel_requested.is_set():
                 self._finish_cancelled_prompt()
                 return
             self._active_session_id = result.session_id or self._active_session_id
             self._bridge.complete(result)
+            self._debug_log(
+                'finish_prompt_bridge_complete',
+                busy=self._state.busy,
+                turns=len(self._conversation_turns),
+            )
             self._persist_history()
+            self._debug_log('finish_prompt_done')
 
         def _persist_history(self) -> None:
             try:
@@ -2338,6 +2499,7 @@ def run_agent_tui(
                     active_conversation_id=self._active_conversation_id,
                 )
             except OSError:
+                self._debug_log('persist_history_failed')
                 return
 
         def _delete_session_file(self, session_id: str | None) -> None:
