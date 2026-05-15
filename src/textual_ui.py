@@ -248,6 +248,53 @@ def render_changes_panel_body(
     return '\n'.join(lines).rstrip()
 
 
+def render_changes_detail_panel_title(
+    event: dict[str, object] | None,
+    *,
+    color: bool = False,
+) -> object:
+    if not event:
+        return 'Added / Removed'
+    added = _coerce_positive_int(event.get('added_lines'))
+    removed = _coerce_positive_int(event.get('removed_lines'))
+    if color and Text is not None:
+        title = Text('Added / Removed ')
+        _append_colored_change_counts(title, added=added, removed=removed)
+        return title
+    return f'Added / Removed +{added} -{removed}'
+
+
+def render_changes_detail_panel_body(
+    event: dict[str, object] | None,
+    *,
+    color: bool = False,
+) -> object:
+    if not event:
+        return 'No added or removed lines available.'
+    if color and Text is not None:
+        return _render_changes_detail_panel_body_text(event)
+
+    lines: list[str] = []
+    files = event.get('files')
+    if isinstance(files, list):
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            rendered = _render_changes_detail_file(file_payload)
+            if rendered:
+                if lines:
+                    lines.append('')
+                lines.extend(rendered)
+    truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+    if truncated_file_count:
+        if lines:
+            lines.append('')
+        lines.append(f'... {truncated_file_count} more changed file(s)')
+    if not lines:
+        return 'No added or removed lines available.'
+    return '\n'.join(lines).rstrip()
+
+
 def _render_changes_panel_body_text(event: dict[str, object]) -> object:
     file_count = _coerce_positive_int(event.get('file_count'))
     added = _coerce_positive_int(event.get('added_lines'))
@@ -271,6 +318,30 @@ def _render_changes_panel_body_text(event: dict[str, object]) -> object:
     return rendered
 
 
+def _render_changes_detail_panel_body_text(event: dict[str, object]) -> object:
+    rendered = Text()
+    files = event.get('files')
+    has_content = False
+    if isinstance(files, list):
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            has_content = (
+                _append_changes_detail_file_text(rendered, file_payload)
+                or has_content
+            )
+    truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+    if truncated_file_count:
+        if has_content:
+            rendered.append('\n')
+        rendered.append(f'... {truncated_file_count} more changed file(s)')
+        has_content = True
+    if not has_content:
+        rendered.append('No added or removed lines available.')
+    rendered.rstrip()
+    return rendered
+
+
 def _render_changes_panel_file(file_payload: dict[str, object]) -> str:
     path = _preview_value(file_payload.get('path'), max_chars=160)
     if not path:
@@ -280,6 +351,33 @@ def _render_changes_panel_file(file_payload: dict[str, object]) -> str:
     status = _preview_value(file_payload.get('status')) or 'modified'
     suffix = '' if status == 'modified' else f' {status}'
     return f'- {path} +{added} -{removed}{suffix}'
+
+
+def _render_changes_detail_file(file_payload: dict[str, object]) -> list[str]:
+    path = _preview_value(file_payload.get('path'), max_chars=160)
+    if not path:
+        return []
+    added_lines, removed_lines, truncated = _extract_diff_added_removed_lines(
+        file_payload.get('diff')
+    )
+    if not added_lines and not removed_lines:
+        if file_payload.get('binary'):
+            return [f'{path}', 'binary or non-text file']
+        if file_payload.get('content_truncated'):
+            return [f'{path}', 'large file; diff omitted']
+        return []
+    added = _coerce_positive_int(file_payload.get('added_lines'))
+    removed = _coerce_positive_int(file_payload.get('removed_lines'))
+    lines = [f'{path} +{added} -{removed}']
+    if added_lines:
+        lines.append('Added')
+        lines.extend(added_lines)
+    if removed_lines:
+        lines.append('Removed')
+        lines.extend(removed_lines)
+    if truncated or file_payload.get('diff_truncated'):
+        lines.append('...[diff truncated]...')
+    return lines
 
 
 def _append_changes_panel_file_text(
@@ -305,6 +403,70 @@ def _append_changes_panel_file_text(
     rendered.append('\n')
 
 
+def _append_changes_detail_file_text(
+    rendered: object,
+    file_payload: dict[str, object],
+) -> bool:
+    if Text is None or not isinstance(rendered, Text):
+        return False
+    path = _preview_value(file_payload.get('path'), max_chars=160)
+    if not path:
+        return False
+    added_lines, removed_lines, truncated = _extract_diff_added_removed_lines(
+        file_payload.get('diff')
+    )
+    if not added_lines and not removed_lines:
+        if file_payload.get('binary'):
+            _append_changes_detail_message(rendered, path, 'binary or non-text file')
+            return True
+        if file_payload.get('content_truncated'):
+            _append_changes_detail_message(rendered, path, 'large file; diff omitted')
+            return True
+        return False
+    if len(rendered):
+        rendered.append('\n\n')
+    status = _preview_value(file_payload.get('status')) or 'modified'
+    rendered.append(path, style=_change_status_style(status))
+    rendered.append(' ')
+    _append_colored_change_counts(
+        rendered,
+        added=_coerce_positive_int(file_payload.get('added_lines')),
+        removed=_coerce_positive_int(file_payload.get('removed_lines')),
+    )
+    if status != 'modified':
+        rendered.append(' ')
+        rendered.append(status, style=_change_status_style(status))
+    rendered.append('\n')
+    if added_lines:
+        rendered.append('Added\n', style='bold green')
+        for line in added_lines:
+            rendered.append(line, style='green')
+            rendered.append('\n')
+    if removed_lines:
+        rendered.append('Removed\n', style='bold red')
+        for line in removed_lines:
+            rendered.append(line, style='red')
+            rendered.append('\n')
+    if truncated or file_payload.get('diff_truncated'):
+        rendered.append('...[diff truncated]...', style='yellow')
+    rendered.rstrip()
+    return True
+
+
+def _append_changes_detail_message(
+    rendered: object,
+    path: str,
+    message: str,
+) -> None:
+    if Text is None or not isinstance(rendered, Text):
+        return
+    if len(rendered):
+        rendered.append('\n\n')
+    rendered.append(path)
+    rendered.append('\n')
+    rendered.append(message)
+
+
 def _append_colored_change_counts(
     rendered: object,
     *,
@@ -324,6 +486,26 @@ def _change_status_style(status: str) -> str:
     if status == 'deleted':
         return 'red'
     return ''
+
+
+def _extract_diff_added_removed_lines(diff: object) -> tuple[list[str], list[str], bool]:
+    if not isinstance(diff, str) or not diff.strip():
+        return [], [], False
+    added: list[str] = []
+    removed: list[str] = []
+    truncated = False
+    for raw_line in diff.splitlines():
+        if raw_line == '...[diff truncated]...':
+            truncated = True
+            continue
+        if raw_line.startswith('+++') or raw_line.startswith('---'):
+            continue
+        if raw_line.startswith('+'):
+            added.append(_preview_value(raw_line, max_chars=240) or '+')
+            continue
+        if raw_line.startswith('-'):
+            removed.append(_preview_value(raw_line, max_chars=240) or '-')
+    return added, removed, truncated
 
 
 def _coerce_positive_int(value: object) -> int:
@@ -1161,6 +1343,26 @@ def run_agent_tui(
             color: #e6edf3;
         }
 
+        #changes-detail-panel {
+            height: auto;
+            margin: 0 1 1 1;
+            border: round #3b4b5c;
+            background: #0f1720;
+        }
+
+        #changes-detail-scroll {
+            width: 1fr;
+            height: auto;
+            max-height: 18;
+        }
+
+        #changes-detail-body {
+            width: 1fr;
+            height: auto;
+            padding: 0 1;
+            color: #e6edf3;
+        }
+
         #attachment-summary {
             width: 1fr;
             height: auto;
@@ -1308,6 +1510,17 @@ def run_agent_tui(
             changes_panel.id = 'changes-panel'
             with changes_panel:
                 yield Static('No changes in this conversation.', id='changes-body')
+                changes_detail_panel = Collapsible(
+                    title='Added / Removed',
+                    collapsed=True,
+                )
+                changes_detail_panel.id = 'changes-detail-panel'
+                with changes_detail_panel:
+                    with VerticalScroll(id='changes-detail-scroll'):
+                        yield Static(
+                            'No added or removed lines available.',
+                            id='changes-detail-body',
+                        )
             with Horizontal(id='prompt-row'):
                 yield PromptInput(
                     placeholder='Type a task, / command, @ workspace path, or paste/drop file paths',
@@ -2128,10 +2341,13 @@ def run_agent_tui(
             try:
                 panel = self.query_one('#changes-panel', Collapsible)
                 body = self.query_one('#changes-body', Static)
+                detail_panel = self.query_one('#changes-detail-panel', Collapsible)
+                detail_body = self.query_one('#changes-detail-body', Static)
             except Exception:
                 return
             has_changes = self._changes_summary_event is not None
             panel.display = has_changes
+            detail_panel.display = has_changes
             title = render_changes_panel_title(
                 self._changes_summary_event,
                 color=True,
@@ -2142,6 +2358,22 @@ def run_agent_tui(
                 panel.title = render_changes_panel_title(self._changes_summary_event)
             body.update(
                 render_changes_panel_body(
+                    self._changes_summary_event,
+                    color=True,
+                )
+            )
+            detail_title = render_changes_detail_panel_title(
+                self._changes_summary_event,
+                color=True,
+            )
+            try:
+                detail_panel.title = detail_title
+            except Exception:
+                detail_panel.title = render_changes_detail_panel_title(
+                    self._changes_summary_event
+                )
+            detail_body.update(
+                render_changes_detail_panel_body(
                     self._changes_summary_event,
                     color=True,
                 )

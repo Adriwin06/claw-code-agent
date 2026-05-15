@@ -122,9 +122,22 @@ def _merge_workspace_change_file(
     )
     for key in ('binary', 'content_truncated', 'diff_truncated'):
         merged[key] = bool(existing.get(key) or incoming.get(key))
-    diff = incoming.get('diff')
-    if isinstance(diff, str) and diff.strip():
-        merged['diff'] = diff
+    existing_diff = existing.get('diff')
+    incoming_diff = incoming.get('diff')
+    if isinstance(existing_diff, str) and existing_diff.strip():
+        if isinstance(incoming_diff, str) and incoming_diff.strip():
+            if incoming_diff.strip() != existing_diff.strip():
+                merged['diff'] = (
+                    existing_diff.rstrip()
+                    + '\n\n# later change\n'
+                    + incoming_diff.rstrip()
+                )
+            else:
+                merged['diff'] = existing_diff
+        else:
+            merged['diff'] = existing_diff
+    elif isinstance(incoming_diff, str) and incoming_diff.strip():
+        merged['diff'] = incoming_diff
     return merged
 
 

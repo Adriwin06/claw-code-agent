@@ -26,6 +26,8 @@ from src.textual_ui import (
     copy_external_attachment,
     build_working_section_id,
     build_working_section_instance_id,
+    render_changes_detail_panel_body,
+    render_changes_detail_panel_title,
     render_changes_panel_body,
     render_changes_panel_title,
     build_slash_command_suggestions,
@@ -912,6 +914,78 @@ class TextualUiTests(unittest.TestCase):
             ['src/app.py', 'tests/test_app.py'],
         )
 
+    def test_event_bridge_preserves_same_file_diffs_across_prompts(self) -> None:
+        changes: list[dict[str, object] | None] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(
+            state,
+            emit_data=lambda _text: None,
+            on_changes_change=changes.append,
+        )
+        first_change = {
+            'type': 'workspace_change_recap',
+            'file_count': 1,
+            'changed_paths': ['src/app.py'],
+            'added_lines': 1,
+            'removed_lines': 1,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 1,
+                    'removed_lines': 1,
+                    'diff': '--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new',
+                }
+            ],
+        }
+        second_change = {
+            'type': 'workspace_change_summary',
+            'file_count': 1,
+            'changed_paths': ['src/app.py'],
+            'added_lines': 1,
+            'removed_lines': 1,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 1,
+                    'removed_lines': 1,
+                    'diff': '--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-new\n+newer',
+                }
+            ],
+        }
+
+        bridge.begin_prompt('First change')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Done.',
+                turns=1,
+                tool_calls=1,
+                transcript=(),
+                stop_reason='stop',
+                events=(first_change,),
+            )
+        )
+        bridge.begin_prompt('Second change')
+        bridge.handle_event(second_change)
+
+        self.assertIsNotNone(changes[-1])
+        assert changes[-1] is not None
+        self.assertEqual(changes[-1].get('file_count'), 1)
+        self.assertEqual(changes[-1].get('added_lines'), 2)
+        self.assertEqual(changes[-1].get('removed_lines'), 2)
+        files = changes[-1].get('files', [])
+        self.assertIsInstance(files, list)
+        diff = files[0].get('diff') if files and isinstance(files[0], dict) else ''
+        self.assertIn('+new', diff)
+        self.assertIn('+newer', diff)
+        self.assertIn('-old', diff)
+        self.assertIn('-new', diff)
+
     def test_render_changes_panel_body_lists_files(self) -> None:
         event = {
             'file_count': 2,
@@ -971,6 +1045,74 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('Changes: 2 files changed +7 -3', str(title))
         self.assertIn('src/app.py +4 -3', str(rendered))
         self.assertIn('tests/test_app.py +3 -0 added', str(rendered))
+        styles = {str(span.style) for span in (*title.spans, *rendered.spans)}
+        self.assertIn('green', styles)
+        self.assertIn('red', styles)
+
+    def test_render_changes_detail_panel_body_lists_added_and_removed_lines(self) -> None:
+        event = {
+            'file_count': 1,
+            'added_lines': 2,
+            'removed_lines': 1,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 2,
+                    'removed_lines': 1,
+                    'diff': (
+                        '--- a/src/app.py\n'
+                        '+++ b/src/app.py\n'
+                        '@@ -1,2 +1,3 @@\n'
+                        ' context\n'
+                        '-old line\n'
+                        '+new line\n'
+                        '+another line'
+                    ),
+                }
+            ],
+        }
+
+        self.assertEqual(
+            render_changes_detail_panel_title(event),
+            'Added / Removed +2 -1',
+        )
+        rendered = render_changes_detail_panel_body(event)
+
+        self.assertIn('src/app.py +2 -1', rendered)
+        self.assertIn('Added', rendered)
+        self.assertIn('+new line', rendered)
+        self.assertIn('+another line', rendered)
+        self.assertIn('Removed', rendered)
+        self.assertIn('-old line', rendered)
+        self.assertNotIn('context', rendered)
+
+    def test_render_changes_detail_panel_body_can_color_lines(self) -> None:
+        from rich.text import Text
+
+        event = {
+            'file_count': 1,
+            'added_lines': 1,
+            'removed_lines': 1,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 1,
+                    'removed_lines': 1,
+                    'diff': '--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new',
+                }
+            ],
+        }
+
+        title = render_changes_detail_panel_title(event, color=True)
+        rendered = render_changes_detail_panel_body(event, color=True)
+
+        self.assertIsInstance(title, Text)
+        self.assertIsInstance(rendered, Text)
+        self.assertIn('Added / Removed +1 -1', str(title))
+        self.assertIn('+new', str(rendered))
+        self.assertIn('-old', str(rendered))
         styles = {str(span.style) for span in (*title.spans, *rendered.spans)}
         self.assertIn('green', styles)
         self.assertIn('red', styles)
@@ -1806,6 +1948,14 @@ class TextualUiTests(unittest.TestCase):
                                 'status': 'modified',
                                 'added_lines': 2,
                                 'removed_lines': 1,
+                                'diff': (
+                                    '--- a/src/app.py\n'
+                                    '+++ b/src/app.py\n'
+                                    '@@ -1 +1,2 @@\n'
+                                    '-old\n'
+                                    '+new\n'
+                                    '+another'
+                                ),
                             }
                         ],
                     }
@@ -1814,9 +1964,18 @@ class TextualUiTests(unittest.TestCase):
 
                 panel = app.query_one('#changes-panel')
                 body = app.query_one('#changes-body')
+                detail_panel = app.query_one('#changes-detail-panel')
+                detail_body = app.query_one('#changes-detail-body')
                 self.assertTrue(bool(getattr(panel, 'display', False)))
                 self.assertIn('Changes: 1 file changed +2 -1', str(getattr(panel, 'title', '')))
                 self.assertIn('src/app.py +2 -1', str(getattr(body, 'renderable', '')))
+                self.assertTrue(bool(getattr(detail_panel, 'display', False)))
+                self.assertIn(
+                    'Added / Removed +2 -1',
+                    str(getattr(detail_panel, 'title', '')),
+                )
+                self.assertIn('+new', str(getattr(detail_body, 'renderable', '')))
+                self.assertIn('-old', str(getattr(detail_body, 'renderable', '')))
                 self.assertLess(panel.region.y, app.query_one('#prompt-row').region.y)
 
         asyncio.run(exercise())
