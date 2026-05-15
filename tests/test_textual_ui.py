@@ -845,6 +845,73 @@ class TextualUiTests(unittest.TestCase):
         assert changes[-1] is not None
         self.assertEqual(changes[-1].get('file_count'), 1)
 
+    def test_event_bridge_accumulates_change_summaries_across_prompts(self) -> None:
+        changes: list[dict[str, object] | None] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(
+            state,
+            emit_data=lambda _text: None,
+            on_changes_change=changes.append,
+        )
+        first_change = {
+            'type': 'workspace_change_recap',
+            'file_count': 1,
+            'changed_paths': ['src/app.py'],
+            'added_lines': 2,
+            'removed_lines': 1,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 2,
+                    'removed_lines': 1,
+                }
+            ],
+        }
+        second_change = {
+            'type': 'workspace_change_summary',
+            'file_count': 1,
+            'changed_paths': ['tests/test_app.py'],
+            'added_lines': 3,
+            'removed_lines': 0,
+            'files': [
+                {
+                    'path': 'tests/test_app.py',
+                    'status': 'added',
+                    'added_lines': 3,
+                    'removed_lines': 0,
+                }
+            ],
+        }
+
+        bridge.begin_prompt('First change')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Done.',
+                turns=1,
+                tool_calls=1,
+                transcript=(),
+                stop_reason='stop',
+                events=(first_change,),
+            )
+        )
+        bridge.begin_prompt('Second change')
+        bridge.handle_event(second_change)
+
+        self.assertIsNotNone(changes[-1])
+        assert changes[-1] is not None
+        self.assertEqual(changes[-1].get('file_count'), 2)
+        self.assertEqual(changes[-1].get('added_lines'), 5)
+        self.assertEqual(changes[-1].get('removed_lines'), 1)
+        self.assertEqual(
+            [file.get('path') for file in changes[-1].get('files', [])],
+            ['src/app.py', 'tests/test_app.py'],
+        )
+
     def test_render_changes_panel_body_lists_files(self) -> None:
         event = {
             'file_count': 2,
@@ -872,6 +939,41 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('2 files changed +7 -3', rendered)
         self.assertIn('src/app.py +4 -3', rendered)
         self.assertIn('tests/test_app.py +3 -0 added', rendered)
+
+    def test_render_changes_panel_body_can_color_added_and_removed_counts(self) -> None:
+        from rich.text import Text
+
+        event = {
+            'file_count': 2,
+            'added_lines': 7,
+            'removed_lines': 3,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 4,
+                    'removed_lines': 3,
+                },
+                {
+                    'path': 'tests/test_app.py',
+                    'status': 'added',
+                    'added_lines': 3,
+                    'removed_lines': 0,
+                },
+            ],
+        }
+
+        title = render_changes_panel_title(event, color=True)
+        rendered = render_changes_panel_body(event, color=True)
+
+        self.assertIsInstance(title, Text)
+        self.assertIsInstance(rendered, Text)
+        self.assertIn('Changes: 2 files changed +7 -3', str(title))
+        self.assertIn('src/app.py +4 -3', str(rendered))
+        self.assertIn('tests/test_app.py +3 -0 added', str(rendered))
+        styles = {str(span.style) for span in (*title.spans, *rendered.spans)}
+        self.assertIn('green', styles)
+        self.assertIn('red', styles)
 
     def test_event_bridge_emits_final_output_when_response_is_not_streamed(self) -> None:
         chunks: list[str] = []

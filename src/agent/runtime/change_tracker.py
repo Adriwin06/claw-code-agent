@@ -108,7 +108,7 @@ class WorkspaceChangeTracker:
         self._initial_baseline = self._snapshot_workspace()
         self._baseline = self._initial_baseline
         self._sequence = 0
-        self._touched_paths: set[str] = set()
+        self._change_history: list[WorkspaceChange] = []
 
     def collect_tool_changes(
         self,
@@ -122,7 +122,7 @@ class WorkspaceChangeTracker:
         if not changes:
             return None
 
-        self._touched_paths.update(change.path for change in changes)
+        self._change_history.extend(changes)
         self._sequence += 1
         event = self._changes_to_event(changes, event_type='workspace_change')
         event.update(
@@ -140,19 +140,84 @@ class WorkspaceChangeTracker:
         *,
         event_type: str = 'workspace_change_recap',
     ) -> dict[str, object] | None:
-        if not self._touched_paths:
+        if not self._change_history:
             return None
-        changes = [
-            change
-            for change in self._diff_snapshots(self._initial_baseline, self._baseline)
-            if change.path in self._touched_paths
-        ]
+        changes = self._aggregate_change_history()
         if not changes:
             return None
         return self._changes_to_event(
             changes,
             event_type=event_type,
         )
+
+    def _aggregate_change_history(self) -> list[WorkspaceChange]:
+        changes_by_path: dict[str, list[WorkspaceChange]] = {}
+        for change in self._change_history:
+            changes_by_path.setdefault(change.path, []).append(change)
+        return [
+            self._aggregate_path_changes(path, changes_by_path[path])
+            for path in sorted(changes_by_path)
+        ]
+
+    def _aggregate_path_changes(
+        self,
+        path: str,
+        changes: list[WorkspaceChange],
+    ) -> WorkspaceChange:
+        first = changes[0]
+        last = changes[-1]
+        before = first.before
+        after = last.after
+        if before is None and after is None:
+            status = 'changed'
+        elif before is None:
+            status = 'added'
+        elif after is None:
+            status = 'deleted'
+        else:
+            status = 'modified'
+        diff, diff_truncated = self._join_change_diffs(changes)
+        return WorkspaceChange(
+            path=path,
+            status=status,
+            before=before,
+            after=after,
+            added_lines=sum(change.added_lines for change in changes),
+            removed_lines=sum(change.removed_lines for change in changes),
+            diff=diff,
+            diff_truncated=diff_truncated,
+        )
+
+    def _join_change_diffs(
+        self,
+        changes: list[WorkspaceChange],
+    ) -> tuple[str, bool]:
+        if len(changes) == 1:
+            change = changes[0]
+            return change.diff, change.diff_truncated
+
+        rendered_lines: list[str] = []
+        diff_truncated = any(change.diff_truncated for change in changes)
+        for index, change in enumerate(changes, start=1):
+            if not change.diff.strip():
+                continue
+            if rendered_lines:
+                rendered_lines.append('')
+            rendered_lines.append(
+                f'# change {index}: {change.status} {change.path} '
+                f'(+{change.added_lines} -{change.removed_lines})'
+            )
+            rendered_lines.extend(change.diff.rstrip().splitlines())
+        if len(rendered_lines) > self.max_diff_lines:
+            rendered_lines = rendered_lines[: self.max_diff_lines]
+            diff_truncated = True
+        rendered = '\n'.join(rendered_lines)
+        if len(rendered) > self.max_diff_chars:
+            rendered = rendered[: self.max_diff_chars].rstrip()
+            diff_truncated = True
+        if diff_truncated and rendered:
+            rendered = rendered.rstrip() + '\n...[diff truncated]...'
+        return rendered, diff_truncated
 
     def _changes_to_event(
         self,
@@ -166,7 +231,11 @@ class WorkspaceChangeTracker:
         removed_lines = sum(change.removed_lines for change in changes)
         status_counts = {
             'added': sum(1 for change in changes if change.status == 'added'),
-            'modified': sum(1 for change in changes if change.status == 'modified'),
+            'modified': sum(
+                1
+                for change in changes
+                if change.status not in {'added', 'deleted'}
+            ),
             'deleted': sum(1 for change in changes if change.status == 'deleted'),
         }
         changed_paths = [change.path for change in changes]

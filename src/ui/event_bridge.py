@@ -34,6 +34,130 @@ def _coerce_positive_int(value: object) -> int:
         return 0
 
 
+def _merge_workspace_change_events(
+    events: Sequence[dict[str, object]],
+) -> dict[str, object] | None:
+    event_list = [event for event in events if isinstance(event, dict)]
+    if not event_list:
+        return None
+
+    files_by_path: dict[str, dict[str, object]] = {}
+    changed_paths: list[str] = []
+    for event in event_list:
+        for path in _event_changed_paths(event):
+            if path not in changed_paths:
+                changed_paths.append(path)
+        files = event.get('files')
+        if not isinstance(files, list):
+            continue
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            path = file_payload.get('path')
+            if not isinstance(path, str):
+                path = ''
+            if not path:
+                continue
+            if path not in changed_paths:
+                changed_paths.append(path)
+            existing = files_by_path.get(path)
+            if existing is None:
+                files_by_path[path] = dict(file_payload)
+                continue
+            files_by_path[path] = _merge_workspace_change_file(
+                existing,
+                file_payload,
+            )
+
+    truncated_file_count = sum(
+        _coerce_positive_int(event.get('truncated_file_count'))
+        for event in event_list
+    )
+    files = [files_by_path[path] for path in changed_paths if path in files_by_path]
+    file_count = len(files) + truncated_file_count
+    if file_count <= 0:
+        file_count = sum(
+            _coerce_positive_int(event.get('file_count')) for event in event_list
+        )
+    return {
+        'type': 'workspace_change_summary',
+        'file_count': file_count,
+        'changed_paths': changed_paths,
+        'added_files': _count_workspace_change_status(files, 'added'),
+        'modified_files': _count_workspace_change_status(files, 'modified'),
+        'deleted_files': _count_workspace_change_status(files, 'deleted'),
+        'added_lines': sum(
+            _coerce_positive_int(event.get('added_lines')) for event in event_list
+        ),
+        'removed_lines': sum(
+            _coerce_positive_int(event.get('removed_lines')) for event in event_list
+        ),
+        'files': files,
+        'truncated_file_count': truncated_file_count,
+        'source_event_count': len(event_list),
+    }
+
+
+def _event_changed_paths(event: dict[str, object]) -> list[str]:
+    changed_paths = event.get('changed_paths')
+    if not isinstance(changed_paths, list):
+        return []
+    return [path for path in changed_paths if isinstance(path, str) and path]
+
+
+def _merge_workspace_change_file(
+    existing: dict[str, object],
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(existing)
+    merged['added_lines'] = _coerce_positive_int(
+        existing.get('added_lines')
+    ) + _coerce_positive_int(incoming.get('added_lines'))
+    merged['removed_lines'] = _coerce_positive_int(
+        existing.get('removed_lines')
+    ) + _coerce_positive_int(incoming.get('removed_lines'))
+    merged['status'] = _merge_workspace_change_status(
+        _preview_value(existing.get('status')) or 'modified',
+        _preview_value(incoming.get('status')) or 'modified',
+    )
+    for key in ('binary', 'content_truncated', 'diff_truncated'):
+        merged[key] = bool(existing.get(key) or incoming.get(key))
+    diff = incoming.get('diff')
+    if isinstance(diff, str) and diff.strip():
+        merged['diff'] = diff
+    return merged
+
+
+def _merge_workspace_change_status(existing: str, incoming: str) -> str:
+    if incoming == 'deleted':
+        return 'deleted'
+    if existing == 'added' and incoming in {'modified', 'changed'}:
+        return 'added'
+    if existing == 'deleted' and incoming == 'added':
+        return 'modified'
+    if incoming in {'added', 'modified', 'changed'}:
+        return incoming
+    return existing
+
+
+def _count_workspace_change_status(
+    files: Sequence[dict[str, object]],
+    status: str,
+) -> int:
+    if status == 'modified':
+        return sum(
+            1
+            for file_payload in files
+            if (_preview_value(file_payload.get('status')) or 'modified')
+            not in {'added', 'deleted'}
+        )
+    return sum(
+        1
+        for file_payload in files
+        if (_preview_value(file_payload.get('status')) or 'modified') == status
+    )
+
+
 class AgentTuiEventBridge:
     def __init__(
         self,
@@ -67,6 +191,7 @@ class AgentTuiEventBridge:
         self._delegate_output_buffers: dict[str, str] = {}
         self._active_turn_id: str | None = None
         self._workspace_change_summary: dict[str, object] | None = None
+        self._workspace_change_summaries_by_turn: dict[str, dict[str, object]] = {}
 
     @property
     def turns(self) -> tuple[ConversationTurn, ...]:
@@ -112,6 +237,7 @@ class AgentTuiEventBridge:
             for turn in turns
         ]
         self._workspace_change_summary = None
+        self._workspace_change_summaries_by_turn.clear()
         self._active_turn_id = self._turns[-1].turn_id if self._turns else None
         self.state.conversation_turns = len(self._turns)
         if turns and announce_activity:
@@ -132,7 +258,6 @@ class AgentTuiEventBridge:
         self._announced_tool_plans.clear()
         self._tool_stream_buffers.clear()
         self._delegate_output_buffers.clear()
-        self._workspace_change_summary = None
         self.state.busy = True
         self.state.status = 'Running'
         self.state.phase = 'Preparing'
@@ -597,6 +722,7 @@ class AgentTuiEventBridge:
         self._tool_stream_buffers.clear()
         self._delegate_output_buffers.clear()
         self._workspace_change_summary = None
+        self._workspace_change_summaries_by_turn.clear()
         self.state.activity_events = 0
         self._publish_activity()
         self._publish_changes()
@@ -1228,14 +1354,14 @@ class AgentTuiEventBridge:
     def _handle_workspace_change_summary(self, event: dict[str, object]) -> None:
         if not self._render_workspace_change_recap_summary(event):
             return
-        self._workspace_change_summary = dict(event)
+        self._record_workspace_change_summary(event)
         self._publish_changes()
 
     def _handle_workspace_change_recap(self, event: dict[str, object]) -> None:
         summary = self._render_workspace_change_recap_summary(event)
         if not summary:
             return
-        self._workspace_change_summary = dict(event)
+        self._record_workspace_change_summary(event)
         detail = self._render_workspace_change_recap_detail(event, summary)
         self._upsert_turn_entry(
             kind='workspace_change_recap',
@@ -1255,6 +1381,13 @@ class AgentTuiEventBridge:
         self._publish_activity()
         self._publish_changes()
         self._publish_state()
+
+    def _record_workspace_change_summary(self, event: dict[str, object]) -> None:
+        key = self._active_turn_id or 'workspace'
+        self._workspace_change_summaries_by_turn[key] = dict(event)
+        self._workspace_change_summary = _merge_workspace_change_events(
+            self._workspace_change_summaries_by_turn.values()
+        )
 
     def _render_workspace_change_summary(self, event: dict[str, object]) -> str:
         summary = _preview_value(event.get('summary'), max_chars=220)

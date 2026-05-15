@@ -84,6 +84,33 @@ class WorkspaceChangeTrackerTests(unittest.TestCase):
         self.assertEqual(recap['removed_lines'], 0)
         self.assertEqual(recap['files'][0]['path'], 'notes.txt')
 
+    def test_collect_run_recap_keeps_reverted_intermediate_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            target = workspace / 'notes.txt'
+            target.write_text('one\n', encoding='utf-8')
+            tracker = WorkspaceChangeTracker(workspace)
+
+            target.write_text('one\ntwo\n', encoding='utf-8')
+            tracker.collect_tool_changes(
+                tool_call=ToolCall(id='call-1', name='edit_file', arguments={}),
+                turn_index=1,
+            )
+            target.write_text('one\n', encoding='utf-8')
+            tracker.collect_tool_changes(
+                tool_call=ToolCall(id='call-2', name='edit_file', arguments={}),
+                turn_index=1,
+            )
+            recap = tracker.collect_run_recap()
+
+        self.assertIsNotNone(recap)
+        assert recap is not None
+        self.assertEqual(recap['file_count'], 1)
+        self.assertEqual(recap['changed_paths'], ['notes.txt'])
+        self.assertEqual(recap['added_lines'], 1)
+        self.assertEqual(recap['removed_lines'], 1)
+        self.assertEqual(recap['files'][0]['status'], 'modified')
+
 
 if __name__ == '__main__':
     unittest.main()

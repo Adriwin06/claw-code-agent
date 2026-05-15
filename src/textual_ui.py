@@ -6,6 +6,11 @@ from pathlib import Path
 from threading import Event
 from typing import Sequence
 
+try:
+    from rich.text import Text
+except ModuleNotFoundError:  # pragma: no cover - Rich is provided by Textual.
+    Text = None  # type: ignore[assignment]
+
 from src.agent.commands.slash import find_slash_command
 from src.agent.runtime.agent import LocalCodingAgent
 from src.agent.models.types import AgentRunResult
@@ -198,7 +203,11 @@ def render_working_entries_markdown(
     return rendered or '_No internal work details._'
 
 
-def render_changes_panel_title(event: dict[str, object] | None) -> str:
+def render_changes_panel_title(
+    event: dict[str, object] | None,
+    *,
+    color: bool = False,
+) -> object:
     if not event:
         return 'Changes'
     file_count = _coerce_positive_int(event.get('file_count'))
@@ -207,12 +216,22 @@ def render_changes_panel_title(event: dict[str, object] | None) -> str:
     if file_count <= 0:
         return 'Changes'
     label = 'file' if file_count == 1 else 'files'
+    if color and Text is not None:
+        title = Text(f'Changes: {file_count} {label} changed ')
+        _append_colored_change_counts(title, added=added, removed=removed)
+        return title
     return f'Changes: {file_count} {label} changed +{added} -{removed}'
 
 
-def render_changes_panel_body(event: dict[str, object] | None) -> str:
+def render_changes_panel_body(
+    event: dict[str, object] | None,
+    *,
+    color: bool = False,
+) -> object:
     if not event:
-        return 'No changes since the last prompt.'
+        return 'No changes in this conversation.'
+    if color and Text is not None:
+        return _render_changes_panel_body_text(event)
     title = render_changes_panel_title(event).removeprefix('Changes: ')
     lines = [title, '']
     files = event.get('files')
@@ -229,6 +248,29 @@ def render_changes_panel_body(event: dict[str, object] | None) -> str:
     return '\n'.join(lines).rstrip()
 
 
+def _render_changes_panel_body_text(event: dict[str, object]) -> object:
+    file_count = _coerce_positive_int(event.get('file_count'))
+    added = _coerce_positive_int(event.get('added_lines'))
+    removed = _coerce_positive_int(event.get('removed_lines'))
+    if file_count <= 0:
+        return Text('No changes in this conversation.')
+    label = 'file' if file_count == 1 else 'files'
+    rendered = Text(f'{file_count} {label} changed ')
+    _append_colored_change_counts(rendered, added=added, removed=removed)
+    rendered.append('\n\n')
+    files = event.get('files')
+    if isinstance(files, list):
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            _append_changes_panel_file_text(rendered, file_payload)
+    truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+    if truncated_file_count:
+        rendered.append(f'... {truncated_file_count} more changed file(s)\n')
+    rendered.rstrip()
+    return rendered
+
+
 def _render_changes_panel_file(file_payload: dict[str, object]) -> str:
     path = _preview_value(file_payload.get('path'), max_chars=160)
     if not path:
@@ -238,6 +280,50 @@ def _render_changes_panel_file(file_payload: dict[str, object]) -> str:
     status = _preview_value(file_payload.get('status')) or 'modified'
     suffix = '' if status == 'modified' else f' {status}'
     return f'- {path} +{added} -{removed}{suffix}'
+
+
+def _append_changes_panel_file_text(
+    rendered: object,
+    file_payload: dict[str, object],
+) -> None:
+    if Text is None or not isinstance(rendered, Text):
+        return
+    path = _preview_value(file_payload.get('path'), max_chars=160)
+    if not path:
+        return
+    added = _coerce_positive_int(file_payload.get('added_lines'))
+    removed = _coerce_positive_int(file_payload.get('removed_lines'))
+    status = _preview_value(file_payload.get('status')) or 'modified'
+    path_style = _change_status_style(status)
+    rendered.append('- ')
+    rendered.append(path, style=path_style)
+    rendered.append(' ')
+    _append_colored_change_counts(rendered, added=added, removed=removed)
+    if status != 'modified':
+        rendered.append(' ')
+        rendered.append(status, style=path_style)
+    rendered.append('\n')
+
+
+def _append_colored_change_counts(
+    rendered: object,
+    *,
+    added: int,
+    removed: int,
+) -> None:
+    if Text is None or not isinstance(rendered, Text):
+        return
+    rendered.append(f'+{added}', style='green')
+    rendered.append(' ')
+    rendered.append(f'-{removed}', style='red')
+
+
+def _change_status_style(status: str) -> str:
+    if status == 'added':
+        return 'green'
+    if status == 'deleted':
+        return 'red'
+    return ''
 
 
 def _coerce_positive_int(value: object) -> int:
@@ -1221,7 +1307,7 @@ def run_agent_tui(
             changes_panel = Collapsible(title='Changes', collapsed=True)
             changes_panel.id = 'changes-panel'
             with changes_panel:
-                yield Static('No changes since the last prompt.', id='changes-body')
+                yield Static('No changes in this conversation.', id='changes-body')
             with Horizontal(id='prompt-row'):
                 yield PromptInput(
                     placeholder='Type a task, / command, @ workspace path, or paste/drop file paths',
@@ -2046,12 +2132,20 @@ def run_agent_tui(
                 return
             has_changes = self._changes_summary_event is not None
             panel.display = has_changes
-            title = render_changes_panel_title(self._changes_summary_event)
+            title = render_changes_panel_title(
+                self._changes_summary_event,
+                color=True,
+            )
             try:
                 panel.title = title
             except Exception:
-                pass
-            body.update(render_changes_panel_body(self._changes_summary_event))
+                panel.title = render_changes_panel_title(self._changes_summary_event)
+            body.update(
+                render_changes_panel_body(
+                    self._changes_summary_event,
+                    color=True,
+                )
+            )
 
         def _refresh_command_picker(
             self,
