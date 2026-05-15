@@ -2201,6 +2201,12 @@ def run_agent_tui(
             return workspace_mentions, attachments
 
         def _extract_prompt_path_attachments(self, prompt: str) -> str | None:
+            # slash commands are not file paths — bypass path detection
+            stripped = prompt.lstrip()
+            if stripped.startswith('/') and not self._prompt_attachments:
+                parts = stripped[1:].split(None, 1)
+                if parts and find_slash_command(parts[0].lower()) is not None:
+                    return prompt
             remaining_text, paths = extract_prompt_file_paths(prompt)
             if not paths:
                 unresolved = extract_unresolved_prompt_file_path_candidates(prompt)

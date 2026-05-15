@@ -66,7 +66,7 @@
 
 ## 📖 About
 
-This repository reimplements the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) npm agent architecture **entirely in Python**, designed to run with **local open-source models** via an OpenAI-compatible API server.
+This repository reimplements the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) npm agent architecture **entirely in Python**, designed to run with **local open-source models** via an OpenAI-compatible and Loïc-compatible API server.
 
 Built on the public porting workspace from [instructkr/claw-code](https://github.com/instructkr/claw-code), the active development lives at [HarnessLab/claw-code-agent](https://github.com/HarnessLab/claw-code-agent).
 
@@ -490,6 +490,70 @@ Notes:
 - this sends your conversation (including file contents and shell output) to OpenRouter and the upstream provider — do not use with repos containing secrets or sensitive data
 
 > 📚 **References:** [OpenRouter Docs](https://openrouter.ai/docs) · [Supported Models](https://openrouter.ai/models) · [API Keys](https://openrouter.ai/keys)
+
+### Optional: Use the Loïc Personal API
+
+`claw-code-agent` can route through the **Loïc backend** — a FastAPI server wrapping `llama.cpp` with auth, persisted conversations, and long-term memory. It exposes a raw OpenAI-compatible passthrough at `/v1/chat/completions` (full tool calling included) for external clients.
+
+The agent auto-detects Loïc from the base URL (`loic.exaload.fr` or `loic.exaload.app`) — no extra flag required. The LiteLLM backend routes it as an OpenAI-compatible upstream and reads the API key from `LOIC_API_KEY`.
+
+#### 1. Get an API key
+
+From the Loïc web UI (`https://loic.exaload.app/chat` → settings) or via HTTP:
+
+```bash
+curl -X POST https://loic.exaload.fr/api/auth/api-keys \
+    -H "Authorization: Bearer <your-jwt>" \
+    -H "Content-Type: application/json" \
+    -d '{"label":"claw-code-agent"}'
+```
+
+Response contains `{"key":"sk-lc-..."}` — store it, it is shown only once.
+
+#### 2. Smoke test the passthrough
+
+```bash
+curl https://loic.exaload.fr/api/v1/models \
+    -H "Authorization: Bearer sk-lc-..."
+```
+
+Should list the loaded `llama.cpp` model(s). If `404`, the backend is running an older revision — redeploy with the `openai_compat` router enabled.
+
+#### 3. Configure the agent
+
+`.env` at the repo root (auto-loaded by `load_workspace_env`; terminal exports override it):
+
+```bash
+LOIC_API_BASE=https://loic.exaload.fr/api/v1
+LOIC_API_KEY=sk-lc-your-key-here
+LOIC_MODEL=gemma-4-E4B-Q4
+```
+
+When the resolved base URL is a Loïc host, `LOIC_API_BASE` / `LOIC_API_KEY` / `LOIC_MODEL` take priority over their generic `LLM_*` counterparts — keep per-provider model ids side-by-side without overwrites.
+
+#### 4. Run
+
+```bash
+# uses env vars / .env
+python -m src.main agent "your prompt" --cwd .
+
+# fully explicit
+python -m src.main agent "your prompt" --cwd . \
+    --base-url https://loic.exaload.fr/api/v1 \
+    --api-key sk-lc-your-key-here \
+    --model Qwen/Qwen3-Coder-30B-A3B-Instruct
+
+# local backend instance
+LLM_API_BASE=http://127.0.0.1:8000/v1 python -m src.main agent "your prompt" --cwd .
+```
+
+Notes:
+
+- provider is auto-detected from `--base-url` / `LLM_API_BASE` — `loic.exaload.*` routes to the `loic` provider preset
+- API keys accepted in either `Authorization: Bearer sk-lc-...` or `X-API-Key` on the Loïc backend
+- the LiteLLM backend sends an explicit `User-Agent: claw-code-agent/1.0` — required to bypass Cloudflare WAF rule 1010 in front of `loic.exaload.fr`
+- tool calling is handled by `llama.cpp`; the loaded model must support tools (e.g. Qwen3-Coder with `--jinja`)
+- the `/v1` passthrough bypasses the conversation / memory layers — for memory-augmented chat, use the regular Loïc web frontend
 
 ### 2. Configure Environment
 

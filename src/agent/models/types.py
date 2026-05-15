@@ -100,6 +100,7 @@ class ModelConfig:
     timeout_seconds: float = 120.0
     pricing: ModelPricing = field(default_factory=ModelPricing)
     llm_backend: str = 'litellm'
+    extra_headers: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
