@@ -1765,6 +1765,27 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('after_snapshot_id', result.file_history[0])
         self.assertEqual(stored.file_history[0]['action'], 'write_file')
         self.assertEqual(stored.file_history[0]['after_snapshot_id'], result.file_history[0]['after_snapshot_id'])
+        workspace_events = [
+            event for event in result.events if event.get('type') == 'workspace_change'
+        ]
+        self.assertEqual(len(workspace_events), 1)
+        self.assertEqual(workspace_events[0].get('changed_paths'), ['out.txt'])
+        self.assertEqual(workspace_events[0].get('added_files'), 1)
+        self.assertEqual(workspace_events[0].get('added_lines'), 1)
+        self.assertEqual(result.file_history[0].get('workspace_file_count'), 1)
+        self.assertEqual(stored.file_history[0].get('workspace_added_files'), 1)
+        event_file = workspace_events[0]['files'][0]
+        self.assertEqual(event_file.get('status'), 'added')
+        self.assertIn('+hi', event_file.get('diff', ''))
+        recap_event = next(
+            event for event in result.events if event.get('type') == 'workspace_change_recap'
+        )
+        self.assertEqual(recap_event.get('changed_paths'), ['out.txt'])
+        self.assertEqual(recap_event.get('added_lines'), 1)
+        summary_event = next(
+            event for event in result.events if event.get('type') == 'workspace_change_summary'
+        )
+        self.assertEqual(summary_event.get('changed_paths'), ['out.txt'])
 
     def test_agent_streams_write_file_tool_output(self) -> None:
         responses = [
@@ -2037,6 +2058,16 @@ class AgentRuntimeTests(unittest.TestCase):
             event for event in captured_events if event.get('type') == 'tool_result'
         )
         self.assertEqual(tool_result.get('metadata', {}).get('path'), 'out.txt')
+        workspace_change = next(
+            event for event in captured_events if event.get('type') == 'workspace_change'
+        )
+        self.assertEqual(workspace_change.get('changed_paths'), ['out.txt'])
+        self.assertEqual(workspace_change.get('added_lines'), 1)
+        workspace_summary = next(
+            event for event in captured_events if event.get('type') == 'workspace_change_summary'
+        )
+        self.assertEqual(workspace_summary.get('changed_paths'), ['out.txt'])
+        self.assertEqual(workspace_summary.get('added_lines'), 1)
 
     def test_agent_records_tombstone_mutation_history_when_snipping(self) -> None:
         responses = [

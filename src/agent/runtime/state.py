@@ -6,6 +6,7 @@ from typing import Any
 
 from src.agent.models.session import AgentSessionState
 from src.agent.models.types import AgentRunResult, UsageStats
+from src.agent.runtime.change_tracker import WorkspaceChangeTracker
 
 
 JSONDict = dict[str, object]
@@ -23,6 +24,7 @@ class PromptRunState:
     total_cost_usd: float
     file_history: list[JSONDict]
     stream_events: Any
+    workspace_change_tracker: WorkspaceChangeTracker
     delegated_tasks: int
     model_calls: int
     assistant_response_segments: list[str] = field(default_factory=list)

@@ -98,6 +98,10 @@ def render_details_panel(
         f'prompts={state.prompt_count}',
         f'conversation_turns={state.conversation_turns}',
         f'activity_events={state.activity_events}',
+        f'workspace_change_events={state.workspace_change_events}',
+        f'workspace_changed_files={state.workspace_changed_files}',
+        f'workspace_added_lines={state.workspace_added_lines}',
+        f'workspace_removed_lines={state.workspace_removed_lines}',
         f'last_turns={state.last_turns}',
         f'last_tool_calls={state.last_tool_calls}',
         f'tokens={state.total_tokens}',
@@ -192,6 +196,59 @@ def render_working_entries_markdown(
             lines.extend(['', body, ''])
     rendered = '\n'.join(lines).strip()
     return rendered or '_No internal work details._'
+
+
+def render_changes_panel_title(event: dict[str, object] | None) -> str:
+    if not event:
+        return 'Changes'
+    file_count = _coerce_positive_int(event.get('file_count'))
+    added = _coerce_positive_int(event.get('added_lines'))
+    removed = _coerce_positive_int(event.get('removed_lines'))
+    if file_count <= 0:
+        return 'Changes'
+    label = 'file' if file_count == 1 else 'files'
+    return f'Changes: {file_count} {label} changed +{added} -{removed}'
+
+
+def render_changes_panel_body(event: dict[str, object] | None) -> str:
+    if not event:
+        return 'No changes since the last prompt.'
+    title = render_changes_panel_title(event).removeprefix('Changes: ')
+    lines = [title, '']
+    files = event.get('files')
+    if isinstance(files, list):
+        for file_payload in files:
+            if not isinstance(file_payload, dict):
+                continue
+            line = _render_changes_panel_file(file_payload)
+            if line:
+                lines.append(line)
+    truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+    if truncated_file_count:
+        lines.append(f'... {truncated_file_count} more changed file(s)')
+    return '\n'.join(lines).rstrip()
+
+
+def _render_changes_panel_file(file_payload: dict[str, object]) -> str:
+    path = _preview_value(file_payload.get('path'), max_chars=160)
+    if not path:
+        return ''
+    added = _coerce_positive_int(file_payload.get('added_lines'))
+    removed = _coerce_positive_int(file_payload.get('removed_lines'))
+    status = _preview_value(file_payload.get('status')) or 'modified'
+    suffix = '' if status == 'modified' else f' {status}'
+    return f'- {path} +{added} -{removed}{suffix}'
+
+
+def _coerce_positive_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _has_delegate_entries(entries: Sequence[ConversationEntry]) -> bool:
@@ -348,6 +405,10 @@ def _working_entry_heading(entry: ConversationEntry) -> str:
         return 'Tool Output'
     if entry.kind == 'tool_result':
         return 'Tool Result'
+    if entry.kind == 'workspace_change':
+        return 'Workspace Changes'
+    if entry.kind == 'workspace_change_recap':
+        return 'Changed Files'
     if entry.kind == 'delegate_output':
         return 'Sub-Agent Output'
     if entry.kind == 'delegate_result':
@@ -999,6 +1060,21 @@ def run_agent_tui(
             padding: 0 1;
         }
 
+        #changes-panel {
+            height: auto;
+            margin: 0 1;
+            border: round #3b4b5c;
+            background: #0f1720;
+        }
+
+        #changes-body {
+            width: 1fr;
+            height: auto;
+            max-height: 10;
+            padding: 0 1;
+            color: #e6edf3;
+        }
+
         #attachment-summary {
             width: 1fr;
             height: auto;
@@ -1090,6 +1166,8 @@ def run_agent_tui(
             self._conversation_turns: tuple[ConversationTurn, ...] = ()
             self._history_items: tuple[ConversationHistoryItem, ...] = ()
             self._activity_items: tuple[ActivityItem, ...] = ()
+            self._changes_summary_event: dict[str, object] | None = None
+            self._changes_collapsed = True
             self._selected_turn_id: str | None = None
             self._conversation_follow_bottom = True
             self._conversation_pinned_scroll_y: float | None = None
@@ -1140,6 +1218,10 @@ def run_agent_tui(
             with Horizontal(id='attachment-shelf'):
                 yield Static(id='attachment-summary')
                 yield Button('Clear', id='clear-attachments-button')
+            changes_panel = Collapsible(title='Changes', collapsed=True)
+            changes_panel.id = 'changes-panel'
+            with changes_panel:
+                yield Static('No changes since the last prompt.', id='changes-body')
             with Horizontal(id='prompt-row'):
                 yield PromptInput(
                     placeholder='Type a task, / command, @ workspace path, or paste/drop file paths',
@@ -1569,6 +1651,11 @@ def run_agent_tui(
             if collapsible is None:
                 collapsible = getattr(event, 'control', None)
             widget_id = getattr(collapsible, 'id', None) if collapsible is not None else None
+            if widget_id == 'changes-panel':
+                collapsed = getattr(collapsible, 'collapsed', None)
+                if isinstance(collapsed, bool):
+                    self._changes_collapsed = collapsed
+                return
             if not isinstance(widget_id, str) or not widget_id.startswith('working-'):
                 return
             collapsed = getattr(collapsible, 'collapsed', None)
@@ -1743,6 +1830,7 @@ def run_agent_tui(
                 on_turns_change=self._handle_turns_change,
                 on_history_change=self._handle_history_change,
                 on_activity_change=self._handle_activity_change,
+                on_changes_change=self._handle_changes_change,
             )
 
         def _debug_log(self, event: str, **fields: object) -> None:
@@ -1903,6 +1991,7 @@ def run_agent_tui(
             self._refresh_conversation_view()
             self._refresh_history_list()
             self._refresh_details_panel()
+            self._refresh_changes_panel()
 
         def _handle_state_change(self, state: AgentTuiState) -> None:
             state.refresh_from_agent(self._agent)
@@ -1944,6 +2033,25 @@ def run_agent_tui(
         def _handle_activity_change(self, items: tuple[ActivityItem, ...]) -> None:
             self._activity_items = items
             self._refresh_details_panel()
+
+        def _handle_changes_change(self, event: dict[str, object] | None) -> None:
+            self._changes_summary_event = dict(event) if event is not None else None
+            self._refresh_changes_panel()
+
+        def _refresh_changes_panel(self) -> None:
+            try:
+                panel = self.query_one('#changes-panel', Collapsible)
+                body = self.query_one('#changes-body', Static)
+            except Exception:
+                return
+            has_changes = self._changes_summary_event is not None
+            panel.display = has_changes
+            title = render_changes_panel_title(self._changes_summary_event)
+            try:
+                panel.title = title
+            except Exception:
+                pass
+            body.update(render_changes_panel_body(self._changes_summary_event))
 
         def _refresh_command_picker(
             self,

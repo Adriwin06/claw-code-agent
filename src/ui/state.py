@@ -58,6 +58,10 @@ class AgentTuiState:
     command_timeout_seconds: float = 0.0
     conversation_turns: int = 0
     activity_events: int = 0
+    workspace_change_events: int = 0
+    workspace_changed_files: int = 0
+    workspace_added_lines: int = 0
+    workspace_removed_lines: int = 0
     search_enabled: bool = True
     search_context_size: str = 'medium'
     search_default_max_results: int = 5
@@ -131,6 +135,10 @@ class AgentTuiState:
             f'prompt_count={self.prompt_count}',
             f'conversation_turns={self.conversation_turns}',
             f'activity_events={self.activity_events}',
+            f'workspace_change_events={self.workspace_change_events}',
+            f'workspace_changed_files={self.workspace_changed_files}',
+            f'workspace_added_lines={self.workspace_added_lines}',
+            f'workspace_removed_lines={self.workspace_removed_lines}',
             f'last_turns={self.last_turns}',
             f'last_tool_calls={self.last_tool_calls}',
             f'total_tokens={self.total_tokens}',

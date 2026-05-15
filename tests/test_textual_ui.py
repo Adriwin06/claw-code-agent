@@ -26,6 +26,8 @@ from src.textual_ui import (
     copy_external_attachment,
     build_working_section_id,
     build_working_section_instance_id,
+    render_changes_panel_body,
+    render_changes_panel_title,
     build_slash_command_suggestions,
     build_workspace_path_suggestions,
     build_conversation_history_items,
@@ -711,6 +713,165 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('content:', bridge.turns[0].entries[0].content)
         self.assertIn('server unavailable', bridge.turns[0].entries[0].content)
         self.assertIn('metadata:', bridge.turns[0].entries[0].content)
+
+    def test_event_bridge_renders_workspace_change_details(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Create a file')
+        bridge.handle_event(
+            {
+                'type': 'workspace_change',
+                'sequence': 1,
+                'tool_name': 'write_file',
+                'file_count': 1,
+                'added_files': 1,
+                'modified_files': 0,
+                'deleted_files': 0,
+                'added_lines': 1,
+                'removed_lines': 0,
+                'summary': '1 file(s): 1 added, 0 modified, 0 deleted; +1 -0',
+                'files': [
+                    {
+                        'path': 'out.txt',
+                        'status': 'added',
+                        'added_lines': 1,
+                        'removed_lines': 0,
+                        'diff': '--- a/out.txt\n+++ b/out.txt\n@@ -0,0 +1 @@\n+hi',
+                    }
+                ],
+            }
+        )
+
+        rendered = ''.join(chunks)
+        self.assertIn('[changes] 1 file(s): 1 added', rendered)
+        self.assertEqual(state.workspace_change_events, 1)
+        self.assertEqual(state.workspace_changed_files, 1)
+        self.assertEqual(state.workspace_added_lines, 1)
+        self.assertEqual(bridge.turns[0].entries[-1].kind, 'workspace_change')
+        self.assertIn('```diff', bridge.turns[0].entries[-1].content)
+        self.assertIn('+hi', bridge.turns[0].entries[-1].content)
+
+    def test_event_bridge_appends_final_workspace_change_recap(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Change files')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Done.',
+                turns=1,
+                tool_calls=2,
+                transcript=(),
+                stop_reason='stop',
+                events=(
+                    {
+                        'type': 'workspace_change_recap',
+                        'file_count': 2,
+                        'added_lines': 7,
+                        'removed_lines': 3,
+                        'files': [
+                            {
+                                'path': 'src/app.py',
+                                'status': 'modified',
+                                'added_lines': 4,
+                                'removed_lines': 3,
+                            },
+                            {
+                                'path': 'tests/test_app.py',
+                                'status': 'added',
+                                'added_lines': 3,
+                                'removed_lines': 0,
+                            },
+                        ],
+                    },
+                ),
+            )
+        )
+
+        rendered = ''.join(chunks)
+        self.assertIn('[assistant] Done.', rendered)
+        self.assertIn('[changes-summary] 2 files changed +7 -3', rendered)
+        self.assertEqual(
+            [entry.kind for entry in bridge.turns[0].entries],
+            ['assistant', 'workspace_change_recap'],
+        )
+        self.assertIn('src/app.py +4 -3', bridge.turns[0].entries[-1].content)
+        self.assertIn('tests/test_app.py +3 -0 added', bridge.turns[0].entries[-1].content)
+
+    def test_event_bridge_publishes_live_workspace_change_summary(self) -> None:
+        changes: list[dict[str, object] | None] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(
+            state,
+            emit_data=lambda _text: None,
+            on_changes_change=changes.append,
+        )
+
+        bridge.begin_prompt('Change files')
+        bridge.handle_event(
+            {
+                'type': 'workspace_change_summary',
+                'file_count': 1,
+                'added_lines': 2,
+                'removed_lines': 1,
+                'files': [
+                    {
+                        'path': 'src/app.py',
+                        'status': 'modified',
+                        'added_lines': 2,
+                        'removed_lines': 1,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(changes[0], None)
+        self.assertIsNotNone(changes[-1])
+        assert changes[-1] is not None
+        self.assertEqual(changes[-1].get('file_count'), 1)
+
+    def test_render_changes_panel_body_lists_files(self) -> None:
+        event = {
+            'file_count': 2,
+            'added_lines': 7,
+            'removed_lines': 3,
+            'files': [
+                {
+                    'path': 'src/app.py',
+                    'status': 'modified',
+                    'added_lines': 4,
+                    'removed_lines': 3,
+                },
+                {
+                    'path': 'tests/test_app.py',
+                    'status': 'added',
+                    'added_lines': 3,
+                    'removed_lines': 0,
+                },
+            ],
+        }
+
+        self.assertEqual(render_changes_panel_title(event), 'Changes: 2 files changed +7 -3')
+        rendered = render_changes_panel_body(event)
+
+        self.assertIn('2 files changed +7 -3', rendered)
+        self.assertIn('src/app.py +4 -3', rendered)
+        self.assertIn('tests/test_app.py +3 -0 added', rendered)
 
     def test_event_bridge_emits_final_output_when_response_is_not_streamed(self) -> None:
         chunks: list[str] = []
@@ -1495,6 +1656,66 @@ class TextualUiTests(unittest.TestCase):
                 self.assertIn('copied_to=.port_sessions/attachments/', runtime_prompt)
                 self.assertEqual(len(prompt_blocks), 1)
                 self.assertEqual(prompt_blocks[0].get('type'), 'image_url')
+
+        asyncio.run(exercise())
+
+    @unittest.skipUnless(TEXTUAL_AVAILABLE, 'textual is not installed')
+    def test_agent_tui_shows_live_changes_panel_above_prompt(self) -> None:
+        from textual.app import App
+        from src.textual_ui import run_agent_tui
+
+        captured: dict[str, App] = {}
+        original_run = App.run
+
+        def fake_run(app: App, *args, **kwargs) -> None:
+            captured['app'] = app
+
+        App.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                agent = LocalCodingAgent(
+                    model_config=ModelConfig(model='demo-model'),
+                    runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+                )
+                run_agent_tui(
+                    agent,
+                    history_store=ConversationHistoryStore(Path(tmp_dir) / '.claw-code-test'),
+                )
+        finally:
+            App.run = original_run
+
+        app = captured['app']
+
+        async def exercise() -> None:
+            async with app.run_test() as pilot:
+                panel = app.query_one('#changes-panel')
+                self.assertFalse(bool(getattr(panel, 'display', True)))
+
+                app._bridge.begin_prompt('Change files')
+                app._bridge.handle_event(
+                    {
+                        'type': 'workspace_change_summary',
+                        'file_count': 1,
+                        'added_lines': 2,
+                        'removed_lines': 1,
+                        'files': [
+                            {
+                                'path': 'src/app.py',
+                                'status': 'modified',
+                                'added_lines': 2,
+                                'removed_lines': 1,
+                            }
+                        ],
+                    }
+                )
+                await pilot.pause(0.2)
+
+                panel = app.query_one('#changes-panel')
+                body = app.query_one('#changes-body')
+                self.assertTrue(bool(getattr(panel, 'display', False)))
+                self.assertIn('Changes: 1 file changed +2 -1', str(getattr(panel, 'title', '')))
+                self.assertIn('src/app.py +2 -1', str(getattr(body, 'renderable', '')))
+                self.assertLess(panel.region.y, app.query_one('#prompt-row').region.y)
 
         asyncio.run(exercise())
 

@@ -23,6 +23,17 @@ from src.ui.state import AgentTuiState
 MAX_ACTIVITY_ITEMS = 14
 
 
+def _coerce_positive_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 class AgentTuiEventBridge:
     def __init__(
         self,
@@ -33,6 +44,7 @@ class AgentTuiEventBridge:
         on_turns_change: Callable[[tuple[ConversationTurn, ...]], None] | None = None,
         on_history_change: Callable[[tuple[ConversationHistoryItem, ...]], None] | None = None,
         on_activity_change: Callable[[tuple[ActivityItem, ...]], None] | None = None,
+        on_changes_change: Callable[[dict[str, object] | None], None] | None = None,
     ) -> None:
         self.state = state
         self._emit_data = emit_data
@@ -40,6 +52,7 @@ class AgentTuiEventBridge:
         self._on_turns_change = on_turns_change
         self._on_history_change = on_history_change
         self._on_activity_change = on_activity_change
+        self._on_changes_change = on_changes_change
         self._assistant_open = False
         self._assistant_ends_with_newline = True
         self._tool_stream_key: tuple[str | None, str] | None = None
@@ -53,6 +66,7 @@ class AgentTuiEventBridge:
         self._tool_stream_buffers: dict[str, str] = {}
         self._delegate_output_buffers: dict[str, str] = {}
         self._active_turn_id: str | None = None
+        self._workspace_change_summary: dict[str, object] | None = None
 
     @property
     def turns(self) -> tuple[ConversationTurn, ...]:
@@ -97,6 +111,7 @@ class AgentTuiEventBridge:
             )
             for turn in turns
         ]
+        self._workspace_change_summary = None
         self._active_turn_id = self._turns[-1].turn_id if self._turns else None
         self.state.conversation_turns = len(self._turns)
         if turns and announce_activity:
@@ -109,6 +124,7 @@ class AgentTuiEventBridge:
         self._publish_turns()
         if announce_activity:
             self._publish_activity()
+        self._publish_changes()
         self._publish_state()
 
     def begin_prompt(self, prompt: str, *, session_id: str | None = None) -> None:
@@ -116,6 +132,7 @@ class AgentTuiEventBridge:
         self._announced_tool_plans.clear()
         self._tool_stream_buffers.clear()
         self._delegate_output_buffers.clear()
+        self._workspace_change_summary = None
         self.state.busy = True
         self.state.status = 'Running'
         self.state.phase = 'Preparing'
@@ -143,6 +160,7 @@ class AgentTuiEventBridge:
         )
         self._publish_turns()
         self._publish_activity()
+        self._publish_changes()
         self._publish_state()
 
     def handle_event(self, event: dict[str, object]) -> None:
@@ -211,6 +229,15 @@ class AgentTuiEventBridge:
             return
         if event_type == 'tool_result':
             self._handle_tool_result(event)
+            return
+        if event_type == 'workspace_change':
+            self._handle_workspace_change(event)
+            return
+        if event_type == 'workspace_change_summary':
+            self._handle_workspace_change_summary(event)
+            return
+        if event_type == 'workspace_change_recap':
+            self._handle_workspace_change_recap(event)
             return
         if event_type == 'delegate_subtask_start':
             self._handle_delegate_subtask_start(event)
@@ -417,6 +444,7 @@ class AgentTuiEventBridge:
             final_output = sanitize_assistant_display_text(result.final_output)
             if final_output:
                 self._emit_data(f'[assistant] {final_output}\n')
+        self._append_workspace_change_recap_from_result(result)
         self.state.busy = False
         self.state.status = 'Ready'
         self.state.phase = 'Ready'
@@ -458,6 +486,18 @@ class AgentTuiEventBridge:
         self._publish_turns()
         self._publish_activity()
         self._publish_state()
+
+    def _append_workspace_change_recap_from_result(
+        self,
+        result: AgentRunResult,
+    ) -> None:
+        for event in reversed(result.events):
+            if (
+                isinstance(event, dict)
+                and event.get('type') == 'workspace_change_recap'
+            ):
+                self._handle_workspace_change_recap(event)
+                return
 
     def request_cancel(self, reason: str = 'Stop requested') -> None:
         self.state.status = 'Stopping'
@@ -556,8 +596,10 @@ class AgentTuiEventBridge:
         self._activity_index.clear()
         self._tool_stream_buffers.clear()
         self._delegate_output_buffers.clear()
+        self._workspace_change_summary = None
         self.state.activity_events = 0
         self._publish_activity()
+        self._publish_changes()
         self._publish_state()
 
     def _handle_delegate_subtask_start(self, event: dict[str, object]) -> None:
@@ -588,6 +630,10 @@ class AgentTuiEventBridge:
         self._publish_state()
 
     def _handle_delegate_subtask_event(self, event: dict[str, object]) -> None:
+        if event.get('child_event_type') == 'workspace_change':
+            summary = self._render_workspace_change_summary(event)
+            if summary:
+                event = {**event, 'summary': summary}
         if event.get('child_event_type') == 'content_delta':
             self._handle_delegate_content_delta(event)
             return
@@ -747,6 +793,11 @@ class AgentTuiEventBridge:
             return self._render_delegate_tool_start(event)
         if child_event_type == 'tool_result':
             return self._render_delegate_tool_result(event)
+        if child_event_type == 'workspace_change':
+            summary = _preview_value(event.get('summary'), max_chars=180)
+            if summary:
+                return f'workspace changed: {summary}'
+            return 'workspace changed'
         if child_event_type == 'tool_permission_denial':
             reason = _preview_value(event.get('reason'), max_chars=180)
             return f'permission denied: {reason or "tool blocked"}'
@@ -1131,7 +1182,190 @@ class AgentTuiEventBridge:
         self._write_status(rendered_result)
         self._publish_turns()
         self._publish_activity()
+        self._publish_changes()
         self._publish_state()
+
+    def _handle_workspace_change(self, event: dict[str, object]) -> None:
+        summary = self._render_workspace_change_summary(event)
+        if not summary:
+            return
+        detail = self._render_workspace_change_detail(event, summary)
+        sequence = _preview_value(event.get('sequence')) or 'latest'
+        self.state.status = 'Workspace changed'
+        self.state.phase = 'Workspace change'
+        self.state.phase_detail = summary
+        self.state.workspace_change_events += 1
+        self.state.workspace_changed_files += _coerce_positive_int(
+            event.get('file_count')
+        )
+        self.state.workspace_added_lines += _coerce_positive_int(
+            event.get('added_lines')
+        )
+        self.state.workspace_removed_lines += _coerce_positive_int(
+            event.get('removed_lines')
+        )
+        self._update_active_turn(
+            assistant_status='Working',
+            phase_label='Workspace changed',
+        )
+        self._append_turn_notice(
+            kind='workspace_change',
+            title='Workspace Changes',
+            content=detail,
+            status='ok',
+        )
+        self._upsert_activity(
+            f'workspace_change:{sequence}',
+            label='Workspace changed',
+            detail=summary,
+            status='ok',
+        )
+        self._write_status(f'[changes] {summary}')
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_state()
+
+    def _handle_workspace_change_summary(self, event: dict[str, object]) -> None:
+        if not self._render_workspace_change_recap_summary(event):
+            return
+        self._workspace_change_summary = dict(event)
+        self._publish_changes()
+
+    def _handle_workspace_change_recap(self, event: dict[str, object]) -> None:
+        summary = self._render_workspace_change_recap_summary(event)
+        if not summary:
+            return
+        self._workspace_change_summary = dict(event)
+        detail = self._render_workspace_change_recap_detail(event, summary)
+        self._upsert_turn_entry(
+            kind='workspace_change_recap',
+            title='Changed Files',
+            content=detail,
+            status='ok',
+            merge_key='workspace-change-recap',
+        )
+        self._upsert_activity(
+            'workspace_change_recap',
+            label='Changed files recap',
+            detail=summary,
+            status='ok',
+        )
+        self._write_status(f'[changes-summary] {summary}')
+        self._publish_turns()
+        self._publish_activity()
+        self._publish_changes()
+        self._publish_state()
+
+    def _render_workspace_change_summary(self, event: dict[str, object]) -> str:
+        summary = _preview_value(event.get('summary'), max_chars=220)
+        if summary:
+            return summary
+        file_count = _coerce_positive_int(event.get('file_count'))
+        if file_count <= 0:
+            files = event.get('files')
+            if isinstance(files, list):
+                file_count = len(files)
+        if file_count <= 0:
+            return ''
+        return (
+            f'{file_count} file(s): '
+            f'{_coerce_positive_int(event.get("added_files"))} added, '
+            f'{_coerce_positive_int(event.get("modified_files"))} modified, '
+            f'{_coerce_positive_int(event.get("deleted_files"))} deleted; '
+            f'+{_coerce_positive_int(event.get("added_lines"))} '
+            f'-{_coerce_positive_int(event.get("removed_lines"))}'
+        )
+
+    def _render_workspace_change_detail(
+        self,
+        event: dict[str, object],
+        summary: str,
+    ) -> str:
+        lines = [summary]
+        tool_name = _preview_value(event.get('tool_name'))
+        if tool_name:
+            lines.append(f'tool={tool_name}')
+        files = event.get('files')
+        if isinstance(files, list):
+            for file_payload in files:
+                if not isinstance(file_payload, dict):
+                    continue
+                rendered = self._render_workspace_change_file(file_payload)
+                if rendered:
+                    lines.extend(['', rendered])
+        truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+        if truncated_file_count:
+            lines.extend(['', f'... {truncated_file_count} more changed file(s)'])
+        return '\n'.join(lines)
+
+    def _render_workspace_change_file(self, file_payload: dict[str, object]) -> str:
+        path = _preview_value(file_payload.get('path'), max_chars=220)
+        if not path:
+            return ''
+        status = _preview_value(file_payload.get('status')) or 'changed'
+        added = _coerce_positive_int(file_payload.get('added_lines'))
+        removed = _coerce_positive_int(file_payload.get('removed_lines'))
+        header = f'- {status} {path} (+{added} -{removed})'
+        if file_payload.get('binary'):
+            return header + '\n  binary or non-text file'
+        if file_payload.get('content_truncated'):
+            return header + '\n  large file; diff omitted'
+        diff = file_payload.get('diff')
+        if not isinstance(diff, str) or not diff.strip():
+            return header
+        if file_payload.get('diff_truncated'):
+            header += ' [diff truncated]'
+        return f'{header}\n\n```diff\n{diff.rstrip()}\n```'
+
+    def _render_workspace_change_recap_summary(
+        self,
+        event: dict[str, object],
+    ) -> str:
+        file_count = _coerce_positive_int(event.get('file_count'))
+        if file_count <= 0:
+            files = event.get('files')
+            if isinstance(files, list):
+                file_count = len(files)
+        if file_count <= 0:
+            return ''
+        label = 'file' if file_count == 1 else 'files'
+        return (
+            f'{file_count} {label} changed '
+            f'+{_coerce_positive_int(event.get("added_lines"))} '
+            f'-{_coerce_positive_int(event.get("removed_lines"))}'
+        )
+
+    def _render_workspace_change_recap_detail(
+        self,
+        event: dict[str, object],
+        summary: str,
+    ) -> str:
+        lines = [summary, '']
+        files = event.get('files')
+        if isinstance(files, list):
+            for file_payload in files:
+                if not isinstance(file_payload, dict):
+                    continue
+                line = self._render_workspace_change_recap_file(file_payload)
+                if line:
+                    lines.append(line)
+        truncated_file_count = _coerce_positive_int(event.get('truncated_file_count'))
+        if truncated_file_count:
+            lines.append(f'... {truncated_file_count} more changed file(s)')
+        return '\n'.join(lines).rstrip()
+
+    def _render_workspace_change_recap_file(
+        self,
+        file_payload: dict[str, object],
+    ) -> str:
+        path = _preview_value(file_payload.get('path'), max_chars=220)
+        if not path:
+            return ''
+        added = _coerce_positive_int(file_payload.get('added_lines'))
+        removed = _coerce_positive_int(file_payload.get('removed_lines'))
+        status = _preview_value(file_payload.get('status')) or 'modified'
+        suffix = '' if status == 'modified' else f' {status}'
+        return f'- {path} +{added} -{removed}{suffix}'
 
     def _render_tool_result(self, event: dict[str, object]) -> str:
         tool_name = event.get('tool_name')
@@ -1553,6 +1787,14 @@ class AgentTuiEventBridge:
     def _publish_activity(self) -> None:
         if self._on_activity_change is not None:
             self._on_activity_change(tuple(self._activity))
+
+    def _publish_changes(self) -> None:
+        if self._on_changes_change is not None:
+            self._on_changes_change(
+                dict(self._workspace_change_summary)
+                if self._workspace_change_summary is not None
+                else None
+            )
 
     def _publish_state(self) -> None:
         if self._on_state_change is not None:

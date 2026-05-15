@@ -53,6 +53,7 @@ from src.agent.runtime.delegation import (
     delegated_task_units,
     execute_delegate_agent,
 )
+from src.agent.runtime.change_tracker import WorkspaceChangeTracker
 from src.agent.runtime.tool_calls import (
     ToolCallExecutionHooks,
     execute_runtime_tool_call,
@@ -717,8 +718,33 @@ class LocalCodingAgent:
                     plugin_runtime=self.plugin_runtime,
                     hooks=self._build_tool_call_execution_hooks(),
                 )
-                if tool_outcome.history_entry is not None:
-                    state.file_history.append(tool_outcome.history_entry)
+                workspace_change_event = (
+                    state.workspace_change_tracker.collect_tool_changes(
+                        tool_call=tool_call,
+                        turn_index=state.turn_index,
+                    )
+                )
+                history_entry = self._merge_workspace_change_history(
+                    tool_outcome.history_entry,
+                    workspace_change_event,
+                    tool_call=tool_call,
+                    turn_index=state.turn_index,
+                )
+                if history_entry is not None:
+                    state.file_history.append(history_entry)
+                if workspace_change_event is not None:
+                    state.stream_events.append(workspace_change_event)
+                    workspace_summary_event = (
+                        state.workspace_change_tracker.collect_run_recap(
+                            event_type='workspace_change_summary',
+                        )
+                    )
+                    if workspace_summary_event is not None:
+                        workspace_summary_event['sequence'] = workspace_change_event.get(
+                            'sequence'
+                        )
+                        workspace_summary_event['turn_index'] = state.turn_index
+                        state.stream_events.append(workspace_summary_event)
 
         return self._finalize_run_state_result(
             state,
@@ -779,6 +805,7 @@ class LocalCodingAgent:
             total_cost_usd=starting_cost_usd,
             file_history=file_history,
             stream_events=_RuntimeEventRecorder(event_handler),
+            workspace_change_tracker=WorkspaceChangeTracker(self.runtime_config.cwd),
             delegated_tasks=sum(
                 1
                 for entry in file_history
@@ -820,6 +847,9 @@ class LocalCodingAgent:
                 prompt=state.effective_prompt,
                 turn_index=after_turn_index if after_turn_index is not None else state.turn_index,
             )
+        workspace_recap = state.workspace_change_tracker.collect_run_recap()
+        if workspace_recap is not None:
+            result = replace(result, events=(*result.events, workspace_recap))
         result = self._persist_session(state.session, result)
         self.last_run_result = result
         return result
@@ -1338,6 +1368,63 @@ class LocalCodingAgent:
             entry['history_kind'] = 'tool'
         return entry
 
+    def _merge_workspace_change_history(
+        self,
+        history_entry: dict[str, object] | None,
+        workspace_change_event: dict[str, object] | None,
+        *,
+        tool_call: ToolCall,
+        turn_index: int,
+    ) -> dict[str, object] | None:
+        if workspace_change_event is None:
+            return history_entry
+        entry = dict(history_entry or {})
+        entry.setdefault('timestamp', datetime.now(timezone.utc).isoformat())
+        entry.setdefault('turn_index', turn_index)
+        entry.setdefault('tool_call_id', tool_call.id)
+        entry.setdefault('tool_name', tool_call.name)
+        entry.setdefault(
+            'history_entry_id',
+            f'{turn_index}:{tool_call.id}:{tool_call.name}:workspace_change',
+        )
+        entry['workspace_change_sequence'] = workspace_change_event.get('sequence')
+        entry['workspace_file_count'] = workspace_change_event.get('file_count', 0)
+        entry['workspace_added_files'] = workspace_change_event.get('added_files', 0)
+        entry['workspace_modified_files'] = workspace_change_event.get(
+            'modified_files',
+            0,
+        )
+        entry['workspace_deleted_files'] = workspace_change_event.get(
+            'deleted_files',
+            0,
+        )
+        entry['workspace_added_lines'] = workspace_change_event.get('added_lines', 0)
+        entry['workspace_removed_lines'] = workspace_change_event.get(
+            'removed_lines',
+            0,
+        )
+        changed_paths = workspace_change_event.get('changed_paths')
+        if isinstance(changed_paths, list):
+            entry['changed_paths'] = [
+                path for path in changed_paths if isinstance(path, str) and path
+            ]
+        files = workspace_change_event.get('files')
+        if isinstance(files, list):
+            entry['workspace_change_files'] = [
+                {
+                    key: value
+                    for key, value in file.items()
+                    if key != 'diff'
+                }
+                for file in files
+                if isinstance(file, dict)
+            ]
+        if not entry.get('history_kind'):
+            entry['history_kind'] = 'workspace_change'
+        elif entry.get('history_kind') in {'shell', 'tool'}:
+            entry['history_kind'] = 'workspace_change'
+        return entry
+
     def _compact_prefix_count(self, session: AgentSessionState) -> int:
         prefix_count = 0
         for message in session.messages:
@@ -1832,6 +1919,17 @@ class LocalCodingAgent:
                 details.append(f'turn={turn}')
             if path:
                 details.append(f'path={path}')
+            changed_paths = entry.get('changed_paths')
+            if isinstance(changed_paths, list) and changed_paths:
+                preview_paths = ', '.join(
+                    path
+                    for path in changed_paths[:3]
+                    if isinstance(path, str) and path
+                )
+                if preview_paths:
+                    if len(changed_paths) > 3:
+                        preview_paths += f', ... (+{len(changed_paths) - 3} more)'
+                    details.append(f'paths={preview_paths}')
             if command:
                 details.append(f'command={command}')
             child_session_ids = entry.get('child_session_ids')

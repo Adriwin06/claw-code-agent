@@ -229,9 +229,23 @@ def execute_delegate_agent(
             'message_count',
             'blocked',
             'preflight_count',
+            'summary',
+            'file_count',
+            'added_files',
+            'modified_files',
+            'deleted_files',
+            'added_lines',
+            'removed_lines',
+            'truncated_file_count',
         ):
             if key in child_event:
                 wrapped[key] = child_event[key]
+        changed_paths = child_event.get('changed_paths')
+        if isinstance(changed_paths, list):
+            wrapped['changed_paths'] = list(changed_paths)
+        files = child_event.get('files')
+        if isinstance(files, list):
+            wrapped['files'] = [dict(file) for file in files if isinstance(file, dict)]
         delta = child_event.get('delta')
         if isinstance(delta, str) and delta:
             wrapped['delta'] = delta
