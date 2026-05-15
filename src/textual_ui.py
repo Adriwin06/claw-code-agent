@@ -75,92 +75,214 @@ def render_details_panel(
     activity_items: Sequence[ActivityItem],
     *,
     hide_gitignored_paths: bool = True,
-) -> str:
+    color: bool = False,
+) -> object:
     max_turns_label = 'unlimited' if state.max_turns is None else str(state.max_turns)
     workspace_path = Path(state.workspace)
     workspace_identity = workspace_history_identity(workspace_path)
     history_key = workspace_history_key(workspace_path)
-    lines = [
-        'Run',
-        '',
-        f'status={state.status}',
-        f'phase={state.phase}',
-        f'phase_detail={state.phase_detail}',
-        f'model={state.model}',
-        f'permissions={state.permissions}',
-        f'workspace={state.workspace}',
-        f'workspace_identity={workspace_identity}',
-        f'history_key={history_key}',
-        f'streaming={state.streaming_enabled}',
-        f'max_turns={max_turns_label}',
-        f'command_timeout_seconds={state.command_timeout_seconds:.1f}',
-        f'session_id={state.session_id or "none"}',
-        f'busy={state.busy}',
-        f'last_tool={state.last_tool or "none"}',
-        f'last_stop_reason={_friendly_stop_reason(state.last_stop_reason)}',
-        f'input_tokens={state.input_tokens}',
-        f'output_tokens={state.output_tokens}',
-        f'prompts={state.prompt_count}',
-        f'conversation_turns={state.conversation_turns}',
-        f'activity_events={state.activity_events}',
-        f'workspace_change_events={state.workspace_change_events}',
-        f'workspace_changed_files={state.workspace_changed_files}',
-        f'workspace_added_lines={state.workspace_added_lines}',
-        f'workspace_removed_lines={state.workspace_removed_lines}',
-        f'last_turns={state.last_turns}',
-        f'last_tool_calls={state.last_tool_calls}',
-        f'tokens={state.total_tokens}',
-        f'cost_usd={state.total_cost_usd:.6f}',
-        '',
-        'Search',
-        '',
-        f'enabled={state.search_enabled}',
-        f'context_size={state.search_context_size}',
-        f'default_max_results={state.search_default_max_results}',
-        f'providers={state.search_provider_count}',
-        f'manifests={state.search_manifest_count}',
-        f'active_provider={state.search_active_provider}',
+    sections: list[tuple[str, list[str]]] = [
+        (
+            'Run',
+            [
+                f'status={state.status}',
+                f'phase={state.phase}',
+                f'phase_detail={state.phase_detail}',
+                f'busy={state.busy}',
+                f'last_tool={state.last_tool or "none"}',
+                f'last_stop_reason={_friendly_stop_reason(state.last_stop_reason)}',
+            ],
+        ),
+        (
+            'Config',
+            [
+                f'model={state.model}',
+                f'permissions={state.permissions}',
+                f'workspace={state.workspace}',
+                f'workspace_identity={workspace_identity}',
+                f'history_key={history_key}',
+                f'streaming={state.streaming_enabled}',
+                f'max_turns={max_turns_label}',
+                f'command_timeout_seconds={state.command_timeout_seconds:.1f}',
+                f'session_id={state.session_id or "none"}',
+            ],
+        ),
+        (
+            'Usage',
+            [
+                f'input_tokens={state.input_tokens}',
+                f'output_tokens={state.output_tokens}',
+                f'prompts={state.prompt_count}',
+                f'conversation_turns={state.conversation_turns}',
+                f'activity_events={state.activity_events}',
+                f'last_turns={state.last_turns}',
+                f'last_tool_calls={state.last_tool_calls}',
+                f'tokens={state.total_tokens}',
+                f'cost_usd={state.total_cost_usd:.6f}',
+            ],
+        ),
+        (
+            'Workspace',
+            [
+                f'workspace_change_events={state.workspace_change_events}',
+                f'workspace_changed_files={state.workspace_changed_files}',
+                f'workspace_added_lines={state.workspace_added_lines}',
+                f'workspace_removed_lines={state.workspace_removed_lines}',
+            ],
+        ),
+        (
+            'Search',
+            [
+                f'enabled={state.search_enabled}',
+                f'context_size={state.search_context_size}',
+                f'default_max_results={state.search_default_max_results}',
+                f'providers={state.search_provider_count}',
+                f'manifests={state.search_manifest_count}',
+                f'active_provider={state.search_active_provider}',
+            ],
+        ),
     ]
     if turn is not None:
-        lines.extend(
-            [
-                '',
+        sections.append(
+            (
                 'Selected Turn',
-                '',
-                f'prompt={turn.prompt_preview(max_chars=120)}',
-                f'assistant={turn.assistant_preview(max_chars=120)}',
-                f'tools={turn.tool_count}',
-                f'stop_reason={_friendly_stop_reason(turn.stop_reason)}',
-            ]
+                [
+                    f'prompt={turn.prompt_preview(max_chars=120)}',
+                    f'assistant={turn.assistant_preview(max_chars=120)}',
+                    f'tools={turn.tool_count}',
+                    f'stop_reason={_friendly_stop_reason(turn.stop_reason)}',
+                ],
+            )
         )
     if activity_items:
-        lines.extend(['', 'Activity', ''])
+        activity_lines: list[str] = []
         for item in activity_items[-5:]:
             detail = _preview_activity_detail(item.detail)
             suffix = f': {detail}' if detail else f' ({item.status})'
-            lines.append(f'- {item.label}{suffix}')
+            activity_lines.append(f'- {item.label}{suffix}')
         latest = activity_items[-1]
-        lines.extend(['', f'last_activity={latest.label}'])
-    lines.extend(
-        [
-            '',
+        activity_lines.append(f'last_activity={latest.label}')
+        sections.append(('Activity', activity_lines))
+    sections.append(
+        (
             'Next Actions',
-            '',
-            'Enter: submit prompt',
-            'Ctrl+U: reuse selected prompt',
-            'Ctrl+T: rerun selected turn',
-            'Ctrl+N: new conversation',
-            'Ctrl+D: delete conversation',
-            '/new /prev /next /retry /reuse /delete',
-            '@path: reference workspace files or folders',
-            f'Ctrl+G: {"show" if hide_gitignored_paths else "hide"} gitignored @ files',
-            'Paste/drop file paths: attach external files',
-            'Ctrl+I: attach clipboard image',
-            'Ctrl+C: stop current run',
-            'PgUp/PgDn: scroll conversation',
-        ]
+            [
+                'Enter: submit prompt',
+                'Ctrl+U: reuse selected prompt',
+                'Ctrl+T: rerun selected turn',
+                'Ctrl+N: new conversation',
+                'Ctrl+D: delete conversation',
+                '/new /prev /next /retry /reuse /delete',
+                '@path: reference workspace files or folders',
+                f'Ctrl+G: {"show" if hide_gitignored_paths else "hide"} gitignored @ files',
+                'Paste/drop file paths: attach external files',
+                'Ctrl+I: attach clipboard image',
+                'Ctrl+C: stop current run',
+                'PgUp/PgDn: scroll conversation',
+            ],
+        )
     )
+    if color and Text is not None:
+        return _render_details_panel_text(sections)
+    return _render_details_panel_plain(sections)
+
+
+_DETAIL_SECTION_STYLES = {
+    'Run': '#58a6ff',
+    'Config': '#a371f7',
+    'Usage': '#d29922',
+    'Workspace': '#56d4dd',
+    'Search': '#3fb950',
+    'Selected Turn': '#ffab70',
+    'Activity': '#f78166',
+    'Next Actions': '#8b949e',
+}
+
+
+def _render_details_panel_plain(sections: Sequence[tuple[str, Sequence[str]]]) -> str:
+    lines: list[str] = []
+    for title, section_lines in sections:
+        if lines:
+            lines.append('')
+        lines.append(title)
+        lines.append('-' * max(10, len(title)))
+        lines.extend(section_lines)
     return '\n'.join(lines)
+
+
+def _render_details_panel_text(sections: Sequence[tuple[str, Sequence[str]]]) -> object:
+    rendered = Text()
+    for section_index, (title, section_lines) in enumerate(sections):
+        if section_index:
+            rendered.append('\n')
+        section_style = _DETAIL_SECTION_STYLES.get(title, '#58a6ff')
+        rendered.append(f'{title}\n', style=f'bold {section_style}')
+        rendered.append(f'{"-" * max(10, len(title))}\n', style=section_style)
+        for line in section_lines:
+            _append_detail_panel_line(rendered, line)
+            rendered.append('\n')
+    rendered.rstrip()
+    return rendered
+
+
+def _append_detail_panel_line(rendered: object, line: str) -> None:
+    if Text is None:
+        return
+    text = rendered
+    if line.startswith('- '):
+        text.append('- ', style='#8b949e')
+        _append_activity_line_text(text, line[2:])
+        return
+    if '=' in line:
+        key, value = line.split('=', 1)
+        text.append(key, style='#8b949e')
+        text.append('=', style='#6e7681')
+        text.append(value, style=_detail_value_style(key, value))
+        return
+    if ':' in line:
+        action, detail = line.split(':', 1)
+        text.append(action, style='bold #79c0ff')
+        text.append(':', style='#6e7681')
+        text.append(detail, style='#c9d1d9')
+        return
+    text.append(line, style='#c9d1d9')
+
+
+def _append_activity_line_text(rendered: object, line: str) -> None:
+    if Text is None:
+        return
+    if ':' in line:
+        label, detail = line.split(':', 1)
+        rendered.append(label, style='#e6edf3')
+        rendered.append(':', style='#6e7681')
+        rendered.append(detail, style='#c9d1d9')
+        return
+    rendered.append(line, style='#e6edf3')
+
+
+def _detail_value_style(key: str, value: str) -> str:
+    normalized = value.lower()
+    if normalized in {'true', 'ready', 'running', 'completed', 'resumed'}:
+        return 'bold #3fb950'
+    if normalized in {'false', 'none', 'idle'}:
+        return '#8b949e'
+    if normalized in {'error', 'failed', 'cancelled'}:
+        return 'bold #f85149'
+    if key in {'workspace', 'workspace_identity', 'history_key'}:
+        return '#79c0ff'
+    if key in {'permissions', 'model', 'active_provider'}:
+        return '#d2a8ff'
+    if (
+        key.endswith('_tokens')
+        or key.endswith('_turns')
+        or key.endswith('_calls')
+        or key.endswith('_events')
+        or key.endswith('_files')
+        or key.endswith('_lines')
+        or key in {'tokens', 'prompts', 'providers', 'manifests', 'tools', 'cost_usd'}
+    ):
+        return '#ffa657'
+    return '#e6edf3'
 
 
 def _preview_activity_detail(detail: str, *, max_chars: int = 86) -> str:
@@ -1195,7 +1317,7 @@ def run_agent_tui(
         }
 
         #right-rail {
-            width: 34;
+            width: 38;
             min-width: 28;
         }
 
@@ -1207,6 +1329,18 @@ def run_agent_tui(
         #actions-toolbar Button {
             width: 1fr;
             min-width: 10;
+        }
+
+        #reuse-prompt-button {
+            color: #79c0ff;
+        }
+
+        #retry-turn-button {
+            color: #ffdf5d;
+        }
+
+        #delete-conversation-button {
+            color: #ffa198;
         }
 
         #history-list {
@@ -1295,11 +1429,17 @@ def run_agent_tui(
             padding: 0 1;
         }
 
-        #details {
+        #details-scroll {
             height: 1fr;
             border: round #2f81f7;
-            background: #111923;
-            padding: 1 2;
+            background: #0d141d;
+            overflow-y: auto;
+        }
+
+        #details {
+            width: 1fr;
+            height: auto;
+            padding: 1 2 2 2;
         }
 
         #command-picker {
@@ -1499,7 +1639,8 @@ def run_agent_tui(
                         yield Button('Reuse', id='reuse-prompt-button')
                         yield Button('Retry', id='retry-turn-button')
                         yield Button('Delete', id='delete-conversation-button')
-                    yield Static(id='details')
+                    with VerticalScroll(id='details-scroll'):
+                        yield Static(id='details')
             with Horizontal(id='command-picker'):
                 yield OptionList(id='command-options')
                 yield Static(id='command-description')
@@ -2619,6 +2760,7 @@ def run_agent_tui(
                     turn,
                     self._activity_items,
                     hide_gitignored_paths=self._hide_gitignored_workspace_paths,
+                    color=True,
                 )
             )
 
