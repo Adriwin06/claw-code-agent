@@ -1609,6 +1609,11 @@ def run_agent_tui(
             self._worker_event_counts: dict[str, int] = {}
             self._spinner_index = 0
             self._collapsed_sections: dict[str, bool] = {}
+            # debounced panel refresh while streaming
+            self._panels_refresh_pending = False
+            # debounced async history persistence
+            self._persist_history_dirty = False
+            self._persist_history_scheduled = False
             self._restored_session: StoredAgentSession | None = None
             if resumed_session_id:
                 try:
@@ -2447,7 +2452,8 @@ def run_agent_tui(
             prompt = self.query_one('#prompt', PromptInput)
             prompt.disabled = state.busy
             if not state.busy:
-                self._workspace_path_suggestions = self._build_workspace_path_suggestions()
+                # workspace path suggestions are rebuilt only on explicit refresh
+                # to avoid a full filesystem walk after every prompt
                 prompt.focus()
             else:
                 self._set_command_picker_visible(False)
@@ -2464,6 +2470,22 @@ def run_agent_tui(
                 self._selected_turn_id = turns[-1].turn_id
             if self._selected_turn_id not in {turn.turn_id for turn in turns}:
                 self._selected_turn_id = turns[-1].turn_id if turns else None
+            # batch refreshes while the agent streams events; otherwise refresh now
+            if self._state.busy:
+                self._schedule_panels_refresh()
+            else:
+                self._refresh_conversation_view()
+                self._refresh_history_list()
+                self._refresh_details_panel()
+
+        def _schedule_panels_refresh(self) -> None:
+            if self._panels_refresh_pending:
+                return
+            self._panels_refresh_pending = True
+            self.set_timer(0.08, self._flush_panels_refresh)
+
+        def _flush_panels_refresh(self) -> None:
+            self._panels_refresh_pending = False
             self._refresh_conversation_view()
             self._refresh_history_list()
             self._refresh_details_panel()
@@ -3065,10 +3087,35 @@ def run_agent_tui(
             self._debug_log('finish_prompt_done')
 
         def _persist_history(self) -> None:
+            # mark dirty and schedule a single async write; coalesces bursts
+            # of save calls (every turn event would otherwise hit the disk
+            # on the UI thread)
+            self._persist_history_dirty = True
+            if self._persist_history_scheduled:
+                return
+            self._persist_history_scheduled = True
+            self.set_timer(0.3, self._flush_persist_history)
+
+        def _flush_persist_history(self) -> None:
+            self._persist_history_scheduled = False
+            if not self._persist_history_dirty:
+                return
+            self._persist_history_dirty = False
+            # snapshot on the UI thread (conversations are mutated from here)
+            snapshot = tuple(self._conversations)
+            active_id = self._active_conversation_id
+            self._write_history_snapshot(snapshot, active_id)
+
+        @work(thread=True, exclusive=True, group='persist-history')
+        def _write_history_snapshot(
+            self,
+            conversations: tuple[ConversationThread, ...],
+            active_conversation_id: str | None,
+        ) -> None:
             try:
                 if not any(
                     conversation.turns or conversation.session_id
-                    for conversation in self._conversations
+                    for conversation in conversations
                 ):
                     try:
                         self._history_store.workspace_path(self._workspace).unlink()
@@ -3077,8 +3124,8 @@ def run_agent_tui(
                     return
                 self._history_store.save_workspace_conversations(
                     self._workspace,
-                    self._conversations,
-                    active_conversation_id=self._active_conversation_id,
+                    conversations,
+                    active_conversation_id=active_conversation_id,
                 )
             except OSError:
                 self._debug_log('persist_history_failed')

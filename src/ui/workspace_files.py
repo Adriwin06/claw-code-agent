@@ -264,34 +264,21 @@ def format_file_size(size_bytes: int | None) -> str:
 
 
 def _walk_workspace(root: Path, *, hide_gitignored: bool):
-    gitignore = _GitIgnoreMatcher(root) if hide_gitignored else None
+    # gitignore-driven pruning is replaced by a single batched check-ignore
+    # call after the walk (see build_workspace_path_suggestions). The noisy
+    # hardcoded set still prunes the heavy hitters (.venv, node_modules, ...)
+    # without spawning git per directory, which was the original freeze
+    hidden_dir_names = set(_ALWAYS_IGNORED_DIR_NAMES)
+    if hide_gitignored:
+        hidden_dir_names.update(_NOISY_IGNORED_DIR_NAMES)
     for raw_directory, dir_names, file_names in os.walk(root):
         directory = Path(raw_directory)
-        ignored_children = (
-            gitignore.ignored_paths(
-                tuple(
-                    _relative_workspace_path(directory / name, root)
-                    for name in (*dir_names, *file_names)
-                )
-            )
-            if gitignore is not None
-            else set()
-        )
-        hidden_dir_names = set(_ALWAYS_IGNORED_DIR_NAMES)
-        if hide_gitignored:
-            hidden_dir_names.update(_NOISY_IGNORED_DIR_NAMES)
         dir_names[:] = [
             name
             for name in sorted(dir_names, key=str.lower)
             if name not in hidden_dir_names
-            and _relative_workspace_path(directory / name, root) not in ignored_children
         ]
-        visible_file_names = [
-            name
-            for name in file_names
-            if _relative_workspace_path(directory / name, root) not in ignored_children
-        ]
-        yield directory, dir_names, visible_file_names
+        yield directory, dir_names, file_names
 
 
 def _relative_workspace_path(path: Path, root: Path) -> str:
