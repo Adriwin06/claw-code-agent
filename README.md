@@ -495,7 +495,7 @@ Notes:
 
 `claw-code-agent` can route through the **Loïc backend** — a FastAPI server wrapping `llama.cpp` with auth, persisted conversations, and long-term memory. It exposes a raw OpenAI-compatible passthrough at `/v1/chat/completions` (full tool calling included) for external clients.
 
-The agent auto-detects Loïc from the base URL (`loic.exaload.fr` or `loic.exaload.app`) — no extra flag required. The LiteLLM backend routes it as an OpenAI-compatible upstream and reads the API key from `LOIC_API_KEY`.
+Set `LLM_PROVIDER=loic` to enable the Loïc-specific defaults. In that mode the LiteLLM backend routes it as an OpenAI-compatible upstream, prefers `LOIC_API_BASE` over `LLM_API_BASE`, and reads the provider key from `LOIC_API_KEY`.
 
 #### 1. Get an API key
 
@@ -524,12 +524,13 @@ Should list the loaded `llama.cpp` model(s). If `404`, the backend is running an
 `.env` at the repo root (auto-loaded by `load_workspace_env`; terminal exports override it):
 
 ```bash
+LLM_PROVIDER=loic
 LOIC_API_BASE=https://loic.exaload.fr/api/v1
 LOIC_API_KEY=sk-lc-your-key-here
 LOIC_MODEL=gemma-4-E4B-Q4
 ```
 
-When the resolved base URL is a Loïc host, `LOIC_API_BASE` / `LOIC_API_KEY` / `LOIC_MODEL` take priority over their generic `LLM_*` counterparts — keep per-provider model ids side-by-side without overwrites.
+`LOIC_API_BASE` and `LOIC_MODEL` do not override the generic `LLM_*` settings unless `LLM_PROVIDER=loic`, so you can keep per-provider endpoints and model ids side-by-side in the same `.env`.
 
 #### 4. Run
 
@@ -549,7 +550,7 @@ LLM_API_BASE=http://127.0.0.1:8000/v1 python -m src.main agent "your prompt" --c
 
 Notes:
 
-- provider is auto-detected from `--base-url` / `LLM_API_BASE` — `loic.exaload.*` routes to the `loic` provider preset
+- set `LLM_PROVIDER=loic` to use the Loïc provider preset and its `LOIC_*` defaults
 - API keys accepted in either `Authorization: Bearer sk-lc-...` or `X-API-Key` on the Loïc backend
 - the LiteLLM backend sends an explicit `User-Agent: claw-code-agent/1.0` — required to bypass Cloudflare WAF rule 1010 in front of `loic.exaload.fr`
 - tool calling is handled by `llama.cpp`; the loaded model must support tools (e.g. Qwen3-Coder with `--jinja`)

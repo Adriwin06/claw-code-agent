@@ -265,6 +265,61 @@ class AgentCliConfigTests(unittest.TestCase):
 
         self.assertEqual(config.api_key, 'sk-openrouter')
 
+    def test_loic_env_values_are_ignored_until_provider_is_loic(self) -> None:
+        env = {
+            'LLM_PROVIDER': 'ollama_chat',
+            'LLM_API_BASE': 'http://127.0.0.1:11434/v1',
+            'LLM_MODEL': 'gemma4:e4b',
+            'LLM_API_KEY': '',
+            'LOIC_API_BASE': 'https://loic.exaload.fr/api/v1',
+            'LOIC_API_KEY': 'sk-lc',
+            'LOIC_MODEL': 'loic-model',
+        }
+
+        with patch.dict('os.environ', env, clear=True):
+            parser = build_parser()
+            args = parser.parse_args(['agent', 'hello', '--cwd', '.'])
+            config = _build_model_config(args)
+
+        self.assertEqual(config.base_url, 'http://127.0.0.1:11434/v1')
+        self.assertEqual(config.model, 'openai/gemma4:e4b')
+        self.assertEqual(config.api_key, 'ollama')
+        self.assertEqual(config.extra_headers, ())
+
+    def test_loic_provider_uses_loic_env_values(self) -> None:
+        env = {
+            'LLM_PROVIDER': 'Loic',
+            'LLM_API_BASE': 'http://127.0.0.1:11434/v1',
+            'LLM_MODEL': 'gemma4:e4b',
+            'LLM_API_KEY': '',
+            'LOIC_API_BASE': 'https://loic.exaload.fr/api/v1',
+            'LOIC_API_KEY': 'sk-lc',
+            'LOIC_MODEL': 'gemma-4-E4B-Q4',
+        }
+
+        with patch.dict('os.environ', env, clear=True):
+            self.assertEqual(_default_model_from_env(), 'openai/gemma-4-E4B-Q4')
+            parser = build_parser()
+            args = parser.parse_args(['agent', 'hello', '--cwd', '.'])
+            config = _build_model_config(args)
+
+        self.assertEqual(config.base_url, 'https://loic.exaload.fr/api/v1')
+        self.assertEqual(config.model, 'openai/gemma-4-E4B-Q4')
+        self.assertEqual(config.api_key, 'sk-lc')
+        self.assertEqual(config.extra_headers, (('X-API-Key', 'sk-lc'),))
+
+    def test_loic_provider_falls_back_to_llm_model_when_loic_model_is_blank(self) -> None:
+        env = {
+            'LLM_PROVIDER': 'loic',
+            'LLM_API_BASE': 'http://127.0.0.1:8000/v1',
+            'LLM_MODEL': 'fallback-model',
+            'LOIC_API_BASE': 'https://loic.exaload.fr/api/v1',
+            'LOIC_MODEL': '',
+        }
+
+        with patch.dict('os.environ', env, clear=True):
+            self.assertEqual(_default_model_from_env(), 'openai/fallback-model')
+
 
 if __name__ == '__main__':
     unittest.main()

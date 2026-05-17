@@ -63,8 +63,6 @@ _BASE_URL_PROVIDER_HINTS = (
     ('api.x.ai', 'xai'),
     ('api.deepseek.com', 'deepseek'),
     ('api.together.xyz', 'together'),
-    ('loic.exaload.fr', 'loic'),
-    ('loic.exaload.app', 'loic'),
 )
 
 
@@ -181,6 +179,24 @@ def _resolve_provider_name(
     )
 
 
+def _is_loic_provider(provider: str | None) -> bool:
+    return _normalize_provider_name(provider) == 'loic'
+
+
+def _default_base_url_from_env(*, default: str | None = None) -> str | None:
+    provider = _env_nonempty('LLM_PROVIDER')
+    if _is_loic_provider(provider):
+        return _env_nonempty('LOIC_API_BASE', 'LLM_API_BASE', default=default)
+    return _env_nonempty('LLM_API_BASE', default=default)
+
+
+def _default_model_value_from_env(*, default: str | None = None) -> str | None:
+    provider = _env_nonempty('LLM_PROVIDER')
+    if _is_loic_provider(provider):
+        return _env_nonempty('LOIC_MODEL', 'LLM_MODEL', default=default)
+    return _env_first('LLM_MODEL', default=default)
+
+
 def _default_api_key_for_provider(
     provider: str | None,
     *,
@@ -208,12 +224,6 @@ def _resolve_api_key(
     if override is not None:
         return override
 
-    # Loïc endpoint always wins — overrides LLM_PROVIDER for key lookup
-    if _provider_from_base_url(base_url) == 'loic':
-        loic_key = _env_nonempty(*_PROVIDER_API_KEY_ENV_VARS.get('loic', ()))
-        if loic_key is not None:
-            return loic_key
-
     resolved_provider = _resolve_provider_name(
         provider,
         model=model,
@@ -231,7 +241,7 @@ def _resolve_api_key(
 def _default_api_key_from_env() -> str:
     model = _env_nonempty('LLM_MODEL')
     provider = _env_nonempty('LLM_PROVIDER')
-    base_url = _env_nonempty('LOIC_API_BASE', 'LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+    base_url = _default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT)
     return _resolve_api_key(
         provider=provider,
         model=model,
@@ -273,14 +283,11 @@ def _normalize_model_name(
     if '/' in normalized_model:
         return normalized_model
 
-    # Loïc endpoint always wins — overrides LLM_PROVIDER (e.g. ollama_chat) because
-    # LOIC_API_BASE is an OpenAI-compat passthrough, not a native Ollama server.
-    if _provider_from_base_url(base_url) == 'loic':
-        return f'openai/{normalized_model}'
-
     normalized_provider = _normalize_provider_name(provider)
     if normalized_provider is None:
         normalized_provider = _provider_from_base_url(base_url)
+    if normalized_provider == 'loic':
+        return f'openai/{normalized_model}'
     if normalized_provider == 'ollama':
         if _looks_like_ollama_base_url(base_url):
             return f'openai/{normalized_model}'
@@ -292,13 +299,8 @@ def _normalize_model_name(
 
 def _default_model_from_env() -> str:
     provider = _env_nonempty('LLM_PROVIDER')
-    base_url = _env_nonempty('LOIC_API_BASE', 'LLM_API_BASE')
-    # When the resolved base URL is a Loïc endpoint, prefer LOIC_MODEL so users
-    # can keep per-provider model selections side-by-side in the same .env.
-    if _provider_from_base_url(base_url) == 'loic':
-        model = _env_first('LOIC_MODEL', 'LLM_MODEL', default=_DEFAULT_MODEL)
-    else:
-        model = _env_first('LLM_MODEL', default=_DEFAULT_MODEL)
+    base_url = _default_base_url_from_env()
+    model = _default_model_value_from_env(default=_DEFAULT_MODEL)
     return _normalize_model_name(model, provider=provider, base_url=base_url)
 
 
@@ -307,7 +309,7 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     if include_backend:
         parser.add_argument(
             '--base-url',
-            default=_env_first('LOIC_API_BASE', 'LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT),
+            default=_default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT),
         )
         parser.add_argument(
             '--api-key',
@@ -434,7 +436,7 @@ def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
 def _build_model_config(args: argparse.Namespace) -> ModelConfig:
     base_url = getattr(args, 'base_url', None)
     if base_url is None:
-        base_url = _env_first('LOIC_API_BASE', 'LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+        base_url = _default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT)
     base_url = clean_env_value(str(base_url))
     provider = _env_nonempty('LLM_PROVIDER')
     raw_model = getattr(args, 'model', None) or _default_model_from_env()
@@ -452,7 +454,7 @@ def _build_model_config(args: argparse.Namespace) -> ModelConfig:
         base_url=normalized_base_url,
     )
     loic_headers: tuple[tuple[str, str], ...] = ()
-    if _provider_from_base_url(normalized_base_url) == 'loic':
+    if _is_loic_provider(provider):
         loic_headers = (('X-API-Key', str(api_key)),)
     return ModelConfig(
         model=normalized_model,
