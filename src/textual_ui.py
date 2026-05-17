@@ -1149,6 +1149,11 @@ def run_agent_tui(
             self._spinner_index: int = 0
             self._collapsed_sections: dict[str, bool] = {}
             self._render_signature: tuple[object, ...] | None = None
+            # incremental child management: keep TurnCard widgets mounted across
+            # refreshes so the scroll position never resets to the top
+            self._card_signatures: dict[str, tuple[object, ...]] = {}
+            self._cards: dict[str, TurnCard] = {}
+            self._empty_placeholder = None
 
         def set_data(
             self,
@@ -1174,6 +1179,7 @@ def run_agent_tui(
             )
             if render_signature == self._render_signature:
                 return
+            full_recompose = conversation_id != self._conversation_id
             self._render_signature = render_signature
             self._conversation_id = conversation_id
             self._turns = turns
@@ -1183,23 +1189,52 @@ def run_agent_tui(
             self._state_busy = busy
             self._spinner_index = spinner_index
             self._collapsed_sections = dict(collapsed_sections)
-            self.refresh(recompose=True, layout=True)
+            if full_recompose or not self.is_mounted:
+                self._card_signatures.clear()
+                self._cards.clear()
+                self._empty_placeholder = None
+                self.refresh(recompose=True, layout=True)
+                return
+            self._apply_incremental_update()
 
-        def _turns_render_signature(
-            self,
-            turns: tuple[ConversationTurn, ...],
-        ) -> tuple[object, ...]:
-            return conversation_turns_render_signature(turns)
-
-        def compose(self) -> ComposeResult:
+        def _apply_incremental_update(self) -> None:
+            if self._empty_placeholder is not None:
+                try:
+                    self._empty_placeholder.remove()
+                except Exception:
+                    pass
+                self._empty_placeholder = None
             if not self._turns:
+                for card in list(self._cards.values()):
+                    try:
+                        card.remove()
+                    except Exception:
+                        pass
+                self._cards.clear()
+                self._card_signatures.clear()
                 empty = Static('No conversation yet. Submit a prompt to start.')
                 empty.add_class('conversation-empty')
-                yield empty
+                self.mount(empty)
+                self._empty_placeholder = empty
                 return
+            new_turn_ids = {turn.turn_id for turn in self._turns}
+            for turn_id in list(self._cards.keys()):
+                if turn_id not in new_turn_ids:
+                    try:
+                        self._cards[turn_id].remove()
+                    except Exception:
+                        pass
+                    del self._cards[turn_id]
+                    self._card_signatures.pop(turn_id, None)
             last_turn_id = self._turns[-1].turn_id
+            previous_card: TurnCard | None = None
             for index, turn in enumerate(self._turns, start=1):
-                yield TurnCard(
+                signature = self._signature_for(turn, index, last_turn_id)
+                existing = self._cards.get(turn.turn_id)
+                if existing is not None and self._card_signatures.get(turn.turn_id) == signature:
+                    previous_card = existing
+                    continue
+                new_card = TurnCard(
                     turn,
                     conversation_id=self._conversation_id,
                     turn_index=index,
@@ -1211,6 +1246,99 @@ def run_agent_tui(
                     spinner_index=self._spinner_index,
                     collapsed_sections=self._collapsed_sections,
                 )
+                if existing is not None:
+                    # mount the replacement before the stale card, then remove
+                    # the stale one. Tracking via self._cards (not self.children)
+                    # avoids races with Textual's async removal
+                    try:
+                        self.mount(new_card, before=existing)
+                    except Exception:
+                        self.mount(new_card)
+                    try:
+                        existing.remove()
+                    except Exception:
+                        pass
+                elif previous_card is not None:
+                    self.mount(new_card, after=previous_card)
+                else:
+                    self.mount(new_card)
+                self._cards[turn.turn_id] = new_card
+                self._card_signatures[turn.turn_id] = signature
+                previous_card = new_card
+
+        def _signature_for(
+            self,
+            turn: ConversationTurn,
+            index: int,
+            last_turn_id: str | None,
+        ) -> tuple[object, ...]:
+            is_last = turn.turn_id == last_turn_id
+            return (
+                index,
+                turn.turn_id,
+                turn.user_prompt,
+                turn.assistant_response,
+                turn.assistant_status,
+                turn.phase_label,
+                turn.tool_count,
+                turn.restored,
+                turn.stop_reason,
+                turn.session_id,
+                tuple(
+                    (
+                        entry.entry_id,
+                        entry.kind,
+                        entry.title,
+                        entry.content,
+                        entry.status,
+                        entry.merge_key,
+                    )
+                    for entry in turn.entries
+                ),
+                turn.turn_id == self._selected_turn_id,
+                is_last,
+                self._state_busy and is_last,
+                self._state_phase if is_last else '',
+                self._state_phase_detail if is_last else '',
+                self._spinner_index if (self._state_busy and is_last) else 0,
+                tuple(sorted(self._collapsed_sections.items())),
+            )
+
+        def _turns_render_signature(
+            self,
+            turns: tuple[ConversationTurn, ...],
+        ) -> tuple[object, ...]:
+            return conversation_turns_render_signature(turns)
+
+        def compose(self) -> ComposeResult:
+            self._card_signatures.clear()
+            self._cards.clear()
+            self._empty_placeholder = None
+            if not self._turns:
+                empty = Static('No conversation yet. Submit a prompt to start.')
+                empty.add_class('conversation-empty')
+                self._empty_placeholder = empty
+                yield empty
+                return
+            last_turn_id = self._turns[-1].turn_id
+            for index, turn in enumerate(self._turns, start=1):
+                self._card_signatures[turn.turn_id] = self._signature_for(
+                    turn, index, last_turn_id,
+                )
+                card = TurnCard(
+                    turn,
+                    conversation_id=self._conversation_id,
+                    turn_index=index,
+                    selected=(turn.turn_id == self._selected_turn_id),
+                    active=(turn.turn_id == last_turn_id),
+                    busy=self._state_busy and turn.turn_id == last_turn_id,
+                    phase=self._state_phase,
+                    phase_detail=self._state_phase_detail,
+                    spinner_index=self._spinner_index,
+                    collapsed_sections=self._collapsed_sections,
+                )
+                self._cards[turn.turn_id] = card
+                yield card
 
     class PromptInput(TextArea):
         def __init__(self, *args, placeholder: str = '', **kwargs) -> None:
@@ -2459,7 +2587,12 @@ def run_agent_tui(
                 self._set_command_picker_visible(False)
             self._refresh_attachment_shelf()
             self._refresh_details_panel()
-            self._refresh_conversation_view()
+            # while streaming, defer conversation refresh through the debouncer
+            # so we don't recompose on every model event
+            if state.busy:
+                self._schedule_panels_refresh()
+            else:
+                self._refresh_conversation_view()
             if not state.busy:
                 self._persist_history()
 
@@ -2903,18 +3036,50 @@ def run_agent_tui(
         def _scroll_conversation_to_end(self, token: int) -> None:
             if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
                 return
-            self.set_timer(0.01, lambda: self._finish_scroll_conversation_to_end(token, 0))
+            self.set_timer(
+                0.01,
+                lambda: self._finish_scroll_conversation_to_end(token, 0, -1.0, 0),
+            )
 
-        def _finish_scroll_conversation_to_end(self, token: int, attempt: int) -> None:
+        # safety cap and interval for scroll-to-end polling: keep snapping to
+        # the bottom as long as content height is still growing (markdown
+        # widgets lay out progressively after a conversation switch), and
+        # stop only when the height stays stable across consecutive checks
+        _SCROLL_TO_END_MAX_ATTEMPTS = 80
+        _SCROLL_TO_END_INTERVAL = 0.05
+        _SCROLL_TO_END_STABLE_STREAK_REQUIRED = 3
+
+        def _finish_scroll_conversation_to_end(
+            self,
+            token: int,
+            attempt: int,
+            previous_max_y: float,
+            stable_streak: int,
+        ) -> None:
             if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
                 return
             self._scroll_conversation_to_current_end(
                 smooth=self._scroll_to_end_smooth and attempt == 0
             )
-            if attempt < 2:
+            container = self._conversation_scroll_container()
+            scroll_y = float(getattr(container, 'scroll_y', 0.0))
+            max_y = float(getattr(container, 'max_scroll_y', 0.0))
+            at_end = max_y > 0 and (max_y - scroll_y) <= 1.0
+            if max_y == previous_max_y:
+                stable_streak += 1
+            else:
+                stable_streak = 0
+            if at_end and stable_streak >= self._SCROLL_TO_END_STABLE_STREAK_REQUIRED:
+                self._scroll_to_end_pending = False
+                self._scroll_to_end_smooth = False
+                return
+            if attempt < self._SCROLL_TO_END_MAX_ATTEMPTS:
+                next_attempt = attempt + 1
                 self.set_timer(
-                    0.04 if attempt == 0 else 0.10,
-                    lambda: self._finish_scroll_conversation_to_end(token, attempt + 1),
+                    self._SCROLL_TO_END_INTERVAL,
+                    lambda: self._finish_scroll_conversation_to_end(
+                        token, next_attempt, max_y, stable_streak,
+                    ),
                 )
                 return
             self._scroll_to_end_pending = False
