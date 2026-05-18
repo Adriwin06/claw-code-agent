@@ -491,6 +491,32 @@ class TextualUiTests(unittest.TestCase):
         self.assertIn('search_enabled=', rendered)
         self.assertIn('search_context_size=', rendered)
 
+    def test_state_from_agent_uses_simple_llm_provider_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            agent = LocalCodingAgent(
+                model_config=ModelConfig(model='openai/gemma4:e4b'),
+                runtime_config=AgentRuntimeConfig(cwd=Path(tmp_dir)),
+            )
+
+        with mock.patch.dict(os.environ, {'LLM_PROVIDER': 'loic'}):
+            state = AgentTuiState.from_agent(agent)
+
+        self.assertEqual(state.llm_provider, 'loic')
+
+    def test_render_details_panel_strips_openai_model_prefix(self) -> None:
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='openai/gemma4:e4b',
+            permissions='write, shell',
+            llm_provider='loic',
+        )
+
+        rendered = render_details_panel(state, None, ())
+
+        self.assertIn('llm_provider=loic', rendered)
+        self.assertIn('model=gemma4:e4b', rendered)
+        self.assertNotIn('model=openai/gemma4:e4b', rendered)
+
     def test_render_details_panel_highlights_actions_and_selected_turn(self) -> None:
         state = AgentTuiState(
             workspace='C:/workspace',

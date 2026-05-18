@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from src.agent.runtime.agent import LocalCodingAgent
@@ -16,6 +17,16 @@ def _render_permissions(agent: LocalCodingAgent) -> str:
     if permissions.allow_destructive_shell_commands:
         labels.append('unsafe')
     return ', '.join(labels) if labels else 'read-only'
+
+
+def _render_llm_provider(agent: LocalCodingAgent) -> str:
+    provider = os.environ.get('LLM_PROVIDER', '').strip()
+    if provider:
+        return provider
+    model = agent.model_config.model
+    if '/' in model:
+        return model.split('/', 1)[0]
+    return 'none'
 
 
 def hydrate_state_from_stored_session(
@@ -40,6 +51,7 @@ class AgentTuiState:
     workspace: str
     model: str
     permissions: str
+    llm_provider: str = 'none'
     status: str = 'Idle'
     phase: str = 'Idle'
     phase_detail: str = 'Waiting for input'
@@ -76,6 +88,7 @@ class AgentTuiState:
             workspace=str(agent.runtime_config.cwd),
             model=agent.model_config.model,
             permissions=_render_permissions(agent),
+            llm_provider=_render_llm_provider(agent),
             streaming_enabled=agent.runtime_config.stream_model_responses,
             max_turns=agent.runtime_config.max_turns,
             command_timeout_seconds=agent.runtime_config.command_timeout_seconds,
@@ -87,6 +100,7 @@ class AgentTuiState:
         self.workspace = str(agent.runtime_config.cwd)
         self.model = agent.model_config.model
         self.permissions = _render_permissions(agent)
+        self.llm_provider = _render_llm_provider(agent)
         self.streaming_enabled = agent.runtime_config.stream_model_responses
         self.max_turns = agent.runtime_config.max_turns
         self.command_timeout_seconds = agent.runtime_config.command_timeout_seconds
@@ -121,6 +135,7 @@ class AgentTuiState:
             f'phase={self.phase}',
             f'phase_detail={self.phase_detail}',
             f'workspace={self.workspace}',
+            f'llm_provider={self.llm_provider}',
             f'model={self.model}',
             f'permissions={self.permissions}',
             f'streaming={self.streaming_enabled}',

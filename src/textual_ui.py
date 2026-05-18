@@ -96,7 +96,8 @@ def render_details_panel(
         (
             'Config',
             [
-                f'model={state.model}',
+                f'llm_provider={state.llm_provider}',
+                f'model={_display_model_name(state.model)}',
                 f'permissions={state.permissions}',
                 f'workspace={state.workspace}',
                 f'workspace_identity={workspace_identity}',
@@ -199,6 +200,10 @@ _DETAIL_SECTION_STYLES = {
 }
 
 
+def _display_model_name(model: str) -> str:
+    return model.removeprefix('openai/')
+
+
 def _render_details_panel_plain(sections: Sequence[tuple[str, Sequence[str]]]) -> str:
     lines: list[str] = []
     for title, section_lines in sections:
@@ -270,7 +275,7 @@ def _detail_value_style(key: str, value: str) -> str:
         return 'bold #f85149'
     if key in {'workspace', 'workspace_identity', 'history_key'}:
         return '#79c0ff'
-    if key in {'permissions', 'model', 'active_provider'}:
+    if key in {'permissions', 'llm_provider', 'model', 'active_provider'}:
         return '#d2a8ff'
     if (
         key.endswith('_tokens')
