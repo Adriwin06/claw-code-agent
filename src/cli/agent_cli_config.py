@@ -191,9 +191,6 @@ def _default_base_url_from_env(*, default: str | None = None) -> str | None:
 
 
 def _default_model_value_from_env(*, default: str | None = None) -> str | None:
-    provider = _env_nonempty('LLM_PROVIDER')
-    if _is_loic_provider(provider):
-        return _env_nonempty('LOIC_MODEL', 'LLM_MODEL', default=default)
     return _env_first('LLM_MODEL', default=default)
 
 

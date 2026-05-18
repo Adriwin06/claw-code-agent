@@ -286,15 +286,15 @@ class AgentCliConfigTests(unittest.TestCase):
         self.assertEqual(config.api_key, 'ollama')
         self.assertEqual(config.extra_headers, ())
 
-    def test_loic_provider_uses_loic_env_values(self) -> None:
+    def test_loic_provider_uses_loic_env_values_and_llm_model(self) -> None:
         env = {
             'LLM_PROVIDER': 'Loic',
             'LLM_API_BASE': 'http://127.0.0.1:11434/v1',
-            'LLM_MODEL': 'gemma4:e4b',
+            'LLM_MODEL': 'gemma-4-E4B-Q4',
             'LLM_API_KEY': '',
             'LOIC_API_BASE': 'https://loic.exaload.fr/api/v1',
             'LOIC_API_KEY': 'sk-lc',
-            'LOIC_MODEL': 'gemma-4-E4B-Q4',
+            'LOIC_MODEL': 'ignored-loic-model',
         }
 
         with patch.dict('os.environ', env, clear=True):
@@ -308,17 +308,17 @@ class AgentCliConfigTests(unittest.TestCase):
         self.assertEqual(config.api_key, 'sk-lc')
         self.assertEqual(config.extra_headers, (('X-API-Key', 'sk-lc'),))
 
-    def test_loic_provider_falls_back_to_llm_model_when_loic_model_is_blank(self) -> None:
+    def test_loic_provider_ignores_loic_model(self) -> None:
         env = {
             'LLM_PROVIDER': 'loic',
             'LLM_API_BASE': 'http://127.0.0.1:8000/v1',
-            'LLM_MODEL': 'fallback-model',
+            'LLM_MODEL': 'shared-model',
             'LOIC_API_BASE': 'https://loic.exaload.fr/api/v1',
-            'LOIC_MODEL': '',
+            'LOIC_MODEL': 'legacy-model',
         }
 
         with patch.dict('os.environ', env, clear=True):
-            self.assertEqual(_default_model_from_env(), 'openai/fallback-model')
+            self.assertEqual(_default_model_from_env(), 'openai/shared-model')
 
 
 if __name__ == '__main__':

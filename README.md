@@ -525,12 +525,12 @@ Should list the loaded `llama.cpp` model(s). If `404`, the backend is running an
 
 ```bash
 LLM_PROVIDER=loic
+LLM_MODEL=gemma-4-E4B-Q4
 LOIC_API_BASE=https://loic.exaload.fr/api/v1
 LOIC_API_KEY=sk-lc-your-key-here
-LOIC_MODEL=gemma-4-E4B-Q4
 ```
 
-`LOIC_API_BASE` and `LOIC_MODEL` do not override the generic `LLM_*` settings unless `LLM_PROVIDER=loic`, so you can keep per-provider endpoints and model ids side-by-side in the same `.env`.
+`LOIC_API_BASE` does not override the generic `LLM_API_BASE` unless `LLM_PROVIDER=loic`. Loïc uses the shared `LLM_MODEL` setting.
 
 #### 4. Run
 
@@ -550,7 +550,7 @@ LLM_API_BASE=http://127.0.0.1:8000/v1 python -m src.main agent "your prompt" --c
 
 Notes:
 
-- set `LLM_PROVIDER=loic` to use the Loïc provider preset and its `LOIC_*` defaults
+- set `LLM_PROVIDER=loic` to use the Loïc provider preset with `LOIC_API_BASE` and `LOIC_API_KEY`; the model still comes from `LLM_MODEL`
 - API keys accepted in either `Authorization: Bearer sk-lc-...` or `X-API-Key` on the Loïc backend
 - the LiteLLM backend sends an explicit `User-Agent: claw-code-agent/1.0` — required to bypass Cloudflare WAF rule 1010 in front of `loic.exaload.fr`
 - tool calling is handled by `llama.cpp`; the loaded model must support tools (e.g. Qwen3-Coder with `--jinja`)

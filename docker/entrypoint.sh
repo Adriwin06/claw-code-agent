@@ -74,9 +74,7 @@ fi
 
 cmd+=(--cwd "$AGENT_CWD")
 
-if is_loic_provider && [[ -n "${LOIC_MODEL:-}" ]]; then
-  cmd+=(--model "$LOIC_MODEL")
-elif [[ -n "${LLM_MODEL:-}" ]]; then
+if [[ -n "${LLM_MODEL:-}" ]]; then
   cmd+=(--model "$LLM_MODEL")
 fi
 
