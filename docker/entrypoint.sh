@@ -12,6 +12,12 @@ bool_true() {
   esac
 }
 
+is_loic_provider() {
+  local provider
+  provider="$(printf '%s' "${LLM_PROVIDER:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$provider" == "loic" || "$provider" == "loic_api" ]]
+}
+
 AGENT_COMMAND="${AGENT_COMMAND:-agent-chat}"
 AGENT_CWD="${AGENT_CWD:-/workspace}"
 AGENT_READ_ONLY="${AGENT_READ_ONLY:-false}"
@@ -73,7 +79,9 @@ if [[ -n "${LLM_MODEL:-}" ]]; then
 fi
 
 if [[ "$AGENT_COMMAND" == "agent" || "$AGENT_COMMAND" == "agent-bg" || "$AGENT_COMMAND" == "agent-chat" || "$AGENT_COMMAND" == "agent-tui" || "$AGENT_COMMAND" == "doctor" ]]; then
-  if [[ -n "${LLM_API_BASE:-}" ]]; then
+  if is_loic_provider && [[ -n "${LOIC_API_BASE:-}" ]]; then
+    cmd+=(--base-url "$LOIC_API_BASE")
+  elif [[ -n "${LLM_API_BASE:-}" ]]; then
     cmd+=(--base-url "$LLM_API_BASE")
   fi
   if [[ -n "${LLM_API_KEY:-}" ]]; then

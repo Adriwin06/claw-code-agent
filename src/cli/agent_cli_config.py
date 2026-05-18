@@ -30,6 +30,8 @@ _PROVIDER_ENV_ALIASES = {
     'google': 'gemini',
     'groq': 'groq',
     'mistral': 'mistral',
+    'loic': 'loic',
+    'loic_api': 'loic',
     'ollama': 'ollama',
     'ollama_chat': 'ollama',
     'openai': 'openai',
@@ -44,6 +46,7 @@ _PROVIDER_API_KEY_ENV_VARS = {
     'deepseek': ('DEEPSEEK_API_KEY',),
     'gemini': ('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
     'groq': ('GROQ_API_KEY',),
+    'loic': ('LOIC_API_KEY',),
     'mistral': ('MISTRAL_API_KEY',),
     'openai': ('OPENAI_API_KEY',),
     'openrouter': ('OPENROUTER_API_KEY',),
@@ -176,6 +179,21 @@ def _resolve_provider_name(
     )
 
 
+def _is_loic_provider(provider: str | None) -> bool:
+    return _normalize_provider_name(provider) == 'loic'
+
+
+def _default_base_url_from_env(*, default: str | None = None) -> str | None:
+    provider = _env_nonempty('LLM_PROVIDER')
+    if _is_loic_provider(provider):
+        return _env_nonempty('LOIC_API_BASE', 'LLM_API_BASE', default=default)
+    return _env_nonempty('LLM_API_BASE', default=default)
+
+
+def _default_model_value_from_env(*, default: str | None = None) -> str | None:
+    return _env_first('LLM_MODEL', default=default)
+
+
 def _default_api_key_for_provider(
     provider: str | None,
     *,
@@ -220,7 +238,7 @@ def _resolve_api_key(
 def _default_api_key_from_env() -> str:
     model = _env_nonempty('LLM_MODEL')
     provider = _env_nonempty('LLM_PROVIDER')
-    base_url = _env_nonempty('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+    base_url = _default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT)
     return _resolve_api_key(
         provider=provider,
         model=model,
@@ -263,6 +281,10 @@ def _normalize_model_name(
         return normalized_model
 
     normalized_provider = _normalize_provider_name(provider)
+    if normalized_provider is None:
+        normalized_provider = _provider_from_base_url(base_url)
+    if normalized_provider == 'loic':
+        return f'openai/{normalized_model}'
     if normalized_provider == 'ollama':
         if _looks_like_ollama_base_url(base_url):
             return f'openai/{normalized_model}'
@@ -273,9 +295,9 @@ def _normalize_model_name(
 
 
 def _default_model_from_env() -> str:
-    model = _env_first('LLM_MODEL', default=_DEFAULT_MODEL)
     provider = _env_nonempty('LLM_PROVIDER')
-    base_url = _env_nonempty('LLM_API_BASE')
+    base_url = _default_base_url_from_env()
+    model = _default_model_value_from_env(default=_DEFAULT_MODEL)
     return _normalize_model_name(model, provider=provider, base_url=base_url)
 
 
@@ -284,7 +306,7 @@ def _add_agent_common_args(parser: argparse.ArgumentParser, *, include_backend: 
     if include_backend:
         parser.add_argument(
             '--base-url',
-            default=_env_first('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT),
+            default=_default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT),
         )
         parser.add_argument(
             '--api-key',
@@ -411,7 +433,7 @@ def _build_runtime_config(args: argparse.Namespace) -> AgentRuntimeConfig:
 def _build_model_config(args: argparse.Namespace) -> ModelConfig:
     base_url = getattr(args, 'base_url', None)
     if base_url is None:
-        base_url = _env_first('LLM_API_BASE', default=_LOCAL_BASE_URL_DEFAULT)
+        base_url = _default_base_url_from_env(default=_LOCAL_BASE_URL_DEFAULT)
     base_url = clean_env_value(str(base_url))
     provider = _env_nonempty('LLM_PROVIDER')
     raw_model = getattr(args, 'model', None) or _default_model_from_env()
@@ -428,10 +450,14 @@ def _build_model_config(args: argparse.Namespace) -> ModelConfig:
         model=normalized_model,
         base_url=normalized_base_url,
     )
+    loic_headers: tuple[tuple[str, str], ...] = ()
+    if _is_loic_provider(provider):
+        loic_headers = (('X-API-Key', str(api_key)),)
     return ModelConfig(
         model=normalized_model,
         base_url=normalized_base_url,
         api_key=str(api_key),
+        extra_headers=loic_headers,
         llm_backend=getattr(
             args,
             'llm_backend',

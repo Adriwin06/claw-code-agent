@@ -123,6 +123,9 @@ class LiteLLMClient:
             'api_key': self.config.api_key,
             'timeout': self.config.timeout_seconds,
             'stream': stream,
+            # explicit UA — some upstreams (Cloudflare WAF in front of self-hosted
+            # OpenAI-compat backends like Loïc) reject the default python-httpx UA
+            'extra_headers': {'User-Agent': 'claw-code-agent/1.0', **dict(self.config.extra_headers)},
         }
         response_format = build_response_format(output_schema)
         if response_format is not None:
