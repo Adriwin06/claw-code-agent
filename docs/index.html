@@ -34,6 +34,7 @@
       </a>
       <div class="header-actions">
         <nav class="site-nav" aria-label="Documentation sections">
+          <a href="#overview">Overview</a>
           <a href="#architecture">Architecture</a>
           <a href="#visuals">Visuals</a>
           <a href="#commands">Commands</a>
@@ -65,7 +66,8 @@
             persisted sessions, integrations, and an optional Textual UI.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#pipeline">Inspect the runtime</a>
+            <a class="button primary" href="#overview">Start with the overview</a>
+            <a class="button" href="#pipeline">Inspect the runtime</a>
             <a class="button" href="#setup">Run locally</a>
           </div>
         </div>
@@ -80,6 +82,78 @@
 
       <section class="metrics-band" aria-label="Project facts">
         <div id="repo-metrics" class="metrics-grid"></div>
+      </section>
+
+      <section id="overview" class="doc-section mentor-section">
+        <div class="section-heading">
+          <p class="eyebrow">Project overview</p>
+          <h2>How The Project Works</h2>
+          <p>
+            This page is ordered so you can understand the project from
+            the outside in: what problem it solves, how one prompt moves through
+            the runtime, which modules own each responsibility, and how the
+            safety and persistence boundaries work.
+          </p>
+        </div>
+        <div class="mentor-board">
+          <article class="mentor-card pitch-card">
+            <p class="eyebrow">Purpose</p>
+            <h3>Local coding-agent runtime</h3>
+            <p>
+              Claw Code Agent is a Python runtime for agentic coding workflows.
+              It gathers workspace context, sends model requests through
+              LiteLLM, executes controlled tools, and saves enough state for
+              later inspection or resume.
+            </p>
+          </article>
+          <article class="mentor-card demo-card">
+            <p class="eyebrow">End-to-end flow</p>
+            <h3>A Typical Prompt Run</h3>
+            <div class="demo-flow" aria-label="Typical prompt runtime flow">
+              <span><strong>1</strong><code>Entrypoint</code><small>CLI, chat, TUI, background, or resume command</small></span>
+              <i aria-hidden="true">&gt;</i>
+              <span><strong>2</strong><code>Context</code><small>cwd, git, memory, scratchpad, runtime state</small></span>
+              <i aria-hidden="true">&gt;</i>
+              <span><strong>3</strong><code>Request</code><small>system prompt parts, messages, tool specs, budgets</small></span>
+              <i aria-hidden="true">&gt;</i>
+              <span><strong>4</strong><code>Model turn</code><small>LiteLLM call, streamed output, tool calls</small></span>
+              <i aria-hidden="true">&gt;</i>
+              <span><strong>5</strong><code>Tool loop</code><small>permission checks, hook policy, tool result messages</small></span>
+              <i aria-hidden="true">&gt;</i>
+              <span><strong>6</strong><code>Persistence</code><small>transcript, context dictionaries, messages, plugin state</small></span>
+            </div>
+          </article>
+          <article class="mentor-card">
+            <p class="eyebrow">Responsibilities</p>
+            <h3>Main runtime boundaries</h3>
+            <div class="talk-track">
+              <span>Entrypoints parse commands and build runtime config</span>
+              <span>Context code gathers workspace and integration state</span>
+              <span>Prompt code creates model-facing instructions and payloads</span>
+              <span>Tool registry defines actions exposed to the model</span>
+              <span>Governance checks permissions, hooks, budgets, and shell safety</span>
+              <span>Persistence stores session data for resume and auditability</span>
+            </div>
+          </article>
+          <article class="mentor-card qa-card">
+            <p class="eyebrow">Reading path</p>
+            <h3>Where the details are</h3>
+            <dl>
+              <div>
+                <dt>Architecture</dt>
+                <dd>The module map shows how entrypoints, the agent core, feature runtimes, and support packages fit together.</dd>
+              </div>
+              <div>
+                <dt>Runtime flow</dt>
+                <dd>The pipeline and request graph show how a prompt becomes messages, tool specs, model output, tool results, and stored session data.</dd>
+              </div>
+              <div>
+                <dt>Safety and state</dt>
+                <dd>The permission model, budget flow, stream events, and state map explain the operational guardrails.</dd>
+              </div>
+            </dl>
+          </article>
+        </div>
       </section>
 
       <section id="architecture" class="doc-section">

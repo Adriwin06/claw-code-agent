@@ -430,6 +430,171 @@ h3 {
   line-height: 1.42;
 }
 
+.mentor-section {
+  padding: 24px;
+  background:
+    linear-gradient(135deg, rgba(29, 122, 98, 0.08), transparent 45%),
+    var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.mentor-board {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.mentor-card {
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.mentor-card p:not(.eyebrow),
+.mentor-card dd {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.52;
+}
+
+.pitch-card {
+  border-left: 5px solid var(--green);
+}
+
+.demo-card {
+  grid-column: span 2;
+  border-left: 5px solid var(--blue);
+}
+
+.demo-flow {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+  margin-top: 14px;
+}
+
+.demo-flow i {
+  display: none;
+}
+
+.demo-flow span {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 5px solid var(--green);
+  border-radius: var(--radius);
+}
+
+.demo-flow span:nth-of-type(2) {
+  border-top-color: var(--blue);
+}
+
+.demo-flow span:nth-of-type(3) {
+  border-top-color: var(--amber);
+}
+
+.demo-flow span:nth-of-type(4) {
+  border-top-color: var(--red);
+}
+
+.demo-flow span:nth-of-type(5) {
+  border-top-color: var(--violet);
+}
+
+.demo-flow span:nth-of-type(6) {
+  border-top-color: var(--green);
+}
+
+.demo-flow strong {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: #ffffff;
+  background: var(--dark-chip-bg);
+  border-radius: 50%;
+  font-size: 0.78rem;
+}
+
+.demo-flow code {
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--code-ink);
+  background: var(--code-bg);
+  border-radius: 5px;
+  padding: 2px 5px;
+  font-size: 0.8rem;
+}
+
+.demo-flow small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.talk-track {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.talk-track span {
+  padding: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.talk-track span:nth-child(2n) {
+  border-left-color: var(--blue);
+}
+
+.talk-track span:nth-child(3n) {
+  border-left-color: var(--amber);
+}
+
+.qa-card {
+  border-left: 5px solid var(--amber);
+}
+
+.qa-card dl {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.qa-card div {
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.qa-card dt {
+  margin-bottom: 4px;
+  font-weight: 900;
+}
+
+.qa-card code {
+  color: var(--code-ink);
+  background: var(--code-bg);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+
 .doc-section {
   scroll-margin-top: 92px;
   margin-bottom: 56px;
@@ -1359,8 +1524,26 @@ pre {
   .hero-section,
   .split-layout,
   .pipeline-layout,
-  .grid-two {
+  .grid-two,
+  .mentor-board {
     grid-template-columns: 1fr;
+  }
+
+  .demo-card {
+    grid-column: auto;
+  }
+
+  .demo-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .demo-flow i {
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    font-style: normal;
+    font-weight: 900;
+    transform: rotate(90deg);
   }
 
   .detail-pane {
@@ -1424,6 +1607,7 @@ pre {
   .module-map,
   .guide-grid,
   .notes-grid,
+  .talk-track,
   .arch-row,
   .arch-cells {
     grid-template-columns: 1fr;
