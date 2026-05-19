@@ -205,7 +205,8 @@ p code,
   outline: 1px solid var(--line);
 }
 
-.theme-toggle {
+.theme-toggle,
+.language-toggle {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -221,10 +222,17 @@ p code,
 }
 
 .theme-toggle:hover,
-.theme-toggle:focus-visible {
+.theme-toggle:focus-visible,
+.language-toggle:hover,
+.language-toggle:focus-visible {
   border-color: var(--line-strong);
   box-shadow: 0 8px 20px rgba(23, 32, 29, 0.12);
   outline: 0;
+}
+
+.language-toggle {
+  min-width: 48px;
+  justify-content: center;
 }
 
 .theme-icon {

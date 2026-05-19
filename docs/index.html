@@ -14,10 +14,15 @@
         try {
           const savedTheme = localStorage.getItem("claw-docs-theme");
           const storedTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : null;
+          const savedLang = localStorage.getItem("claw-docs-lang");
+          const storedLang = savedLang === "fr" || savedLang === "en" ? savedLang : null;
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           document.documentElement.dataset.theme = storedTheme || (prefersDark ? "dark" : "light");
+          document.documentElement.dataset.lang = storedLang || "en";
+          document.documentElement.lang = storedLang || "en";
         } catch {
           document.documentElement.dataset.theme = "light";
+          document.documentElement.dataset.lang = "en";
         }
       })();
     </script>
@@ -29,19 +34,28 @@
         <img src="../images/logo.png" alt="" class="brand-mark">
         <span>
           <strong>Claw Code Agent</strong>
-          <small>Python local coding agent</small>
+          <small data-i18n="brand.subtitle">Python local coding agent</small>
         </span>
       </a>
       <div class="header-actions">
         <nav class="site-nav" aria-label="Documentation sections">
-          <a href="#overview">Overview</a>
-          <a href="#architecture">Architecture</a>
-          <a href="#visuals">Visuals</a>
-          <a href="#commands">Commands</a>
-          <a href="#tools">Tools</a>
+          <a href="#overview" data-i18n="nav.overview">Overview</a>
+          <a href="#architecture" data-i18n="nav.architecture">Architecture</a>
+          <a href="#visuals" data-i18n="nav.visuals">Visuals</a>
+          <a href="#commands" data-i18n="nav.commands">Commands</a>
+          <a href="#tools" data-i18n="nav.tools">Tools</a>
           <a href="#pipeline">Pipeline</a>
-          <a href="#setup">Setup</a>
+          <a href="#setup" data-i18n="nav.setup">Setup</a>
         </nav>
+        <button
+          id="lang-toggle"
+          class="language-toggle"
+          type="button"
+          aria-label="Switch language"
+          aria-pressed="false"
+        >
+          <span id="lang-label">FR</span>
+        </button>
         <button
           id="theme-toggle"
           class="theme-toggle"
@@ -58,17 +72,17 @@
     <main id="top">
       <section class="hero-section" aria-labelledby="page-title">
         <div class="hero-copy">
-          <p class="eyebrow">Source-grounded runtime guide</p>
+          <p class="eyebrow" data-i18n="hero.eyebrow">Source-grounded runtime guide</p>
           <h1 id="page-title">Claw Code Agent</h1>
-          <p class="lede">
+          <p class="lede" data-i18n="hero.lede">
             A Python reimplementation of an agentic coding runtime: LiteLLM
             transport, local context assembly, tool execution, governance,
             persisted sessions, integrations, and an optional Textual UI.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#overview">Start with the overview</a>
-            <a class="button" href="#pipeline">Inspect the runtime</a>
-            <a class="button" href="#setup">Run locally</a>
+            <a class="button primary" href="#overview" data-i18n="hero.ctaOverview">Start with the overview</a>
+            <a class="button" href="#pipeline" data-i18n="hero.ctaRuntime">Inspect the runtime</a>
+            <a class="button" href="#setup" data-i18n="hero.ctaRun">Run locally</a>
           </div>
         </div>
         <div class="runtime-stack" aria-label="Runtime stack">
@@ -86,9 +100,9 @@
 
       <section id="overview" class="doc-section mentor-section">
         <div class="section-heading">
-          <p class="eyebrow">Project overview</p>
-          <h2>How The Project Works</h2>
-          <p>
+          <p class="eyebrow" data-i18n="overview.eyebrow">Project overview</p>
+          <h2 data-i18n="overview.title">How The Project Works</h2>
+          <p data-i18n="overview.body">
             This page is ordered so you can understand the project from
             the outside in: what problem it solves, how one prompt moves through
             the runtime, which modules own each responsibility, and how the
@@ -97,9 +111,9 @@
         </div>
         <div class="mentor-board">
           <article class="mentor-card pitch-card">
-            <p class="eyebrow">Purpose</p>
-            <h3>Local coding-agent runtime</h3>
-            <p>
+            <p class="eyebrow" data-i18n="overview.purpose.eyebrow">Purpose</p>
+            <h3 data-i18n="overview.purpose.title">Local coding-agent runtime</h3>
+            <p data-i18n="overview.purpose.body">
               Claw Code Agent is a Python runtime for agentic coding workflows.
               It gathers workspace context, sends model requests through
               LiteLLM, executes controlled tools, and saves enough state for
@@ -107,49 +121,49 @@
             </p>
           </article>
           <article class="mentor-card demo-card">
-            <p class="eyebrow">End-to-end flow</p>
-            <h3>A Typical Prompt Run</h3>
+            <p class="eyebrow" data-i18n="overview.flow.eyebrow">End-to-end flow</p>
+            <h3 data-i18n="overview.flow.title">A Typical Prompt Run</h3>
             <div class="demo-flow" aria-label="Typical prompt runtime flow">
-              <span><strong>1</strong><code>Entrypoint</code><small>CLI, chat, TUI, background, or resume command</small></span>
+              <span><strong>1</strong><code data-i18n="overview.flow.1.title">Entrypoint</code><small data-i18n="overview.flow.1.detail">CLI, chat, TUI, background, or resume command</small></span>
               <i aria-hidden="true">&gt;</i>
-              <span><strong>2</strong><code>Context</code><small>cwd, git, memory, scratchpad, runtime state</small></span>
+              <span><strong>2</strong><code data-i18n="overview.flow.2.title">Context</code><small data-i18n="overview.flow.2.detail">cwd, git, memory, scratchpad, runtime state</small></span>
               <i aria-hidden="true">&gt;</i>
-              <span><strong>3</strong><code>Request</code><small>system prompt parts, messages, tool specs, budgets</small></span>
+              <span><strong>3</strong><code data-i18n="overview.flow.3.title">Request</code><small data-i18n="overview.flow.3.detail">system prompt parts, messages, tool specs, budgets</small></span>
               <i aria-hidden="true">&gt;</i>
-              <span><strong>4</strong><code>Model turn</code><small>LiteLLM call, streamed output, tool calls</small></span>
+              <span><strong>4</strong><code data-i18n="overview.flow.4.title">Model turn</code><small data-i18n="overview.flow.4.detail">LiteLLM call, streamed output, tool calls</small></span>
               <i aria-hidden="true">&gt;</i>
-              <span><strong>5</strong><code>Tool loop</code><small>permission checks, hook policy, tool result messages</small></span>
+              <span><strong>5</strong><code data-i18n="overview.flow.5.title">Tool loop</code><small data-i18n="overview.flow.5.detail">permission checks, hook policy, tool result messages</small></span>
               <i aria-hidden="true">&gt;</i>
-              <span><strong>6</strong><code>Persistence</code><small>transcript, context dictionaries, messages, plugin state</small></span>
+              <span><strong>6</strong><code data-i18n="overview.flow.6.title">Persistence</code><small data-i18n="overview.flow.6.detail">transcript, context dictionaries, messages, plugin state</small></span>
             </div>
           </article>
           <article class="mentor-card">
-            <p class="eyebrow">Responsibilities</p>
-            <h3>Main runtime boundaries</h3>
+            <p class="eyebrow" data-i18n="overview.responsibilities.eyebrow">Responsibilities</p>
+            <h3 data-i18n="overview.responsibilities.title">Main runtime boundaries</h3>
             <div class="talk-track">
-              <span>Entrypoints parse commands and build runtime config</span>
-              <span>Context code gathers workspace and integration state</span>
-              <span>Prompt code creates model-facing instructions and payloads</span>
-              <span>Tool registry defines actions exposed to the model</span>
-              <span>Governance checks permissions, hooks, budgets, and shell safety</span>
-              <span>Persistence stores session data for resume and auditability</span>
+              <span data-i18n="overview.responsibilities.1">Entrypoints parse commands and build runtime config</span>
+              <span data-i18n="overview.responsibilities.2">Context code gathers workspace and integration state</span>
+              <span data-i18n="overview.responsibilities.3">Prompt code creates model-facing instructions and payloads</span>
+              <span data-i18n="overview.responsibilities.4">Tool registry defines actions exposed to the model</span>
+              <span data-i18n="overview.responsibilities.5">Governance checks permissions, hooks, budgets, and shell safety</span>
+              <span data-i18n="overview.responsibilities.6">Persistence stores session data for resume and auditability</span>
             </div>
           </article>
           <article class="mentor-card qa-card">
-            <p class="eyebrow">Reading path</p>
-            <h3>Where the details are</h3>
+            <p class="eyebrow" data-i18n="overview.reading.eyebrow">Reading path</p>
+            <h3 data-i18n="overview.reading.title">Where the details are</h3>
             <dl>
               <div>
                 <dt>Architecture</dt>
-                <dd>The module map shows how entrypoints, the agent core, feature runtimes, and support packages fit together.</dd>
+                <dd data-i18n="overview.reading.architecture">The module map shows how entrypoints, the agent core, feature runtimes, and support packages fit together.</dd>
               </div>
               <div>
-                <dt>Runtime flow</dt>
-                <dd>The pipeline and request graph show how a prompt becomes messages, tool specs, model output, tool results, and stored session data.</dd>
+                <dt data-i18n="overview.reading.runtimeTitle">Runtime flow</dt>
+                <dd data-i18n="overview.reading.runtime">The pipeline and request graph show how a prompt becomes messages, tool specs, model output, tool results, and stored session data.</dd>
               </div>
               <div>
-                <dt>Safety and state</dt>
-                <dd>The permission model, budget flow, stream events, and state map explain the operational guardrails.</dd>
+                <dt data-i18n="overview.reading.safetyTitle">Safety and state</dt>
+                <dd data-i18n="overview.reading.safety">The permission model, budget flow, stream events, and state map explain the operational guardrails.</dd>
               </div>
             </dl>
           </article>
@@ -158,9 +172,9 @@
 
       <section id="architecture" class="doc-section">
         <div class="section-heading">
-          <p class="eyebrow">System model</p>
-          <h2>Architecture At A Glance</h2>
-          <p>
+          <p class="eyebrow" data-i18n="architecture.eyebrow">System model</p>
+          <h2 data-i18n="architecture.title">Architecture At A Glance</h2>
+          <p data-i18n="architecture.body">
             The project is organized around a reusable agent core. The CLI, TUI,
             integrations, governance, and persistence layers attach to that core
             rather than hiding behavior in a single command script.
@@ -171,9 +185,9 @@
 
       <section class="doc-section split-layout">
         <div class="section-heading">
-          <p class="eyebrow">Runtime capability map</p>
-          <h2>What The Agent Can Do</h2>
-          <p>
+          <p class="eyebrow" data-i18n="capabilities.eyebrow">Runtime capability map</p>
+          <h2 data-i18n="capabilities.title">What The Agent Can Do</h2>
+          <p data-i18n="capabilities.body">
             These are factual capability groups, not maturity percentages. Each
             card names concrete runtime areas that exist in source.
           </p>
@@ -184,9 +198,9 @@
       <section id="visuals" class="doc-section grid-two">
         <article>
           <div class="section-heading small-heading">
-            <p class="eyebrow">Tool governance</p>
-            <h2>Permission Model</h2>
-            <p>
+            <p class="eyebrow" data-i18n="permission.eyebrow">Tool governance</p>
+            <h2 data-i18n="permission.title">Permission Model</h2>
+            <p data-i18n="permission.body">
               Tool groups are shown by the runtime permission gate they pass
               through. This describes what a class of tool is allowed to do.
             </p>
@@ -195,9 +209,9 @@
         </article>
         <article>
           <div class="section-heading small-heading">
-            <p class="eyebrow">Persistence</p>
-            <h2>State And Resume Map</h2>
-            <p>
+            <p class="eyebrow" data-i18n="state.eyebrow">Persistence</p>
+            <h2 data-i18n="state.title">State And Resume Map</h2>
+            <p data-i18n="state.body">
               The agent keeps transient turn state separate from persisted
               session artifacts so resume can rebuild the next prompt path.
             </p>
@@ -208,9 +222,9 @@
 
       <section class="doc-section">
         <div class="section-heading">
-          <p class="eyebrow">Entrypoint routing</p>
-          <h2>Control Surface Map</h2>
-          <p>
+          <p class="eyebrow" data-i18n="control.eyebrow">Entrypoint routing</p>
+          <h2 data-i18n="control.title">Control Surface Map</h2>
+          <p data-i18n="control.body">
             CLI commands, slash commands, the TUI, background workers, and model
             tool calls converge on the same runtime subsystems instead of
             duplicating separate behavior.
@@ -222,16 +236,16 @@
       <section id="commands" class="doc-section">
         <div class="section-heading with-control">
           <div>
-            <p class="eyebrow">CLI and slash surface</p>
-            <h2>Command Explorer</h2>
-            <p>
+            <p class="eyebrow" data-i18n="commands.eyebrow">CLI and slash surface</p>
+            <h2 data-i18n="commands.title">Command Explorer</h2>
+            <p data-i18n="commands.body">
               Search top-level CLI commands, developer utilities, and local slash
               commands handled before model calls.
             </p>
           </div>
           <label class="search-field">
-            <span>Find command</span>
-            <input id="command-search" type="search" placeholder="agent, mcp, workflow, /context">
+            <span data-i18n="commands.search">Find command</span>
+            <input id="command-search" type="search" placeholder="agent, mcp, workflow, /context" data-i18n-placeholder="commands.placeholder">
           </label>
         </div>
         <div id="command-filters" class="segmented-controls" aria-label="Command filters"></div>
@@ -244,16 +258,16 @@
       <section id="tools" class="doc-section">
         <div class="section-heading with-control">
           <div>
-            <p class="eyebrow">Agent tool registry</p>
-            <h2>Default Tools</h2>
-            <p>
+            <p class="eyebrow" data-i18n="tools.eyebrow">Agent tool registry</p>
+            <h2 data-i18n="tools.title">Default Tools</h2>
+            <p data-i18n="tools.body">
               Tools are grouped by operational surface. Plugin aliases and virtual
               tools are overlaid later by the effective registry builder.
             </p>
           </div>
           <label class="search-field">
-            <span>Find tool</span>
-            <input id="tool-search" type="search" placeholder="read_file, task, MCP, Agent">
+            <span data-i18n="tools.search">Find tool</span>
+            <input id="tool-search" type="search" placeholder="read_file, task, MCP, Agent" data-i18n-placeholder="tools.placeholder">
           </label>
         </div>
         <div id="tool-filters" class="segmented-controls" aria-label="Tool filters"></div>
@@ -266,15 +280,15 @@
       <section id="pipeline" class="doc-section">
         <div class="section-heading with-control">
           <div>
-            <p class="eyebrow">After each prompt</p>
-            <h2>Runtime Pipeline</h2>
-            <p>
+            <p class="eyebrow" data-i18n="pipeline.eyebrow">After each prompt</p>
+            <h2 data-i18n="pipeline.title">Runtime Pipeline</h2>
+            <p data-i18n="pipeline.body">
               Follow how a prompt becomes model-ready context, loops through
               tools, and persists enough state to resume later.
             </p>
           </div>
           <label class="search-field compact">
-            <span>Prompt path</span>
+            <span data-i18n="pipeline.promptPath">Prompt path</span>
             <select id="prompt-mode"></select>
           </label>
         </div>
@@ -282,8 +296,8 @@
           <article>
             <div class="toolbar-row">
               <label class="search-field fill">
-                <span>Find step</span>
-                <input id="step-search" type="search" placeholder="context, budget, tool result, persistence">
+                <span data-i18n="pipeline.findStep">Find step</span>
+                <input id="step-search" type="search" placeholder="context, budget, tool result, persistence" data-i18n-placeholder="pipeline.placeholder">
               </label>
               <div id="phase-filters" class="segmented-controls" aria-label="Pipeline phase filters"></div>
             </div>
@@ -293,8 +307,8 @@
             <div id="timeline" class="timeline" aria-live="polite"></div>
           </article>
           <aside class="detail-pane" aria-labelledby="detail-title">
-            <p class="eyebrow">Selected step</p>
-            <h3 id="detail-title">Step Details</h3>
+            <p class="eyebrow" data-i18n="pipeline.selected">Selected step</p>
+            <h3 id="detail-title" data-i18n="pipeline.stepDetails">Step Details</h3>
             <div id="step-detail" class="detail-body"></div>
           </aside>
         </div>
@@ -303,14 +317,14 @@
       <section class="doc-section">
         <div class="section-heading with-control">
           <div>
-            <p class="eyebrow">Context assembly</p>
-            <h2>LLM Request Graph</h2>
-            <p>
+            <p class="eyebrow" data-i18n="graph.eyebrow">Context assembly</p>
+            <h2 data-i18n="graph.title">LLM Request Graph</h2>
+            <p data-i18n="graph.body">
               Active nodes and edges show the selected pipeline step. Edges are
               highlighted only when both connected nodes belong to that step.
             </p>
           </div>
-          <button id="reset-graph" class="button small" type="button">Reset focus</button>
+          <button id="reset-graph" class="button small" type="button" data-i18n="graph.reset">Reset focus</button>
         </div>
         <div class="graph-wrap">
           <svg id="context-graph" class="context-graph" role="img" aria-label="Graph of context inputs and model request outputs"></svg>
@@ -320,9 +334,9 @@
       <section class="doc-section grid-two">
         <article>
           <div class="section-heading small-heading">
-            <p class="eyebrow">Context pressure</p>
-            <h2>Budget And Compaction</h2>
-            <p>
+            <p class="eyebrow" data-i18n="budget.eyebrow">Context pressure</p>
+            <h2 data-i18n="budget.title">Budget And Compaction</h2>
+            <p data-i18n="budget.body">
               A concrete decision path for prompt sizing and recovery before the
               backend receives a request.
             </p>
@@ -331,9 +345,9 @@
         </article>
         <article>
           <div class="section-heading small-heading">
-            <p class="eyebrow">Run events</p>
-            <h2>Stream Event Groups</h2>
-            <p>
+            <p class="eyebrow" data-i18n="events.eyebrow">Run events</p>
+            <h2 data-i18n="events.title">Stream Event Groups</h2>
+            <p data-i18n="events.body">
               Labeled event lanes showing the runtime telemetry emitted during
               streaming, pressure handling, tools, hooks, and delegation.
             </p>
@@ -344,9 +358,9 @@
 
       <section class="doc-section">
         <div class="section-heading">
-          <p class="eyebrow">Code map</p>
-          <h2>Module Atlas</h2>
-          <p>
+          <p class="eyebrow" data-i18n="modules.eyebrow">Code map</p>
+          <h2 data-i18n="modules.title">Module Atlas</h2>
+          <p data-i18n="modules.body">
             Primary responsibilities by package. The labels avoid volatile file
             and line counts.
           </p>
@@ -356,9 +370,9 @@
 
       <section id="setup" class="doc-section setup-section">
         <div class="section-heading">
-          <p class="eyebrow">Runbook</p>
-          <h2>Setup, Configuration, And Testing</h2>
-          <p>
+          <p class="eyebrow" data-i18n="setup.eyebrow">Runbook</p>
+          <h2 data-i18n="setup.title">Setup, Configuration, And Testing</h2>
+          <p data-i18n="setup.body">
             The project is packaged with <code>setuptools</code>, uses
             <code>litellm</code> for model transport, and can run through the
             console script or <code>python -m src.main</code>.
@@ -366,25 +380,25 @@
         </div>
         <div class="guide-grid">
           <article class="guide-card">
-            <h3>1. Install</h3>
+            <h3 data-i18n="setup.install">1. Install</h3>
             <pre><code>python -m venv .venv
 .venv\Scripts\activate
 pip install -e .[tui]</code></pre>
           </article>
           <article class="guide-card">
-            <h3>2. Configure</h3>
+            <h3 data-i18n="setup.configure">2. Configure</h3>
             <pre><code>LLM_PROVIDER=ollama_chat
 LLM_MODEL=gemma4:e4b
 LLM_API_BASE=http://localhost:11434</code></pre>
           </article>
           <article class="guide-card">
-            <h3>3. Validate</h3>
+            <h3 data-i18n="setup.validate">3. Validate</h3>
             <pre><code>python -m src.main doctor --cwd .
 python -m src.main agent-context --cwd .
 python -m unittest discover -s tests -v</code></pre>
           </article>
           <article class="guide-card">
-            <h3>4. Run</h3>
+            <h3 data-i18n="setup.run">4. Run</h3>
             <pre><code>python -m src.main agent-chat --cwd .
 python -m src.main agent-tui --cwd .
 python -m src.main agent "Summarize the repo" --cwd .</code></pre>
@@ -392,8 +406,8 @@ python -m src.main agent "Summarize the repo" --cwd .</code></pre>
         </div>
         <div class="notes-grid">
           <article>
-            <h3>Permission defaults</h3>
-            <p>
+            <h3 data-i18n="setup.permissions.title">Permission defaults</h3>
+            <p data-i18n="setup.permissions.body">
               CLI write and shell permissions default to enabled unless
               <code>CLAW_NO_WRITE=1</code> or <code>CLAW_NO_SHELL=1</code> is
               set. Use <code>--no-write</code> and <code>--no-shell</code> for
@@ -402,8 +416,8 @@ python -m src.main agent "Summarize the repo" --cwd .</code></pre>
             </p>
           </article>
           <article>
-            <h3>Persistence locations</h3>
-            <p>
+            <h3 data-i18n="setup.persistence.title">Persistence locations</h3>
+            <p data-i18n="setup.persistence.body">
               Agent sessions are stored under
               <code>.port_sessions/agent</code>, and scratchpads under
               <code>.port_sessions/scratchpad</code>. Resume rebuilds from stored
@@ -411,8 +425,8 @@ python -m src.main agent "Summarize the repo" --cwd .</code></pre>
             </p>
           </article>
           <article>
-            <h3>Model transport</h3>
-            <p>
+            <h3 data-i18n="setup.model.title">Model transport</h3>
+            <p data-i18n="setup.model.body">
               The supported backend is <code>litellm</code>. Provider and
               endpoint settings are normalized from <code>LLM_PROVIDER</code>,
               <code>LLM_MODEL</code>, <code>LLM_API_BASE</code>, provider API
@@ -424,8 +438,8 @@ python -m src.main agent "Summarize the repo" --cwd .</code></pre>
     </main>
 
     <footer class="site-footer">
-      <span>Build-free static docs in <code>docs/</code>.</span>
-      <span>Open <code>docs/index.html</code> directly or serve the repository root.</span>
+      <span data-i18n="footer.static">Build-free static docs in <code>docs/</code>.</span>
+      <span data-i18n="footer.open">Open <code>docs/index.html</code> directly or serve the repository root.</span>
     </footer>
 
     <script src="app.js" defer></script>

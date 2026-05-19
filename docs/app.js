@@ -1,3 +1,312 @@
+const staticTranslations = {
+  fr: {
+    "brand.subtitle": "Agent de code local en Python",
+    "nav.overview": "Vue d'ensemble",
+    "nav.architecture": "Architecture",
+    "nav.visuals": "Visuels",
+    "nav.commands": "Commandes",
+    "nav.tools": "Outils",
+    "nav.setup": "Installation",
+    "hero.eyebrow": "Guide du runtime base sur le code source",
+    "hero.lede": "Reimplementation Python d'un runtime d'agent de code : transport LiteLLM, assemblage du contexte local, execution d'outils, gouvernance, sessions persistantes, integrations et interface Textual optionnelle.",
+    "hero.ctaOverview": "Commencer par la vue d'ensemble",
+    "hero.ctaRuntime": "Inspecter le runtime",
+    "hero.ctaRun": "Executer localement",
+    "overview.eyebrow": "Vue d'ensemble du projet",
+    "overview.title": "Fonctionnement du projet",
+    "overview.body": "Cette page est organisee pour comprendre le projet de l'exterieur vers l'interieur : le probleme traite, le trajet d'un prompt dans le runtime, les modules responsables de chaque partie, et les limites de securite et de persistance.",
+    "overview.purpose.eyebrow": "Objectif",
+    "overview.purpose.title": "Runtime local d'agent de code",
+    "overview.purpose.body": "Claw Code Agent est un runtime Python pour des workflows de code agentiques. Il collecte le contexte du workspace, envoie les requetes modele via LiteLLM, execute des outils controles, et sauvegarde assez d'etat pour inspecter ou reprendre une session.",
+    "overview.flow.eyebrow": "Flux complet",
+    "overview.flow.title": "Execution typique d'un prompt",
+    "overview.flow.1.title": "Point d'entree",
+    "overview.flow.1.detail": "Commande CLI, chat, TUI, arriere-plan ou reprise",
+    "overview.flow.2.title": "Contexte",
+    "overview.flow.2.detail": "cwd, git, memoire, scratchpad, etat runtime",
+    "overview.flow.3.title": "Requete",
+    "overview.flow.3.detail": "parties du prompt systeme, messages, specs d'outils, budgets",
+    "overview.flow.4.title": "Tour modele",
+    "overview.flow.4.detail": "appel LiteLLM, sortie streamee, appels d'outils",
+    "overview.flow.5.title": "Boucle outils",
+    "overview.flow.5.detail": "permissions, hook policy, messages de resultats d'outils",
+    "overview.flow.6.title": "Persistance",
+    "overview.flow.6.detail": "transcript, dictionnaires de contexte, messages, etat plugin",
+    "overview.responsibilities.eyebrow": "Responsabilites",
+    "overview.responsibilities.title": "Frontieres principales du runtime",
+    "overview.responsibilities.1": "Les points d'entree parsers les commandes et construisent la config runtime",
+    "overview.responsibilities.2": "Le contexte collecte l'etat du workspace et des integrations",
+    "overview.responsibilities.3": "Le prompt cree les instructions et payloads destines au modele",
+    "overview.responsibilities.4": "Le registre d'outils definit les actions exposees au modele",
+    "overview.responsibilities.5": "La gouvernance verifie permissions, hooks, budgets et securite shell",
+    "overview.responsibilities.6": "La persistance stocke les donnees de session pour reprise et audit",
+    "overview.reading.eyebrow": "Parcours de lecture",
+    "overview.reading.title": "Ou trouver les details",
+    "overview.reading.architecture": "La carte des modules montre comment les points d'entree, le coeur agent, les runtimes de fonctionnalites et les packages support s'assemblent.",
+    "overview.reading.runtimeTitle": "Flux runtime",
+    "overview.reading.runtime": "La pipeline et le graphe de requete montrent comment un prompt devient messages, specs d'outils, sortie modele, resultats d'outils et donnees de session stockees.",
+    "overview.reading.safetyTitle": "Securite et etat",
+    "overview.reading.safety": "Le modele de permissions, le flux de budget, les evenements de stream et la carte d'etat expliquent les garde-fous operationnels.",
+    "architecture.eyebrow": "Modele systeme",
+    "architecture.title": "Architecture en un coup d'oeil",
+    "architecture.body": "Le projet est organise autour d'un coeur agent reutilisable. Le CLI, la TUI, les integrations, la gouvernance et la persistance se branchent sur ce coeur au lieu de cacher la logique dans un seul script de commande.",
+    "capabilities.eyebrow": "Carte des capacites runtime",
+    "capabilities.title": "Ce que l'agent peut faire",
+    "capabilities.body": "Ce sont des groupes de capacites factuels, pas des pourcentages de maturite. Chaque carte nomme des zones concretes presentes dans le code source.",
+    "permission.eyebrow": "Gouvernance des outils",
+    "permission.title": "Modele de permissions",
+    "permission.body": "Les groupes d'outils sont presentes selon la barriere de permission qu'ils traversent dans le runtime. Cela explique ce qu'une classe d'outil est autorisee a faire.",
+    "state.eyebrow": "Persistance",
+    "state.title": "Carte d'etat et de reprise",
+    "state.body": "L'agent separe l'etat transitoire d'un tour des artefacts de session persistants, pour que resume puisse reconstruire le prochain chemin de prompt.",
+    "control.eyebrow": "Routage des points d'entree",
+    "control.title": "Carte des surfaces de controle",
+    "control.body": "Les commandes CLI, commandes slash, la TUI, les workers d'arriere-plan et les appels d'outils modele convergent vers les memes sous-systemes runtime au lieu de dupliquer des comportements.",
+    "commands.eyebrow": "Surface CLI et slash",
+    "commands.title": "Explorateur de commandes",
+    "commands.body": "Rechercher les commandes CLI principales, les utilitaires developpeur et les commandes slash locales traitees avant les appels modele.",
+    "commands.search": "Trouver une commande",
+    "commands.placeholder": "agent, mcp, workflow, /context",
+    "tools.eyebrow": "Registre d'outils agent",
+    "tools.title": "Outils par defaut",
+    "tools.body": "Les outils sont groupes par surface operationnelle. Les alias de plugins et outils virtuels sont ajoutes ensuite par le constructeur du registre effectif.",
+    "tools.search": "Trouver un outil",
+    "tools.placeholder": "read_file, task, MCP, Agent",
+    "pipeline.eyebrow": "Apres chaque prompt",
+    "pipeline.title": "Pipeline runtime",
+    "pipeline.body": "Suivre comment un prompt devient un contexte pret pour le modele, boucle a travers les outils, et persiste assez d'etat pour etre repris plus tard.",
+    "pipeline.promptPath": "Chemin du prompt",
+    "pipeline.findStep": "Trouver une etape",
+    "pipeline.placeholder": "contexte, budget, resultat outil, persistance",
+    "pipeline.selected": "Etape selectionnee",
+    "pipeline.stepDetails": "Details de l'etape",
+    "graph.eyebrow": "Assemblage du contexte",
+    "graph.title": "Graphe de requete LLM",
+    "graph.body": "Les noeuds et aretes actifs correspondent a l'etape selectionnee. Une arete est surlignee seulement si ses deux noeuds appartiennent a cette etape.",
+    "graph.reset": "Reinitialiser le focus",
+    "budget.eyebrow": "Pression de contexte",
+    "budget.title": "Budget et compaction",
+    "budget.body": "Chemin de decision concret pour dimensionner et recuperer le prompt avant que le backend recoive la requete.",
+    "events.eyebrow": "Evenements d'execution",
+    "events.title": "Groupes d'evenements stream",
+    "events.body": "Lignes d'evenements etiquetees montrant la telemetrie emise pendant le streaming, la pression de contexte, les outils, hooks et delegation.",
+    "modules.eyebrow": "Carte du code",
+    "modules.title": "Atlas des modules",
+    "modules.body": "Responsabilites principales par package. Les libelles evitent les comptes volatils de fichiers et lignes.",
+    "setup.eyebrow": "Runbook",
+    "setup.title": "Installation, configuration et tests",
+    "setup.body": "Le projet est package avec <code>setuptools</code>, utilise <code>litellm</code> pour le transport modele, et peut s'executer via le script console ou <code>python -m src.main</code>.",
+    "setup.install": "1. Installer",
+    "setup.configure": "2. Configurer",
+    "setup.validate": "3. Valider",
+    "setup.run": "4. Executer",
+    "setup.permissions.title": "Permissions par defaut",
+    "setup.permissions.body": "Les permissions d'ecriture et de shell du CLI sont activees par defaut sauf si <code>CLAW_NO_WRITE=1</code> ou <code>CLAW_NO_SHELL=1</code> est defini. Utiliser <code>--no-write</code> et <code>--no-shell</code> pour des executions en lecture seule. Les commandes shell destructives demandent toujours <code>--unsafe</code>.",
+    "setup.persistence.title": "Emplacements de persistance",
+    "setup.persistence.body": "Les sessions agent sont stockees sous <code>.port_sessions/agent</code>, et les scratchpads sous <code>.port_sessions/scratchpad</code>. Resume reconstruit depuis les messages stockes, les dictionnaires de contexte et l'etat runtime.",
+    "setup.model.title": "Transport modele",
+    "setup.model.body": "Le backend supporte est <code>litellm</code>. Les parametres provider et endpoint sont normalises depuis <code>LLM_PROVIDER</code>, <code>LLM_MODEL</code>, <code>LLM_API_BASE</code>, les cles API provider et <code>LLM_API_KEY</code>.",
+    "footer.static": "Documentation statique sans build dans <code>docs/</code>.",
+    "footer.open": "Ouvrir <code>docs/index.html</code> directement ou servir la racine du depot.",
+  },
+};
+
+const inlineTranslations = {
+  fr: {
+    "Library-first runtime": "Runtime oriente bibliotheque",
+    "Packaged with setuptools and exposed through src.main.": "Package avec setuptools et expose via src.main.",
+    "Model transport": "Transport modele",
+    "Targets OpenAI-compatible local and hosted APIs.": "Cible les API locales et hebergees compatibles OpenAI.",
+    "Operational surface": "Surface operationnelle",
+    "One-shot, chat, TUI, background, daemon, and utility commands.": "Commandes one-shot, chat, TUI, arriere-plan, daemon et utilitaires.",
+    "Agent actions": "Actions agent",
+    "Workspace, shell, search, MCP, LSP, task, team, workflow, and subagent tools.": "Outils workspace, shell, recherche, MCP, LSP, taches, equipes, workflows et sous-agents.",
+    "Local persistence": "Persistance locale",
+    "Sessions, scratchpads, plans, tasks, config, account, and runtime history.": "Sessions, scratchpads, plans, taches, config, compte et historique runtime.",
+    "Docs site": "Site de documentation",
+    "Build-free HTML, CSS, and JavaScript in docs/.": "HTML, CSS et JavaScript sans build dans docs/.",
+    "Entrypoints": "Points d'entree",
+    "Agent core": "Coeur agent",
+    "Runtimes": "Runtimes",
+    "Support": "Support",
+    "Loads workspace environment values, builds the parser, and dispatches commands.": "Charge les valeurs d'environnement du workspace, construit le parser et dispatche les commandes.",
+    "Defines CLI commands, utility commands, agent modes, and shared flags.": "Definit les commandes CLI, les utilitaires, les modes agent et les flags partages.",
+    "Routes parsed commands to runtime handlers and feature facades.": "Route les commandes parsees vers les handlers runtime et facades de fonctionnalites.",
+    "Optional Textual application for sessions, transcript, prompt composer, and side panels.": "Application Textual optionnelle pour sessions, transcript, composeur de prompt et panneaux lateraux.",
+    "Owns LocalCodingAgent, prompt loops, tool execution, delegation, refresh, and persistence.": "Possede LocalCodingAgent, boucles de prompt, execution d'outils, delegation, refresh et persistance.",
+    "Builds context snapshots, prompt sections, usage accounting, and pressure passes.": "Construit snapshots de contexte, sections de prompt, comptage d'usage et passes de pression.",
+    "Defines tool schemas, execution handlers, shell security, and effective registries.": "Definit schemas d'outils, handlers d'execution, securite shell et registres effectifs.",
+    "Carries message, run result, budget, permission, model, and usage dataclasses.": "Contient les dataclasses messages, resultats, budgets, permissions, modele et usage.",
+    "Search, MCP, remote profiles, remote triggers, plugins, and LSP-style intelligence.": "Recherche, MCP, profils distants, triggers distants, plugins et intelligence type LSP.",
+    "Plans, tasks, workflows, and managed git worktrees.": "Plans, taches, workflows et worktrees git geres.",
+    "Ask-user queues and local team/message collaboration state.": "Files ask-user et etat local de collaboration equipe/messages.",
+    "Account, config, doctor, env, hook policy, tokenizer, and background sessions.": "Compte, config, doctor, env, hook policy, tokenizer et sessions d'arriere-plan.",
+    "LiteLLM-backed chat client factory and parser/error helpers.": "Fabrique de client chat basee sur LiteLLM et helpers de parsing/erreurs.",
+    "Session store, transcript handling, compaction, microcompaction, and persistence helpers.": "Stockage de session, gestion transcript, compaction, microcompaction et helpers de persistance.",
+    "Conversation state, slash suggestions, formatting, workspace files, and Textual event bridge.": "Etat conversation, suggestions slash, formatage, fichiers workspace et pont d'evenements Textual.",
+    "Runtime unit tests plus benchmark adapters for code, math, instruction, and general suites.": "Tests unitaires runtime et adaptateurs benchmark pour code, maths, instructions et suites generales.",
+    "Agent loop": "Boucle agent",
+    "Prompt handling, local slash preprocessing, model calls, tool loops, continuation handling, and final run assembly.": "Gestion des prompts, pretraitement slash local, appels modele, boucles d'outils, continuations et assemblage du resultat final.",
+    "Context engine": "Moteur de contexte",
+    "Workspace, git, memory, scratchpad, runtime state, and system prompt assembly.": "Workspace, git, memoire, scratchpad, etat runtime et assemblage du prompt systeme.",
+    "Tooling": "Outillage",
+    "Core workspace tools plus integrations, delegation, skills, and background task helpers.": "Outils workspace principaux plus integrations, delegation, skills et helpers de taches d'arriere-plan.",
+    "Integrations": "Integrations",
+    "Local search, MCP, remote profiles, remote triggers, plugins, and LSP-style code intelligence.": "Recherche locale, MCP, profils distants, triggers distants, plugins et intelligence code type LSP.",
+    "Governance": "Gouvernance",
+    "Permission tiers, shell safety checks, hook policy, token budgets, and cost tracking.": "Niveaux de permission, controles de securite shell, hook policy, budgets tokens et suivi des couts.",
+    "Persistence": "Persistance",
+    "Saved sessions, transcripts, file history replay, plugin state, compaction, and scratchpads.": "Sessions sauvegardees, transcripts, replay d'historique fichiers, etat plugin, compaction et scratchpads.",
+    "Interfaces": "Interfaces",
+    "Argparse CLI, interactive chat, Textual TUI, local background sessions, and daemon wrappers.": "CLI argparse, chat interactif, TUI Textual, sessions locales d'arriere-plan et wrappers daemon.",
+    "Verification": "Verification",
+    "Doctor checks, unit tests, and benchmark adapters cover the runtime and its integrations.": "Checks doctor, tests unitaires et adaptateurs benchmark couvrent le runtime et ses integrations.",
+    "Read/default": "Lecture/defaut",
+    "Write-capable": "Avec ecriture",
+    "Shell": "Shell",
+    "Runtime action": "Action runtime",
+    "Workspace inspection and status-style tools can run in read-oriented sessions.": "Les outils d'inspection du workspace et de statut peuvent s'executer dans des sessions orientees lecture.",
+    "File, config, task, team, worktree, and account mutations require write permission.": "Les mutations de fichiers, config, taches, equipes, worktrees et comptes demandent la permission d'ecriture.",
+    "Shell execution is separately gated and destructive commands require unsafe mode.": "L'execution shell est controlee separement et les commandes destructives demandent le mode unsafe.",
+    "Delegation, MCP calls, workflow runs, and ask-user flows act through runtime services.": "La delegation, les appels MCP, les executions de workflow et les flux ask-user passent par les services runtime.",
+    "no write flag": "aucun flag d'ecriture",
+    "no shell flag": "aucun flag shell",
+    "safe for planning": "adapte au mode plan",
+    "--no-write blocks": "--no-write bloque",
+    "CLAW_NO_WRITE=1 blocks": "CLAW_NO_WRITE=1 bloque",
+    "state-changing": "modifie l'etat",
+    "--no-shell blocks": "--no-shell bloque",
+    "CLAW_NO_SHELL=1 blocks": "CLAW_NO_SHELL=1 bloque",
+    "--unsafe for destructive": "--unsafe pour destructif",
+    "tool preflight": "preflight outil",
+    "hook policy": "hook policy",
+    "delegation budget": "budget de delegation",
+    "Turn state": "Etat du tour",
+    "Session artifact": "Artefact de session",
+    "Scratchpad": "Scratchpad",
+    "Resume": "Reprise",
+    "The active run tracks messages, usage, cost, file history, stream events, and tool-call loop state.": "L'execution active suit les messages, l'usage, le cout, l'historique fichiers, les evenements stream et l'etat de boucle d'appels d'outils.",
+    "Completed runs persist transcript data, prompt parts, context dictionaries, messages, file history, permissions, and plugin state.": "Les executions terminees persistent transcript, parties de prompt, dictionnaires de contexte, messages, historique fichiers, permissions et etat plugin.",
+    "Scratchpad storage gives runs a workspace-specific place for notes and guidance without mixing it into source files.": "Le stockage scratchpad donne aux executions un espace de notes propre au workspace sans le melanger aux fichiers source.",
+    "Resume rebuilds the session from stored prompt parts, context dictionaries, messages, file history, and compaction replay.": "Resume reconstruit la session depuis les parties de prompt stockees, dictionnaires de contexte, messages, historique fichiers et replay de compaction.",
+    "in memory": "en memoire",
+    "stored messages": "messages stockes",
+    "file history replay": "replay d'historique fichiers",
+    "base session": "session de base",
+    "workspace notes": "notes workspace",
+    "session guidance": "guidage session",
+    "CLI command": "Commande CLI",
+    "Slash command": "Commande slash",
+    "Textual UI": "Interface Textual",
+    "Model tool call": "Appel d'outil modele",
+    "Background run": "Execution arriere-plan",
+    "Runtime target": "Cible runtime",
+    "Surface": "Surface",
+    "Route": "Route",
+    "Effect": "Effet",
+    "shared runtime boundary": "frontiere runtime partagee",
+    "agent one-shot": "agent one-shot",
+    "feature runtimes": "runtimes de fonctionnalites",
+    "diagnostics": "diagnostics",
+    "local answer": "reponse locale",
+    "rewritten prompt": "prompt reecrit",
+    "runtime status": "statut runtime",
+    "conversation state": "etat conversation",
+    "prompt composer": "composeur de prompt",
+    "agent session": "session agent",
+    "workspace tools": "outils workspace",
+    "orchestration state": "etat d'orchestration",
+    "stored output": "sortie stockee",
+    "logs": "logs",
+    "attach/kill controls": "controles attach/kill",
+    "New prompt": "Nouveau prompt",
+    "Fresh run() path with a new session id and scratchpad.": "Chemin run() frais avec un nouvel id de session et un scratchpad.",
+    "Resume prompt": "Prompt repris",
+    "resume() hydrates persisted state before _run_prompt().": "resume() hydrate l'etat persiste avant _run_prompt().",
+    "Slash command": "Commande slash",
+    "Local command preprocessing may return before any model call.": "Le pretraitement d'une commande locale peut retourner avant tout appel modele.",
+    "Tool follow-up": "Suite d'outil",
+    "Tool results become the next model context.": "Les resultats d'outils deviennent le prochain contexte modele.",
+    "All": "Tout",
+    "prompt": "prompt",
+    "context": "contexte",
+    "budget": "budget",
+    "model": "modele",
+    "tools": "outils",
+    "Prompt": "Prompt",
+    "Context": "Contexte",
+    "Budget": "Budget",
+    "Model": "Modele",
+    "Tools": "Outils",
+    "local slash command": "commande slash locale",
+    "What happens": "Ce qui se passe",
+    "Inputs": "Entrees",
+    "Outputs": "Sorties",
+    "Context keys touched": "Cles de contexte touchees",
+    "Source": "Source",
+    "No commands match the current filters.": "Aucune commande ne correspond aux filtres actuels.",
+    "No tools match the current filters.": "Aucun outil ne correspond aux filtres actuels.",
+    "No pipeline steps match the current filters.": "Aucune etape de pipeline ne correspond aux filtres actuels.",
+    "Select a step to inspect its inputs and outputs.": "Selectionner une etape pour inspecter ses entrees et sorties.",
+    "read/default": "lecture/defaut",
+    "write-capable": "ecriture",
+    "shell": "shell",
+    "runtime": "runtime",
+    "Core agent": "Coeur agent",
+    "Developer": "Developpeur",
+    "Integration": "Integration",
+    "Orchestration": "Orchestration",
+    "System": "Systeme",
+    "Collaboration": "Collaboration",
+    "Background": "Arriere-plan",
+    "Slash": "Slash",
+    "Workspace read": "Lecture workspace",
+    "Workspace write": "Ecriture workspace",
+    "Code intelligence": "Intelligence code",
+    "Search": "Recherche",
+    "Account": "Compte",
+    "Config": "Config",
+    "Remote": "Remote",
+    "Worktree": "Worktree",
+    "Workflow": "Workflow",
+    "Remote trigger": "Trigger distant",
+    "Plan": "Plan",
+    "Task": "Tache",
+    "Team": "Equipe",
+    "Planning mode": "Mode plan",
+    "Background task": "Tache d'arriere-plan",
+    "Subagent": "Sous-agent",
+    "Skill": "Skill",
+    "Build request": "Construire la requete",
+    "Preflight": "Preflight",
+    "Reduce pressure": "Reduire la pression",
+    "Retry sizing": "Retester la taille",
+    "Proceed or block": "Continuer ou bloquer",
+    "Messages, tool specs, model config, budget config, and optional output schema are ready.": "Messages, specs d'outils, config modele, config budget et schema de sortie optionnel sont prets.",
+    "Projected input tokens are compared with soft and hard limits before the backend call.": "Les tokens d'entree projetes sont compares aux limites souples et dures avant l'appel backend.",
+    "Older context is snipped or compacted while recent messages and tool-call structure are preserved.": "Le contexte ancien est coupe ou compacte en preservant les messages recents et la structure des appels d'outils.",
+    "The reduced session is measured again. Prompt-too-long failures can trigger reactive compaction.": "La session reduite est mesuree a nouveau. Les erreurs de prompt trop long peuvent declencher une compaction reactive.",
+    "The model call proceeds when under limits. If hard limits remain exceeded, the run stops first.": "L'appel modele continue si les limites sont respectees. Si les limites dures restent depassees, l'execution s'arrete avant.",
+    "Token caps": "Caps tokens",
+    "Run caps": "Caps d'execution",
+    "Prompt and model": "Prompt et modele",
+    "Budget and pressure": "Budget et pression",
+    "Tool execution": "Execution d'outils",
+    "Plugins, hooks, delegation": "Plugins, hooks, delegation",
+    "Core runtime": "Runtime coeur",
+    "Context package": "Package contexte",
+    "Tool package": "Package outils",
+    "CLI package": "Package CLI",
+    "Integration package": "Package integration",
+    "Orchestration package": "Package orchestration",
+    "System package": "Package systeme",
+    "Collaboration package": "Package collaboration",
+    "Session package": "Package session",
+    "UI layer": "Couche UI",
+    "LLM layer": "Couche LLM",
+  },
+};
+
 const repoMetrics = [
   { value: "Python", label: "Library-first runtime", detail: "Packaged with setuptools and exposed through src.main." },
   { value: "LiteLLM", label: "Model transport", detail: "Targets OpenAI-compatible local and hosted APIs." },
@@ -573,6 +882,7 @@ const controlSurfaces = [
 ];
 
 const state = {
+  language: document.documentElement.dataset.lang === "fr" ? "fr" : "en",
   commandCategory: "All",
   commandQuery: "",
   toolCategory: "All",
@@ -584,6 +894,8 @@ const state = {
 };
 
 const els = {
+  langToggle: document.querySelector("#lang-toggle"),
+  langLabel: document.querySelector("#lang-label"),
   themeToggle: document.querySelector("#theme-toggle"),
   themeLabel: document.querySelector("#theme-label"),
   metrics: document.querySelector("#repo-metrics"),
@@ -614,6 +926,7 @@ const els = {
 };
 
 function init() {
+  applyLanguage();
   syncThemeControl();
   renderMetrics();
   renderArchitecture();
@@ -633,6 +946,7 @@ function init() {
 }
 
 function bindEvents() {
+  els.langToggle.addEventListener("click", toggleLanguage);
   els.themeToggle.addEventListener("click", toggleTheme);
   els.commandSearch.addEventListener("input", () => {
     state.commandQuery = els.commandSearch.value.trim().toLowerCase();
@@ -658,6 +972,75 @@ function bindEvents() {
     renderTimeline();
     renderGraph();
   });
+}
+
+function toggleLanguage() {
+  setLanguage(state.language === "fr" ? "en" : "fr");
+}
+
+function setLanguage(language) {
+  state.language = language === "fr" ? "fr" : "en";
+  document.documentElement.dataset.lang = state.language;
+  document.documentElement.lang = state.language;
+  try {
+    localStorage.setItem("claw-docs-lang", state.language);
+  } catch {
+    // Language persistence is optional; the visible toggle still updates.
+  }
+  applyLanguage();
+  renderMetrics();
+  renderArchitecture();
+  renderCapabilities();
+  renderPermissionModel();
+  renderStateFlow();
+  renderControlMap();
+  renderCommandExplorer();
+  renderToolExplorer();
+  renderPipelineControls();
+  renderTimeline();
+  renderBudget();
+  renderEvents();
+  renderModules();
+  renderGraph();
+}
+
+function applyLanguage() {
+  const next = state.language === "fr" ? "en" : "fr";
+  const label = next.toUpperCase();
+  els.langLabel.textContent = label;
+  els.langToggle.setAttribute("aria-pressed", state.language === "fr" ? "true" : "false");
+  els.langToggle.setAttribute("aria-label", state.language === "fr" ? "Switch to English" : "Passer en francais");
+  els.langToggle.title = state.language === "fr" ? "Switch to English" : "Passer en francais";
+
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    if (!element.dataset.i18nDefault) {
+      element.dataset.i18nDefault = element.innerHTML;
+    }
+    const key = element.getAttribute("data-i18n");
+    element.innerHTML = state.language === "en" ? element.dataset.i18nDefault : translateKey(key) || element.dataset.i18nDefault;
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    if (!element.dataset.i18nPlaceholderDefault) {
+      element.dataset.i18nPlaceholderDefault = element.getAttribute("placeholder") || "";
+    }
+    const key = element.getAttribute("data-i18n-placeholder");
+    const value = state.language === "en" ? element.dataset.i18nPlaceholderDefault : translateKey(key) || element.dataset.i18nPlaceholderDefault;
+    element.setAttribute("placeholder", value);
+  });
+}
+
+function translateKey(key) {
+  if (state.language === "en") {
+    return "";
+  }
+  return staticTranslations[state.language]?.[key] || "";
+}
+
+function localize(value) {
+  if (state.language === "en") {
+    return value;
+  }
+  return inlineTranslations[state.language]?.[value] || value;
 }
 
 function toggleTheme() {
@@ -694,11 +1077,11 @@ function renderMetrics() {
     const card = document.createElement("article");
     card.className = "metric-card";
     const value = document.createElement("strong");
-    value.textContent = metric.value;
+    value.textContent = localize(metric.value);
     const label = document.createElement("span");
-    label.textContent = metric.label;
+    label.textContent = localize(metric.label);
     const detail = document.createElement("span");
-    detail.textContent = metric.detail;
+    detail.textContent = localize(metric.detail);
     card.append(value, label, detail);
     els.metrics.append(card);
   }
@@ -711,7 +1094,7 @@ function renderArchitecture() {
     wrapper.className = "arch-row";
     const label = document.createElement("div");
     label.className = "arch-label";
-    label.textContent = row.label;
+    label.textContent = localize(row.label);
     const cells = document.createElement("div");
     cells.className = "arch-cells";
     for (const [title, body, tone] of row.cells) {
@@ -719,9 +1102,9 @@ function renderArchitecture() {
       cell.className = "arch-cell";
       cell.dataset.tone = tone;
       const strong = document.createElement("strong");
-      strong.textContent = title;
+      strong.textContent = localize(title);
       const span = document.createElement("span");
-      span.textContent = body;
+      span.textContent = localize(body);
       cell.append(strong, span);
       cells.append(cell);
     }
@@ -736,15 +1119,15 @@ function renderCapabilities() {
     const card = document.createElement("article");
     card.className = "capability-card";
     const title = document.createElement("h3");
-    title.textContent = capability.name;
+    title.textContent = localize(capability.name);
     const summary = document.createElement("p");
-    summary.textContent = capability.summary;
+    summary.textContent = localize(capability.summary);
     const tags = document.createElement("div");
     tags.className = "capability-tags";
     for (const item of capability.items) {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = item;
+      tag.textContent = localize(item);
       tags.append(tag);
     }
     card.append(title, summary, tags);
@@ -762,21 +1145,21 @@ function renderPermissionModel() {
     const head = document.createElement("header");
     head.className = "permission-head";
     const title = document.createElement("h3");
-    title.textContent = item.label;
+    title.textContent = localize(item.label);
     const badge = document.createElement("span");
     badge.className = `permission-badge tag ${item.id}`;
     badge.textContent = permissionLabel(item.id);
     head.append(title, badge);
 
     const rule = document.createElement("p");
-    rule.textContent = item.rule;
+    rule.textContent = localize(item.rule);
 
     const gates = document.createElement("div");
     gates.className = "permission-rule-list";
     for (const gate of item.gates) {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = gate;
+      tag.textContent = localize(gate);
       gates.append(tag);
     }
 
@@ -806,21 +1189,21 @@ function renderStateFlow() {
     const head = document.createElement("header");
     head.className = "state-head";
     const title = document.createElement("h3");
-    title.textContent = item.title;
+    title.textContent = localize(item.title);
     const badge = document.createElement("span");
     badge.className = "state-badge";
     badge.textContent = item.badge;
     head.append(title, badge);
 
     const detail = document.createElement("p");
-    detail.textContent = item.detail;
+    detail.textContent = localize(item.detail);
 
     const artifacts = document.createElement("div");
     artifacts.className = "state-artifacts";
     for (const artifact of item.artifacts) {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = artifact;
+      tag.textContent = localize(artifact);
       artifacts.append(tag);
     }
 
@@ -860,10 +1243,10 @@ function controlNode(label, title, detail) {
   node.className = "control-node";
   const head = document.createElement("header");
   const h3 = document.createElement("h3");
-  h3.textContent = title;
+  h3.textContent = localize(title);
   const badge = document.createElement("span");
   badge.className = "control-badge";
-  badge.textContent = label;
+  badge.textContent = localize(label);
   head.append(h3, badge);
   const code = document.createElement("code");
   code.textContent = detail;
@@ -876,17 +1259,17 @@ function controlTargetNode(targets) {
   node.className = "control-node";
   const head = document.createElement("header");
   const title = document.createElement("h3");
-  title.textContent = "Runtime target";
+  title.textContent = localize("Runtime target");
   const badge = document.createElement("span");
   badge.className = "control-badge";
-  badge.textContent = "Effect";
+  badge.textContent = localize("Effect");
   head.append(title, badge);
   const list = document.createElement("div");
   list.className = "control-targets";
   for (const target of targets) {
     const tag = document.createElement("span");
     tag.className = "tag";
-    tag.textContent = target;
+    tag.textContent = localize(target);
     list.append(tag);
   }
   node.append(head, list);
@@ -923,7 +1306,7 @@ function renderCommandCards() {
       .includes(state.commandQuery);
   });
   els.commandGrid.replaceChildren();
-  els.commandCount.textContent = `${visible.length} commands shown`;
+  els.commandCount.textContent = state.language === "fr" ? `${visible.length} commandes affichees` : `${visible.length} commands shown`;
   if (!visible.length) {
     els.commandGrid.append(emptyState("No commands match the current filters."));
     return;
@@ -936,10 +1319,10 @@ function renderCommandCards() {
     name.innerHTML = `<code>${escapeHtml(item.name)}</code>`;
     const category = document.createElement("span");
     category.className = "tag";
-    category.textContent = item.category;
+    category.textContent = localize(item.category);
     header.append(name, category);
     const desc = document.createElement("p");
-    desc.textContent = item.description;
+    desc.textContent = localize(item.description);
     const source = document.createElement("p");
     source.className = "detail-meta";
     source.textContent = item.source;
@@ -947,13 +1330,13 @@ function renderCommandCards() {
     if (item.aliases) {
       const aliases = document.createElement("p");
       aliases.className = "detail-meta";
-      aliases.textContent = `Aliases: ${item.aliases}`;
+      aliases.textContent = state.language === "fr" ? `Alias : ${item.aliases}` : `Aliases: ${item.aliases}`;
       card.append(aliases);
     }
     if (item.kind) {
       const kind = document.createElement("p");
       kind.className = "detail-meta";
-      kind.textContent = item.kind;
+      kind.textContent = localize(item.kind);
       card.append(kind);
     }
     card.append(source);
@@ -984,7 +1367,7 @@ function renderToolCards() {
       .includes(state.toolQuery);
   });
   els.toolGrid.replaceChildren();
-  els.toolCount.textContent = `${visible.length} tools shown`;
+  els.toolCount.textContent = state.language === "fr" ? `${visible.length} outils affiches` : `${visible.length} tools shown`;
   if (!visible.length) {
     els.toolGrid.append(emptyState("No tools match the current filters."));
     return;
@@ -997,15 +1380,15 @@ function renderToolCards() {
     name.innerHTML = `<code>${escapeHtml(item.name)}</code>`;
     const category = document.createElement("span");
     category.className = "tag";
-    category.textContent = item.category;
+    category.textContent = localize(item.category);
     header.append(name, category);
     const desc = document.createElement("p");
-    desc.textContent = item.description;
+    desc.textContent = localize(item.description);
     const meta = document.createElement("div");
     meta.className = "tool-meta";
     const permission = document.createElement("span");
     permission.className = `tag ${item.permission}`;
-    permission.textContent = permissionLabel(item.permission);
+    permission.textContent = localize(permissionLabel(item.permission));
     const source = document.createElement("span");
     source.className = "tag";
     source.textContent = "src/agent/tools";
@@ -1020,8 +1403,8 @@ function renderPipelineControls() {
   for (const mode of promptModes) {
     const option = document.createElement("option");
     option.value = mode.id;
-    option.textContent = mode.label;
-    option.title = mode.note;
+    option.textContent = localize(mode.label);
+    option.title = localize(mode.note);
     els.mode.append(option);
   }
   renderFilterButtons(els.phaseFilters, ["all", ...phases], state.phase, (phase) => {
@@ -1036,7 +1419,7 @@ function renderTimeline() {
     state.selectedStepId = visible[0]?.id || null;
   }
   els.timeline.replaceChildren();
-  els.visibleCount.textContent = `${visible.length} steps shown`;
+  els.visibleCount.textContent = state.language === "fr" ? `${visible.length} etapes affichees` : `${visible.length} steps shown`;
   if (!visible.length) {
     els.timeline.append(emptyState("No pipeline steps match the current filters."));
     renderDetail(null);
@@ -1060,14 +1443,14 @@ function renderTimeline() {
     main.className = "step-main";
     const title = document.createElement("span");
     title.className = "step-title";
-    title.textContent = item.title;
+    title.textContent = localize(item.title);
     const meta = document.createElement("span");
     meta.className = "step-meta";
     meta.textContent = item.source;
     main.append(title, meta);
     const phase = document.createElement("span");
     phase.className = "step-phase";
-    phase.textContent = item.phase;
+    phase.textContent = localize(item.phase);
     button.append(stepIndex, main, phase);
     els.timeline.append(button);
   });
@@ -1105,7 +1488,7 @@ function renderDetail(item) {
   const context = section("Context keys touched", item.contextKeys);
   const source = document.createElement("div");
   source.className = "detail-section";
-  source.innerHTML = `<h3>Source</h3><p class="detail-meta"><code>${escapeHtml(item.source)}</code></p>`;
+  source.innerHTML = `<h3>${escapeHtml(localize("Source"))}</h3><p class="detail-meta"><code>${escapeHtml(item.source)}</code></p>`;
   els.detail.append(overview, io, context, source);
 }
 
@@ -1118,7 +1501,7 @@ function section(title, items) {
 
 function detailHeading(text) {
   const heading = document.createElement("h3");
-  heading.textContent = text;
+  heading.textContent = localize(text);
   return heading;
 }
 
@@ -1127,7 +1510,7 @@ function list(items) {
   ul.className = "detail-list";
   for (const item of items) {
     const li = document.createElement("li");
-    li.textContent = item;
+    li.textContent = localize(item);
     ul.append(li);
   }
   return ul;
@@ -1185,9 +1568,9 @@ function renderGraph() {
       }
     });
     group.append(svg("rect", { width: "160", height: "70" }));
-    addWrappedText(group, node.label, 12, 24, 136, "node-title");
+    addWrappedText(group, localize(node.label), 12, 24, 136, "node-title");
     const kind = svg("text", { x: "12", y: "58", class: "node-kind" });
-    kind.textContent = node.kind;
+    kind.textContent = localize(node.kind);
     group.append(kind);
     els.graph.append(group);
   }
@@ -1248,9 +1631,9 @@ function renderBudget() {
     number.className = "flow-number";
     number.textContent = String(index + 1);
     const title = document.createElement("h3");
-    title.textContent = item.title;
+    title.textContent = localize(item.title);
     const detail = document.createElement("p");
-    detail.textContent = item.detail;
+    detail.textContent = localize(item.detail);
     const event = document.createElement("code");
     event.textContent = item.event;
     card.append(number, title, detail, event);
@@ -1269,9 +1652,9 @@ function renderBudget() {
     const item = document.createElement("article");
     item.className = "limit-card";
     const title = document.createElement("h3");
-    title.textContent = limit.label;
+    title.textContent = localize(limit.label);
     const value = document.createElement("p");
-    value.textContent = limit.value;
+    value.textContent = localize(limit.value);
     const source = document.createElement("code");
     source.textContent = limit.source;
     item.append(title, value, source);
@@ -1286,7 +1669,7 @@ function renderEvents() {
     const lane = document.createElement("article");
     lane.className = "event-lane";
     const title = document.createElement("h3");
-    title.textContent = group.title;
+    title.textContent = localize(group.title);
     const sequence = document.createElement("div");
     sequence.className = "event-sequence";
     group.events.forEach((eventName, index) => {
@@ -1314,14 +1697,14 @@ function renderModules() {
     const card = document.createElement("article");
     card.className = "module-card";
     const file = document.createElement("strong");
-    file.textContent = item.file;
+    file.textContent = localize(item.file);
     const meta = document.createElement("code");
-    meta.textContent = item.meta;
+    meta.textContent = localize(item.meta);
     const role = document.createElement("span");
-    role.textContent = item.role;
+    role.textContent = localize(item.role);
     const tag = document.createElement("span");
     tag.className = "tag";
-    tag.textContent = item.area;
+    tag.textContent = localize(item.area);
     card.append(file, meta, role, tag);
     els.modules.append(card);
   }
@@ -1332,7 +1715,7 @@ function renderFilterButtons(container, labels, active, onSelect, labelFormatter
   for (const label of labels) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = labelFormatter(label);
+    button.textContent = localize(labelFormatter(label));
     button.classList.toggle("is-active", label === active);
     button.addEventListener("click", () => onSelect(label));
     container.append(button);
@@ -1342,7 +1725,7 @@ function renderFilterButtons(container, labels, active, onSelect, labelFormatter
 function emptyState(message) {
   const block = document.createElement("p");
   block.className = "empty-state";
-  block.textContent = message;
+  block.textContent = localize(message);
   return block;
 }
 
