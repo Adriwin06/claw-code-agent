@@ -1,13 +1,13 @@
-# Claw Context Pipeline Docs
+# Claw Code Agent Docs
 
-Open `index.html` in a browser to inspect the static runtime visualization.
+Open `index.html` in a browser to inspect the static architecture and runtime guide.
 
 The site is intentionally build-free:
 
-- `index.html` contains the document shell.
-- `styles.css` owns the layout and visual system.
-- `app.js` contains the source-linked data model and renders the timeline, graph, budget bars, event lanes, and module map.
+- `index.html` contains the document shell, runbook, and section anchors.
+- `styles.css` owns the responsive layout, light/dark themes, graph styling, flow cards, and event groups.
+- `app.js` contains the source-linked data model and renders project facts, architecture, permission model, state/resume map, control surface map, commands, tools, runtime timeline, context graph, budget flow, event groups, and module atlas.
 
-The step data is grounded in the current Python runtime paths under
-`src/agent/context/`, `src/agent/runtime/`, `src/agent/tools/`,
-`src/agent/models/`, and the profile/command helper packages.
+The data is grounded in the current Python runtime under `src/`, plus `tests/`,
+`benchmarks/`, top-level project metadata, and the CLI/tool/slash registries.
+It avoids subjective percentages and volatile per-file line counts.

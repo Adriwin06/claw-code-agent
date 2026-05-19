@@ -3,110 +3,356 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Claw Context Pipeline</title>
+    <title>Claw Code Agent Docs</title>
+    <meta
+      name="description"
+      content="Architecture, runtime flow, commands, tools, setup, and source-grounded visualizations for Claw Code Agent."
+    >
+    <meta name="color-scheme" content="light dark">
+    <script>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem("claw-docs-theme");
+          const storedTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : null;
+          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.dataset.theme = storedTheme || (prefersDark ? "dark" : "light");
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main class="app-shell">
-      <section class="top-band" aria-labelledby="page-title">
-        <div>
-          <p class="eyebrow">Runtime visualization</p>
-          <h1 id="page-title">Claw Context Pipeline</h1>
+    <header class="site-header">
+      <a class="brand-link" href="#top" aria-label="Claw Code Agent docs home">
+        <img src="../images/logo.png" alt="" class="brand-mark">
+        <span>
+          <strong>Claw Code Agent</strong>
+          <small>Python local coding agent</small>
+        </span>
+      </a>
+      <div class="header-actions">
+        <nav class="site-nav" aria-label="Documentation sections">
+          <a href="#architecture">Architecture</a>
+          <a href="#visuals">Visuals</a>
+          <a href="#commands">Commands</a>
+          <a href="#tools">Tools</a>
+          <a href="#pipeline">Pipeline</a>
+          <a href="#setup">Setup</a>
+        </nav>
+        <button
+          id="theme-toggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="Switch color theme"
+          aria-pressed="false"
+        >
+          <span class="theme-icon" aria-hidden="true"></span>
+          <span id="theme-label">Dark</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero-section" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Source-grounded runtime guide</p>
+          <h1 id="page-title">Claw Code Agent</h1>
           <p class="lede">
-            A source-linked view of how each prompt becomes model-ready context,
-            how turns loop through tools, and where runtime state is injected.
+            A Python reimplementation of an agentic coding runtime: LiteLLM
+            transport, local context assembly, tool execution, governance,
+            persisted sessions, integrations, and an optional Textual UI.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#pipeline">Inspect the runtime</a>
+            <a class="button" href="#setup">Run locally</a>
+          </div>
+        </div>
+        <div class="runtime-stack" aria-label="Runtime stack">
+          <span>CLI / Chat / TUI</span>
+          <span>LocalCodingAgent</span>
+          <span>Context + Tools + Budgets</span>
+          <span>LiteLLM client</span>
+          <span>OpenAI-compatible model</span>
+        </div>
+      </section>
+
+      <section class="metrics-band" aria-label="Project facts">
+        <div id="repo-metrics" class="metrics-grid"></div>
+      </section>
+
+      <section id="architecture" class="doc-section">
+        <div class="section-heading">
+          <p class="eyebrow">System model</p>
+          <h2>Architecture At A Glance</h2>
+          <p>
+            The project is organized around a reusable agent core. The CLI, TUI,
+            integrations, governance, and persistence layers attach to that core
+            rather than hiding behavior in a single command script.
           </p>
         </div>
-        <div class="runtime-card" aria-label="Runtime summary">
-          <span class="summary-label">Tool registry</span>
-          <strong id="tool-count">66 tools</strong>
-          <span class="summary-label">Main loop</span>
-          <strong>LocalCodingAgent._run_prompt</strong>
+        <div id="architecture-map" class="architecture-map"></div>
+      </section>
+
+      <section class="doc-section split-layout">
+        <div class="section-heading">
+          <p class="eyebrow">Runtime capability map</p>
+          <h2>What The Agent Can Do</h2>
+          <p>
+            These are factual capability groups, not maturity percentages. Each
+            card names concrete runtime areas that exist in source.
+          </p>
+        </div>
+        <div id="capability-map" class="capability-map" aria-label="Capability map"></div>
+      </section>
+
+      <section id="visuals" class="doc-section grid-two">
+        <article>
+          <div class="section-heading small-heading">
+            <p class="eyebrow">Tool governance</p>
+            <h2>Permission Model</h2>
+            <p>
+              Tool groups are shown by the runtime permission gate they pass
+              through. This describes what a class of tool is allowed to do.
+            </p>
+          </div>
+          <div id="permission-matrix" class="permission-matrix"></div>
+        </article>
+        <article>
+          <div class="section-heading small-heading">
+            <p class="eyebrow">Persistence</p>
+            <h2>State And Resume Map</h2>
+            <p>
+              The agent keeps transient turn state separate from persisted
+              session artifacts so resume can rebuild the next prompt path.
+            </p>
+          </div>
+          <div id="state-map" class="state-flow"></div>
+        </article>
+      </section>
+
+      <section class="doc-section">
+        <div class="section-heading">
+          <p class="eyebrow">Entrypoint routing</p>
+          <h2>Control Surface Map</h2>
+          <p>
+            CLI commands, slash commands, the TUI, background workers, and model
+            tool calls converge on the same runtime subsystems instead of
+            duplicating separate behavior.
+          </p>
+        </div>
+        <div id="control-map" class="control-map"></div>
+      </section>
+
+      <section id="commands" class="doc-section">
+        <div class="section-heading with-control">
+          <div>
+            <p class="eyebrow">CLI and slash surface</p>
+            <h2>Command Explorer</h2>
+            <p>
+              Search top-level CLI commands, developer utilities, and local slash
+              commands handled before model calls.
+            </p>
+          </div>
+          <label class="search-field">
+            <span>Find command</span>
+            <input id="command-search" type="search" placeholder="agent, mcp, workflow, /context">
+          </label>
+        </div>
+        <div id="command-filters" class="segmented-controls" aria-label="Command filters"></div>
+        <div class="count-row">
+          <span id="command-count" class="count-pill"></span>
+        </div>
+        <div id="command-grid" class="card-grid"></div>
+      </section>
+
+      <section id="tools" class="doc-section">
+        <div class="section-heading with-control">
+          <div>
+            <p class="eyebrow">Agent tool registry</p>
+            <h2>Default Tools</h2>
+            <p>
+              Tools are grouped by operational surface. Plugin aliases and virtual
+              tools are overlaid later by the effective registry builder.
+            </p>
+          </div>
+          <label class="search-field">
+            <span>Find tool</span>
+            <input id="tool-search" type="search" placeholder="read_file, task, MCP, Agent">
+          </label>
+        </div>
+        <div id="tool-filters" class="segmented-controls" aria-label="Tool filters"></div>
+        <div class="count-row">
+          <span id="tool-count" class="count-pill"></span>
+        </div>
+        <div id="tool-grid" class="tool-grid"></div>
+      </section>
+
+      <section id="pipeline" class="doc-section">
+        <div class="section-heading with-control">
+          <div>
+            <p class="eyebrow">After each prompt</p>
+            <h2>Runtime Pipeline</h2>
+            <p>
+              Follow how a prompt becomes model-ready context, loops through
+              tools, and persists enough state to resume later.
+            </p>
+          </div>
+          <label class="search-field compact">
+            <span>Prompt path</span>
+            <select id="prompt-mode"></select>
+          </label>
+        </div>
+        <div class="pipeline-layout">
+          <article>
+            <div class="toolbar-row">
+              <label class="search-field fill">
+                <span>Find step</span>
+                <input id="step-search" type="search" placeholder="context, budget, tool result, persistence">
+              </label>
+              <div id="phase-filters" class="segmented-controls" aria-label="Pipeline phase filters"></div>
+            </div>
+            <div class="count-row">
+              <span id="visible-count" class="count-pill"></span>
+            </div>
+            <div id="timeline" class="timeline" aria-live="polite"></div>
+          </article>
+          <aside class="detail-pane" aria-labelledby="detail-title">
+            <p class="eyebrow">Selected step</p>
+            <h3 id="detail-title">Step Details</h3>
+            <div id="step-detail" class="detail-body"></div>
+          </aside>
         </div>
       </section>
 
-      <section class="control-strip" aria-label="Visualization controls">
-        <label class="field">
-          <span>Prompt path</span>
-          <select id="prompt-mode"></select>
-        </label>
-        <label class="field field-wide">
-          <span>Find step</span>
-          <input id="step-search" type="search" placeholder="Search phase, module, or context key">
-        </label>
-        <div class="phase-filters" id="phase-filters" aria-label="Phase filters"></div>
-      </section>
-
-      <section class="grid-two">
-        <article class="panel timeline-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">After each prompt</p>
-              <h2>Execution Timeline</h2>
-            </div>
-            <span id="visible-count" class="pill"></span>
-          </div>
-          <div id="timeline" class="timeline" aria-live="polite"></div>
-        </article>
-
-        <aside class="panel detail-panel" aria-labelledby="detail-title">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Selected step</p>
-              <h2 id="detail-title">Step Details</h2>
-            </div>
-          </div>
-          <div id="step-detail" class="detail-body"></div>
-        </aside>
-      </section>
-
-      <section class="panel">
-        <div class="panel-heading">
+      <section class="doc-section">
+        <div class="section-heading with-control">
           <div>
             <p class="eyebrow">Context assembly</p>
-            <h2>LLM Context Builder</h2>
+            <h2>LLM Request Graph</h2>
+            <p>
+              Active nodes and edges show the selected pipeline step. Edges are
+              highlighted only when both connected nodes belong to that step.
+            </p>
           </div>
-          <button id="reset-graph" class="icon-button" type="button" title="Reset graph focus" aria-label="Reset graph focus">
-            <span aria-hidden="true">R</span>
-          </button>
+          <button id="reset-graph" class="button small" type="button">Reset focus</button>
         </div>
         <div class="graph-wrap">
           <svg id="context-graph" class="context-graph" role="img" aria-label="Graph of context inputs and model request outputs"></svg>
         </div>
       </section>
 
-      <section class="grid-two lower-grid">
-        <article class="panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Pressure points</p>
-              <h2>Token Budget And Compaction</h2>
-            </div>
+      <section class="doc-section grid-two">
+        <article>
+          <div class="section-heading small-heading">
+            <p class="eyebrow">Context pressure</p>
+            <h2>Budget And Compaction</h2>
+            <p>
+              A concrete decision path for prompt sizing and recovery before the
+              backend receives a request.
+            </p>
           </div>
-          <div id="budget-bars" class="budget-bars"></div>
+          <div id="budget-visual" class="budget-visual"></div>
         </article>
-
-        <article class="panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Runtime events</p>
-              <h2>Stream Event Lanes</h2>
-            </div>
+        <article>
+          <div class="section-heading small-heading">
+            <p class="eyebrow">Run events</p>
+            <h2>Stream Event Groups</h2>
+            <p>
+              Labeled event lanes showing the runtime telemetry emitted during
+              streaming, pressure handling, tools, hooks, and delegation.
+            </p>
           </div>
-          <div id="event-lanes" class="event-lanes"></div>
+          <div id="event-groups" class="event-lane-map"></div>
         </article>
       </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Code map</p>
-            <h2>Module Responsibilities</h2>
-          </div>
+      <section class="doc-section">
+        <div class="section-heading">
+          <p class="eyebrow">Code map</p>
+          <h2>Module Atlas</h2>
+          <p>
+            Primary responsibilities by package. The labels avoid volatile file
+            and line counts.
+          </p>
         </div>
         <div id="module-map" class="module-map"></div>
       </section>
+
+      <section id="setup" class="doc-section setup-section">
+        <div class="section-heading">
+          <p class="eyebrow">Runbook</p>
+          <h2>Setup, Configuration, And Testing</h2>
+          <p>
+            The project is packaged with <code>setuptools</code>, uses
+            <code>litellm</code> for model transport, and can run through the
+            console script or <code>python -m src.main</code>.
+          </p>
+        </div>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h3>1. Install</h3>
+            <pre><code>python -m venv .venv
+.venv\Scripts\activate
+pip install -e .[tui]</code></pre>
+          </article>
+          <article class="guide-card">
+            <h3>2. Configure</h3>
+            <pre><code>LLM_PROVIDER=ollama_chat
+LLM_MODEL=gemma4:e4b
+LLM_API_BASE=http://localhost:11434</code></pre>
+          </article>
+          <article class="guide-card">
+            <h3>3. Validate</h3>
+            <pre><code>python -m src.main doctor --cwd .
+python -m src.main agent-context --cwd .
+python -m unittest discover -s tests -v</code></pre>
+          </article>
+          <article class="guide-card">
+            <h3>4. Run</h3>
+            <pre><code>python -m src.main agent-chat --cwd .
+python -m src.main agent-tui --cwd .
+python -m src.main agent "Summarize the repo" --cwd .</code></pre>
+          </article>
+        </div>
+        <div class="notes-grid">
+          <article>
+            <h3>Permission defaults</h3>
+            <p>
+              CLI write and shell permissions default to enabled unless
+              <code>CLAW_NO_WRITE=1</code> or <code>CLAW_NO_SHELL=1</code> is
+              set. Use <code>--no-write</code> and <code>--no-shell</code> for
+              read-only runs. Destructive shell commands still require
+              <code>--unsafe</code>.
+            </p>
+          </article>
+          <article>
+            <h3>Persistence locations</h3>
+            <p>
+              Agent sessions are stored under
+              <code>.port_sessions/agent</code>, and scratchpads under
+              <code>.port_sessions/scratchpad</code>. Resume rebuilds from stored
+              messages, context dictionaries, and runtime state.
+            </p>
+          </article>
+          <article>
+            <h3>Model transport</h3>
+            <p>
+              The supported backend is <code>litellm</code>. Provider and
+              endpoint settings are normalized from <code>LLM_PROVIDER</code>,
+              <code>LLM_MODEL</code>, <code>LLM_API_BASE</code>, provider API
+              keys, and <code>LLM_API_KEY</code>.
+            </p>
+          </article>
+        </div>
+      </section>
     </main>
+
+    <footer class="site-footer">
+      <span>Build-free static docs in <code>docs/</code>.</span>
+      <span>Open <code>docs/index.html</code> directly or serve the repository root.</span>
+    </footer>
 
     <script src="app.js" defer></script>
   </body>
