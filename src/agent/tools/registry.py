@@ -22,6 +22,7 @@ from src.agent.tools.execution import (
     _web_search,
     _tool_search,
     _list_available_tools,
+    _display_image,
     _sleep,
     _ask_user_question,
     _account_status,
@@ -357,6 +358,68 @@ def default_tool_registry() -> dict[str, AgentTool]:
                 },
             },
             handler=_list_available_tools,
+        ),
+        AgentTool(
+            name='display_image',
+            description=(
+                'Display one or more workspace image files or online image URLs to the user in the terminal UI. '
+                'Use this after creating or finding an image that the user should inspect. '
+                'The TUI renders ANSI thumbnails when supported and otherwise shows file paths.'
+            ),
+            parameters={
+                'type': 'object',
+                'properties': {
+                    'path': {
+                        'type': 'string',
+                        'description': 'Relative workspace path or http(s) URL for a single image.',
+                    },
+                    'url': {
+                        'type': 'string',
+                        'description': 'HTTP(S) URL for a single image.',
+                    },
+                    'paths': {
+                        'type': 'array',
+                        'description': 'Relative workspace paths or HTTP(S) URLs to show as a carousel/gallery.',
+                        'items': {'type': 'string'},
+                        'minItems': 1,
+                        'maxItems': 20,
+                    },
+                    'urls': {
+                        'type': 'array',
+                        'description': 'HTTP(S) image URLs to show as a carousel/gallery.',
+                        'items': {'type': 'string'},
+                        'minItems': 1,
+                        'maxItems': 20,
+                    },
+                    'images': {
+                        'type': 'array',
+                        'description': 'Image entries with path or url and optional per-image captions.',
+                        'items': {
+                            'oneOf': [
+                                {'type': 'string'},
+                                {
+                                    'type': 'object',
+                                    'properties': {
+                                        'path': {'type': 'string'},
+                                        'url': {'type': 'string'},
+                                        'caption': {'type': 'string'},
+                                    },
+                                },
+                            ]
+                        },
+                        'minItems': 1,
+                        'maxItems': 20,
+                    },
+                    'title': {'type': 'string'},
+                    'caption': {'type': 'string'},
+                    'layout': {
+                        'type': 'string',
+                        'enum': ['auto', 'single', 'carousel', 'gallery'],
+                        'description': 'Display hint for the UI. Defaults to auto.',
+                    },
+                },
+            },
+            handler=_display_image,
         ),
         AgentTool(
             name='sleep',

@@ -51,6 +51,12 @@ from .ui.ids import (
     build_working_section_instance_id,
     should_route_key_to_prompt,
 )
+from .ui.image_display import (
+    image_display_fallback,
+    image_display_label,
+    image_items_from_metadata,
+    render_terminal_image,
+)
 from .ui.state import AgentTuiState, hydrate_state_from_stored_session
 from .ui.slash_commands import (
     SlashCommandSuggestion,
@@ -839,6 +845,7 @@ def conversation_turns_render_signature(
                     entry.content,
                     entry.status,
                     entry.merge_key,
+                    tuple(sorted(entry.metadata.items())),
                 )
                 for entry in turn.entries
             ),
@@ -967,6 +974,18 @@ def run_agent_tui(
                         classes='turn-assistant',
                     )
                     continue
+                if entry.kind == 'image_display':
+                    if work_entries:
+                        working_section_index += 1
+                        yield from self._compose_working_section(
+                            work_entries,
+                            section_index=working_section_index,
+                            section_count=working_section_count,
+                            include_live_state=False,
+                        )
+                        work_entries = []
+                    yield from self._compose_image_display(entry)
+                    continue
                 work_entries.append(entry)
             if work_entries or (self._active and self._busy):
                 working_section_index += 1
@@ -1013,11 +1032,52 @@ def run_agent_tui(
                     classes='turn-working-body',
                 )
 
+        def _compose_image_display(self, entry: ConversationEntry):
+            images = image_items_from_metadata(entry.metadata)
+            title = entry.title or 'Images'
+            yield self._static_widget(title, classes='turn-image-title')
+            if not images:
+                yield self._markdown_widget(
+                    entry.content or 'No image metadata available.',
+                    classes='turn-image-fallback',
+                )
+                return
+            total = len(images)
+            for index, item in enumerate(images[:6], start=1):
+                yield self._static_widget(
+                    image_display_label(item, index=index, total=total),
+                    classes='turn-image-caption',
+                )
+                absolute_path = item.get('absolute_path')
+                if isinstance(absolute_path, str) and absolute_path:
+                    renderable = render_terminal_image(Path(absolute_path))
+                else:
+                    renderable = None
+                if renderable is None:
+                    yield self._static_widget(
+                        image_display_fallback(item),
+                        classes='turn-image-fallback',
+                    )
+                else:
+                    widget = Static(renderable)
+                    widget.add_class('turn-image-preview')
+                    yield widget
+            if total > 6:
+                yield self._static_widget(
+                    f'... plus {total - 6} more image(s)',
+                    classes='turn-image-fallback',
+                )
+
         def _working_section_count(self) -> int:
             count = 0
             work_entries: list[ConversationEntry] = []
             for entry in self._turn.entries:
                 if entry.kind == 'assistant':
+                    if work_entries:
+                        count += 1
+                        work_entries = []
+                    continue
+                if entry.kind == 'image_display':
                     if work_entries:
                         count += 1
                         work_entries = []
@@ -1403,6 +1463,38 @@ def run_agent_tui(
             width: 1fr;
             height: auto;
             border: round #3fb950;
+            padding: 0 1;
+            margin-bottom: 1;
+        }
+
+        .turn-image-title {
+            width: 1fr;
+            height: auto;
+            color: #56d4dd;
+            text-style: bold;
+            margin-bottom: 1;
+        }
+
+        .turn-image-caption {
+            width: 1fr;
+            height: auto;
+            color: #c9d1d9;
+            margin-bottom: 1;
+        }
+
+        .turn-image-preview {
+            width: 1fr;
+            height: auto;
+            border: round #56d4dd;
+            padding: 0 1;
+            margin-bottom: 1;
+        }
+
+        .turn-image-fallback {
+            width: 1fr;
+            height: auto;
+            border: round #56d4dd;
+            color: #8b949e;
             padding: 0 1;
             margin-bottom: 1;
         }

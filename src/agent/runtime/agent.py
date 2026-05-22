@@ -125,6 +125,7 @@ _COMPACT_OLLAMA_TOOL_NAMES: tuple[str, ...] = (
     'bash',
     'LSP',
     'web_fetch',
+    'display_image',
     'Agent',
     'delegate_agent',
     'Skill',

@@ -107,6 +107,26 @@ class TextualUiTests(unittest.TestCase):
 
         self.assertNotEqual(before, after)
 
+    def test_conversation_turns_render_signature_tracks_entry_metadata(self) -> None:
+        turn = ConversationTurn(
+            turn_id='turn-1',
+            user_prompt='Show image',
+            entries=[
+                ConversationEntry(
+                    entry_id='entry-1',
+                    kind='image_display',
+                    title='Image',
+                    metadata={'image_count': 1},
+                )
+            ],
+        )
+
+        before = conversation_turns_render_signature((turn,))
+        turn.entries[0].metadata['image_count'] = 2
+        after = conversation_turns_render_signature((turn,))
+
+        self.assertNotEqual(before, after)
+
     def test_conversation_scroll_is_at_end_tolerates_small_render_gaps(self) -> None:
         self.assertTrue(conversation_scroll_is_at_end(99.25, 100.0))
         self.assertFalse(conversation_scroll_is_at_end(95.0, 100.0))
@@ -708,6 +728,51 @@ class TextualUiTests(unittest.TestCase):
         )
         self.assertEqual(bridge.turns[0].entries[0].title, 'Tool Result: web_search')
         self.assertIn('results=1', bridge.turns[0].entries[0].content)
+
+    def test_event_bridge_renders_display_image_results_as_image_entries(self) -> None:
+        chunks: list[str] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='read-only',
+        )
+        bridge = AgentTuiEventBridge(state, emit_data=chunks.append)
+
+        bridge.begin_prompt('Show the mockup')
+        bridge.handle_event(
+            {
+                'type': 'tool_result',
+                'tool_name': 'display_image',
+                'tool_call_id': 'call-image',
+                'ok': True,
+                'metadata': {
+                    'action': 'display_image',
+                    'title': 'Mockup',
+                    'layout': 'single',
+                    'image_count': 1,
+                    'images': [
+                        {
+                            'path': 'mockup.png',
+                            'absolute_path': 'C:/workspace/mockup.png',
+                            'uri': 'file:///C:/workspace/mockup.png',
+                            'mime_type': 'image/png',
+                            'width': 320,
+                            'height': 200,
+                        }
+                    ],
+                },
+                'content': '# Image Display',
+                'content_preview': '# Image Display',
+            }
+        )
+
+        rendered = ''.join(chunks)
+        entry = bridge.turns[0].entries[-1]
+        self.assertIn('[image] displayed=1 ok=True', rendered)
+        self.assertEqual(entry.kind, 'image_display')
+        self.assertEqual(entry.title, 'Mockup')
+        self.assertEqual(entry.metadata['image_count'], 1)
+        self.assertIn('mockup.png 320x200', entry.content)
 
     def test_event_bridge_renders_failed_mcp_result_with_error_details(self) -> None:
         chunks: list[str] = []

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Sequence
+from typing import Any, Sequence
 
 from .formatting import _preview_value, sanitize_assistant_display_text
 
@@ -78,6 +78,7 @@ class ConversationEntry:
     content: str = ''
     status: str = 'info'
     merge_key: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _should_hide_session_message(payload: dict[str, object]) -> bool:

@@ -1020,6 +1020,406 @@ def _list_available_tools(arguments: dict[str, Any], context: ToolExecutionConte
     return '\n'.join(lines)
 
 
+_DISPLAY_IMAGE_MIME_TYPES = {
+    '.apng': 'image/apng',
+    '.bmp': 'image/bmp',
+    '.gif': 'image/gif',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.webp': 'image/webp',
+}
+_DISPLAY_IMAGE_CONTENT_TYPE_EXTENSIONS = {
+    'image/apng': '.apng',
+    'image/bmp': '.bmp',
+    'image/gif': '.gif',
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/svg+xml': '.svg',
+    'image/tiff': '.tiff',
+    'image/webp': '.webp',
+}
+_MAX_DISPLAY_IMAGES = 20
+_MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _DisplayImageRequest:
+    source: str
+    caption: str | None = None
+    url_only: bool = False
+
+
+def _display_image(
+    arguments: dict[str, Any],
+    context: ToolExecutionContext,
+) -> str | tuple[str, dict[str, Any]]:
+    requests = _collect_display_image_requests(arguments)
+    if not requests:
+        raise ToolExecutionError('Provide path, paths, or images to display.')
+    if len(requests) > _MAX_DISPLAY_IMAGES:
+        raise ToolExecutionError(f'display_image supports at most {_MAX_DISPLAY_IMAGES} images')
+
+    layout = _optional_string_argument(arguments, 'layout') or 'auto'
+    if layout not in {'auto', 'single', 'carousel', 'gallery'}:
+        raise ToolExecutionError('layout must be one of: auto, single, carousel, gallery')
+    if layout == 'auto':
+        layout = 'single' if len(requests) == 1 else 'carousel'
+    title = _optional_string_argument(arguments, 'title')
+    caption = _optional_string_argument(arguments, 'caption')
+
+    images: list[dict[str, Any]] = []
+    for request in requests:
+        item, target, suffix = _resolve_display_image_request(request, context)
+        width, height, image_format = _probe_display_image(target, suffix)
+        if width is not None and height is not None:
+            item['width'] = width
+            item['height'] = height
+        if image_format:
+            item['format'] = image_format
+        if request.caption:
+            item['caption'] = request.caption
+        images.append(item)
+
+    metadata = {
+        'action': 'display_image',
+        'layout': layout,
+        'image_count': len(images),
+        'images': images,
+        'terminal_rendering': 'ansi_thumbnail',
+    }
+    if title:
+        metadata['title'] = title
+    if caption:
+        metadata['caption'] = caption
+    return _render_display_image_report(metadata), metadata
+
+
+def _collect_display_image_requests(
+    arguments: dict[str, Any],
+) -> list[_DisplayImageRequest]:
+    requests: list[_DisplayImageRequest] = []
+    path = arguments.get('path')
+    if path is not None:
+        if not isinstance(path, str) or not path.strip():
+            raise ToolExecutionError('path must be a non-empty string')
+        requests.append(_DisplayImageRequest(path.strip()))
+
+    url = arguments.get('url')
+    if url is not None:
+        if not isinstance(url, str) or not url.strip():
+            raise ToolExecutionError('url must be a non-empty string')
+        requests.append(_DisplayImageRequest(url.strip(), url_only=True))
+
+    paths = arguments.get('paths')
+    if paths is not None:
+        if not isinstance(paths, list):
+            raise ToolExecutionError('paths must be an array of strings')
+        for item in paths:
+            if not isinstance(item, str) or not item.strip():
+                raise ToolExecutionError('paths must contain non-empty strings')
+            requests.append(_DisplayImageRequest(item.strip()))
+
+    urls = arguments.get('urls')
+    if urls is not None:
+        if not isinstance(urls, list):
+            raise ToolExecutionError('urls must be an array of strings')
+        for item in urls:
+            if not isinstance(item, str) or not item.strip():
+                raise ToolExecutionError('urls must contain non-empty strings')
+            requests.append(_DisplayImageRequest(item.strip(), url_only=True))
+
+    images = arguments.get('images')
+    if images is not None:
+        if not isinstance(images, list):
+            raise ToolExecutionError('images must be an array')
+        for item in images:
+            if isinstance(item, str):
+                if not item.strip():
+                    raise ToolExecutionError('images must contain non-empty paths')
+                requests.append(_DisplayImageRequest(item.strip()))
+                continue
+            if not isinstance(item, dict):
+                raise ToolExecutionError('images entries must be strings or objects')
+            raw_path = item.get('path')
+            raw_url = item.get('url')
+            if raw_path is not None and (not isinstance(raw_path, str) or not raw_path.strip()):
+                raise ToolExecutionError('image path values must be non-empty strings')
+            if raw_url is not None and (not isinstance(raw_url, str) or not raw_url.strip()):
+                raise ToolExecutionError('image url values must be non-empty strings')
+            if raw_path is None and raw_url is None:
+                raise ToolExecutionError('images entries require a non-empty path or url')
+            raw_caption = item.get('caption')
+            if raw_caption is not None and not isinstance(raw_caption, str):
+                raise ToolExecutionError('image captions must be strings')
+            caption = raw_caption.strip() if isinstance(raw_caption, str) else None
+            if isinstance(raw_path, str) and raw_path.strip():
+                requests.append(_DisplayImageRequest(raw_path.strip(), caption or None))
+            else:
+                requests.append(
+                    _DisplayImageRequest(str(raw_url).strip(), caption or None, url_only=True)
+                )
+
+    return requests
+
+
+def _resolve_display_image_request(
+    request: _DisplayImageRequest,
+    context: ToolExecutionContext,
+) -> tuple[dict[str, Any], Path, str]:
+    if _is_http_url(request.source):
+        return _download_display_image_url(request.source, context)
+    if request.url_only:
+        raise ToolExecutionError('url must be an HTTP(S) URL')
+    return _resolve_display_image_path(request.source, context)
+
+
+def _resolve_display_image_path(
+    raw_path: str,
+    context: ToolExecutionContext,
+) -> tuple[dict[str, Any], Path, str]:
+    target = _resolve_path(raw_path, context, allow_missing=False)
+    if not target.is_file():
+        raise ToolExecutionError(f'Path is not a file: {raw_path}')
+    suffix = target.suffix.lower()
+    mime_type = _DISPLAY_IMAGE_MIME_TYPES.get(suffix)
+    if mime_type is None:
+        supported = ', '.join(sorted(_DISPLAY_IMAGE_MIME_TYPES))
+        raise ToolExecutionError(
+            f'Unsupported image type for {raw_path!r}. Supported extensions: {supported}'
+        )
+    rel_path = target.relative_to(context.root).as_posix()
+    return (
+        {
+            'source_type': 'path',
+            'path': rel_path,
+            'absolute_path': str(target),
+            'uri': target.as_uri(),
+            'mime_type': mime_type,
+            'size_bytes': target.stat().st_size,
+        },
+        target,
+        suffix,
+    )
+
+
+def _download_display_image_url(
+    url: str,
+    context: ToolExecutionContext,
+) -> tuple[dict[str, Any], Path, str]:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ToolExecutionError('url must be an HTTP(S) URL')
+
+    request = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'claw-code-agent/0.1 display_image'},
+    )
+    timeout = max(1.0, min(context.command_timeout_seconds, 30.0))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = response.headers.get_content_type().lower()
+            raw_length = response.headers.get('Content-Length')
+            content_length = _parse_content_length(raw_length)
+            if (
+                content_length is not None
+                and content_length > _MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES
+            ):
+                raise ToolExecutionError(
+                    f'Image URL is too large ({_format_size_bytes(content_length)} > '
+                    f'{_format_size_bytes(_MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES)})'
+                )
+            suffix = _suffix_for_display_image_url(url, content_type)
+            payload = response.read(_MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES + 1)
+    except ToolExecutionError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise ToolExecutionError(f'Image URL returned HTTP {exc.code}: {url}') from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ToolExecutionError(f'Failed to download image URL: {exc}') from exc
+
+    if len(payload) > _MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES:
+        raise ToolExecutionError(
+            f'Image URL is too large (> {_format_size_bytes(_MAX_DISPLAY_IMAGE_DOWNLOAD_BYTES)})'
+        )
+    if not payload:
+        raise ToolExecutionError('Image URL returned an empty response')
+
+    mime_type = _DISPLAY_IMAGE_MIME_TYPES[suffix]
+    cache_path = _write_display_image_cache(url, suffix, payload, context)
+    rel_path = cache_path.relative_to(context.root).as_posix()
+    return (
+        {
+            'source_type': 'url',
+            'url': url,
+            'source_url': url,
+            'path': rel_path,
+            'absolute_path': str(cache_path),
+            'uri': cache_path.as_uri(),
+            'mime_type': mime_type,
+            'content_type': content_type,
+            'size_bytes': len(payload),
+        },
+        cache_path,
+        suffix,
+    )
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
+
+
+def _parse_content_length(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return max(parsed, 0)
+
+
+def _suffix_for_display_image_url(url: str, content_type: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()
+    if suffix in _DISPLAY_IMAGE_MIME_TYPES:
+        if content_type and content_type not in {
+            'application/octet-stream',
+            'binary/octet-stream',
+        } and not content_type.startswith('image/'):
+            raise ToolExecutionError(
+                f'Image URL returned non-image content type: {content_type}'
+            )
+        return suffix
+    mapped_suffix = _DISPLAY_IMAGE_CONTENT_TYPE_EXTENSIONS.get(content_type)
+    if mapped_suffix is not None:
+        return mapped_suffix
+    supported = ', '.join(sorted(_DISPLAY_IMAGE_MIME_TYPES))
+    if content_type and not content_type.startswith('image/'):
+        raise ToolExecutionError(
+            f'Image URL returned non-image content type: {content_type}'
+        )
+    raise ToolExecutionError(
+        f'Unsupported image URL type for {url!r}. Supported extensions: {supported}'
+    )
+
+
+def _write_display_image_cache(
+    url: str,
+    suffix: str,
+    payload: bytes,
+    context: ToolExecutionContext,
+) -> Path:
+    cache_root = (context.root / '.port_sessions' / 'image_display').resolve()
+    try:
+        cache_root.relative_to(context.root)
+    except ValueError as exc:
+        raise ToolExecutionError('Image cache path escapes the workspace root') from exc
+    cache_root.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+    target = cache_root / f'{digest}{suffix}'
+    target.write_bytes(payload)
+    return target
+
+
+def _optional_string_argument(arguments: dict[str, Any], key: str) -> str:
+    value = arguments.get(key)
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ToolExecutionError(f'{key} must be a string')
+    return value.strip()
+
+
+def _probe_display_image(path: Path, suffix: str) -> tuple[int | None, int | None, str]:
+    if suffix == '.svg':
+        _validate_svg_image(path)
+        return None, None, 'SVG'
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ModuleNotFoundError:
+        return None, None, ''
+
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+            image_format = image.format or ''
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ToolExecutionError(f'Path is not a readable image: {path.name}') from exc
+    return int(width), int(height), str(image_format)
+
+
+def _validate_svg_image(path: Path) -> None:
+    try:
+        sample = path.read_text(encoding='utf-8', errors='ignore')[:4096].lower()
+    except OSError as exc:
+        raise ToolExecutionError(f'Path is not a readable image: {path.name}') from exc
+    if '<svg' not in sample:
+        raise ToolExecutionError(f'Path is not a readable SVG image: {path.name}')
+
+
+def _render_display_image_report(metadata: dict[str, Any]) -> str:
+    images = metadata.get('images')
+    image_items = images if isinstance(images, list) else []
+    lines = ['# Image Display', '']
+    title = metadata.get('title')
+    caption = metadata.get('caption')
+    if isinstance(title, str) and title:
+        lines.append(f'title={title}')
+    lines.append(f'layout={metadata.get("layout", "single")}')
+    lines.append(f'images={len(image_items)}')
+    lines.append('terminal_rendering=ansi_thumbnail_or_path_fallback')
+    if isinstance(caption, str) and caption:
+        lines.append(f'caption={caption}')
+    lines.append('')
+    for index, item in enumerate(image_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        path = _snapshot_text(str(item.get('source_url') or item.get('path') or ''), limit=160)
+        mime_type = str(item.get('mime_type') or 'image')
+        size = _format_size_bytes(item.get('size_bytes'))
+        dimensions = _display_image_dimensions(item)
+        line = f'{index}. {path} ({mime_type}, {size}{dimensions})'
+        lines.append(line)
+        image_caption = item.get('caption')
+        if isinstance(image_caption, str) and image_caption:
+            lines.append(f'   caption={image_caption}')
+    if not image_items:
+        lines.append('(no images)')
+    return '\n'.join(lines).rstrip()
+
+
+def _display_image_dimensions(item: dict[str, Any]) -> str:
+    width = item.get('width')
+    height = item.get('height')
+    if isinstance(width, int) and isinstance(height, int):
+        return f', {width}x{height}'
+    return ''
+
+
+def _format_size_bytes(value: object) -> str:
+    if isinstance(value, bool):
+        return '0 B'
+    try:
+        size = max(int(value), 0)
+    except (TypeError, ValueError):
+        return '0 B'
+    units = ('B', 'KB', 'MB', 'GB')
+    amount = float(size)
+    unit_index = 0
+    while amount >= 1024.0 and unit_index < len(units) - 1:
+        amount /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f'{size} B'
+    return f'{amount:.1f} {units[unit_index]}'
+
+
 def _sleep(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     seconds = _coerce_float(arguments, 'seconds', 0.0)
     if seconds < 0.0 or seconds > 5.0:

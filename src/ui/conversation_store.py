@@ -255,6 +255,7 @@ def _entry_from_payload(payload: dict[str, Any]) -> ConversationEntry | None:
         content=_string_value(payload.get('content')) or '',
         status=_string_value(payload.get('status')) or 'info',
         merge_key=_string_value(payload.get('merge_key')),
+        metadata=_dict_value(payload.get('metadata')),
     )
 
 
@@ -262,6 +263,12 @@ def _string_value(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     return None
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
 
 
 def _int_value(value: Any) -> int:

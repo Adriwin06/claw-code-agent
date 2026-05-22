@@ -210,6 +210,10 @@ def get_using_your_tools_section(enabled_tool_names: set[str]) -> str:
         items.append(
             'Reserve bash for terminal operations that genuinely require shell execution. Default to dedicated tools whenever they can do the job.'
         )
+    if 'display_image' in enabled_tool_names:
+        items.append(
+            'To show the user a generated or discovered image, use display_image with workspace paths or HTTP(S) image URLs.'
+        )
     items.append(
         'You can call multiple tools in a single response. Make independent tool calls in parallel when possible, and keep dependent calls sequential.'
     )

@@ -243,6 +243,7 @@ class AgentTuiEventBridge:
                         content=entry.content,
                         status=entry.status,
                         merge_key=entry.merge_key,
+                        metadata=dict(entry.metadata),
                     )
                     for entry in turn.entries
                 ],
@@ -1041,6 +1042,13 @@ class AgentTuiEventBridge:
         rendered = _preview_value(value)
         return rendered or '(none)'
 
+    def _render_image_dimensions(self, item: dict[str, object]) -> str:
+        width = item.get('width')
+        height = item.get('height')
+        if isinstance(width, int) and isinstance(height, int):
+            return f' {width}x{height}'
+        return ''
+
     def _handle_delegate_group_result(self, event: dict[str, object]) -> None:
         group_id = _preview_value(event.get('group_id')) or 'group'
         group_status = _preview_value(event.get('group_status')) or 'completed'
@@ -1199,6 +1207,12 @@ class AgentTuiEventBridge:
         if tool_name == 'bash':
             command = _preview_value(arguments.get('command'))
             return f'[command] {command or "(empty command)"}'
+        if tool_name == 'display_image':
+            display_target = _preview_value(
+                arguments.get('path') or arguments.get('paths') or arguments.get('images'),
+                max_chars=160,
+            )
+            return f'[image] display {display_target or "(no path)"}'
         if tool_name in {'write_file', 'edit_file', 'read_file', 'notebook_edit'}:
             path = _preview_value(arguments.get('path'))
             return f'[file] {tool_name} {path or "(unknown path)"}'
@@ -1302,16 +1316,19 @@ class AgentTuiEventBridge:
             assistant_status='Processing result',
             phase_label='Processing result',
         )
-        self._append_turn_notice(
-            kind='delegate_result' if delegate_tool else 'tool_result',
-            title=(
-                f'Sub-Agent Tool Result: {tool_label}'
-                if delegate_tool
-                else f'Tool Result: {tool_label}'
-            ),
-            content=rendered_result_detail,
-            status='ok' if ok else 'error',
-        )
+        if self._is_display_image_result(event):
+            self._append_display_image_result(event, rendered_result_detail, ok=ok)
+        else:
+            self._append_turn_notice(
+                kind='delegate_result' if delegate_tool else 'tool_result',
+                title=(
+                    f'Sub-Agent Tool Result: {tool_label}'
+                    if delegate_tool
+                    else f'Tool Result: {tool_label}'
+                ),
+                content=rendered_result_detail,
+                status='ok' if ok else 'error',
+            )
         self._upsert_activity(
             f'tool:{tool_call_id}',
             label='Sub-agent tool finished' if delegate_tool else 'Tool finished',
@@ -1323,6 +1340,34 @@ class AgentTuiEventBridge:
         self._publish_activity()
         self._publish_changes()
         self._publish_state()
+
+    def _is_display_image_result(self, event: dict[str, object]) -> bool:
+        metadata = event.get('metadata')
+        return isinstance(metadata, dict) and metadata.get('action') == 'display_image'
+
+    def _append_display_image_result(
+        self,
+        event: dict[str, object],
+        detail: str,
+        *,
+        ok: bool,
+    ) -> None:
+        metadata = event.get('metadata')
+        if not isinstance(metadata, dict):
+            metadata = {}
+        title = _preview_value(metadata.get('title'), max_chars=80)
+        image_count = _coerce_positive_int(metadata.get('image_count'))
+        if not title:
+            title = 'Image' if image_count == 1 else 'Images'
+        if image_count > 1 and not title.lower().startswith('image'):
+            title = f'{title} ({image_count})'
+        self._append_turn_notice(
+            kind='image_display',
+            title=title,
+            content=detail,
+            status='ok' if ok else 'error',
+            metadata=dict(metadata),
+        )
 
     def _handle_workspace_change(self, event: dict[str, object]) -> None:
         summary = self._render_workspace_change_summary(event)
@@ -1559,6 +1604,26 @@ class AgentTuiEventBridge:
             if preview:
                 parts.append(f'preview={preview}')
             return ' '.join(parts)
+        if action == 'display_image':
+            image_count = _coerce_positive_int(metadata.get('image_count'))
+            title = _preview_value(metadata.get('title'), max_chars=80)
+            layout = _preview_value(metadata.get('layout'), max_chars=20)
+            parts = [f'[image] displayed={image_count} ok={ok}']
+            if layout:
+                parts.append(f'layout={layout}')
+            if title:
+                parts.append(f'title={title}')
+            images = metadata.get('images')
+            if isinstance(images, list) and images:
+                first = images[0]
+                if isinstance(first, dict):
+                    first_path = _preview_value(
+                        first.get('source_url') or first.get('path'),
+                        max_chars=120,
+                    )
+                    if first_path:
+                        parts.append(f'first={first_path}')
+            return ' '.join(parts)
         if isinstance(path, str) and path:
             file_action = action if isinstance(action, str) and action else tool_name
             if file_action in {'write_file', 'edit_file', 'notebook_edit'}:
@@ -1608,6 +1673,35 @@ class AgentTuiEventBridge:
                     value = metadata.get(key)
                     if value is not None:
                         lines.append(f'{key}={_preview_value(value, max_chars=180)}')
+            return '\n'.join(lines)
+        if action == 'display_image':
+            if isinstance(metadata, dict):
+                title = _preview_value(metadata.get('title'), max_chars=120)
+                caption = _preview_value(metadata.get('caption'), max_chars=240)
+                layout = _preview_value(metadata.get('layout'), max_chars=40)
+                if title:
+                    lines.append(f'title={title}')
+                if layout:
+                    lines.append(f'layout={layout}')
+                if caption:
+                    lines.append(f'caption={caption}')
+                images = metadata.get('images')
+                if isinstance(images, list):
+                    for index, item in enumerate(images[:10], start=1):
+                        if not isinstance(item, dict):
+                            continue
+                        image_path = _preview_value(
+                            item.get('source_url') or item.get('path'),
+                            max_chars=180,
+                        )
+                        dimensions = self._render_image_dimensions(item)
+                        image_caption = _preview_value(item.get('caption'), max_chars=160)
+                        line = f'{index}. {image_path or "(unknown image)"}{dimensions}'
+                        if image_caption:
+                            line += f' caption={image_caption}'
+                        lines.append(line)
+                    if len(images) > 10:
+                        lines.append(f'... plus {len(images) - 10} more image(s)')
             return '\n'.join(lines)
         if action in {'delegate_agent', 'Agent'}:
             preview = _preview_value(event.get('content_preview'), max_chars=520)
@@ -1792,6 +1886,7 @@ class AgentTuiEventBridge:
         content: str = '',
         status: str = 'info',
         merge_key: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         turn = self._active_turn()
         if turn is None:
@@ -1800,6 +1895,8 @@ class AgentTuiEventBridge:
             entry = turn.entries[-1]
             entry.content += content
             entry.status = status
+            if metadata:
+                entry.metadata.update(metadata)
             return
         turn.entries.append(
             ConversationEntry(
@@ -1809,6 +1906,7 @@ class AgentTuiEventBridge:
                 content=content,
                 status=status,
                 merge_key=merge_key,
+                metadata=dict(metadata or {}),
             )
         )
 
@@ -1820,6 +1918,7 @@ class AgentTuiEventBridge:
         content: str = '',
         status: str = 'info',
         merge_key: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         turn = self._active_turn()
         if turn is None:
@@ -1831,6 +1930,8 @@ class AgentTuiEventBridge:
                     entry.title = title
                     entry.content += content
                     entry.status = status
+                    if metadata:
+                        entry.metadata.update(metadata)
                     return
         self._append_turn_entry(
             kind=kind,
@@ -1838,6 +1939,7 @@ class AgentTuiEventBridge:
             content=content,
             status=status,
             merge_key=merge_key,
+            metadata=metadata,
         )
 
     def _upsert_turn_entry(
@@ -1848,6 +1950,7 @@ class AgentTuiEventBridge:
         content: str = '',
         status: str = 'info',
         merge_key: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         turn = self._active_turn()
         if turn is None:
@@ -1859,6 +1962,7 @@ class AgentTuiEventBridge:
                     entry.title = title
                     entry.content = content
                     entry.status = status
+                    entry.metadata = dict(metadata or {})
                     return
         self._append_turn_entry(
             kind=kind,
@@ -1866,6 +1970,7 @@ class AgentTuiEventBridge:
             content=content,
             status=status,
             merge_key=merge_key,
+            metadata=metadata,
         )
 
     def _find_turn_entry_by_merge_key(
@@ -1887,6 +1992,7 @@ class AgentTuiEventBridge:
         title: str,
         content: str,
         status: str = 'info',
+        metadata: dict[str, object] | None = None,
     ) -> None:
         if not content:
             return
@@ -1895,6 +2001,7 @@ class AgentTuiEventBridge:
             title=title,
             content=content,
             status=status,
+            metadata=metadata,
         )
 
     def _upsert_activity(

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import base64
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import importlib.util
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 from src.agent.agent_tools import build_tool_context, default_tool_registry, execute_tool
 from src.agent.agent_types import AgentPermissions, AgentRuntimeConfig
 from src.features.integration.lsp_runtime import LSPRuntime
+
+
+_PNG_2X2 = base64.b64decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91Jpz'
+    'AAAAEElEQVR4nGP8zwACTGCSAQANHQEDgslx/wAAAABJRU5ErkJggg=='
+)
 
 
 class ExtendedToolTests(unittest.TestCase):
@@ -97,6 +107,114 @@ class ExtendedToolTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn('slept for', result.content)
         self.assertEqual(result.metadata.get('action'), 'sleep')
+
+    def test_display_image_tool_returns_terminal_display_metadata(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            image = workspace / 'preview.png'
+            image.write_bytes(_PNG_2X2)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            result = execute_tool(
+                registry,
+                'display_image',
+                {'path': 'preview.png', 'title': 'Preview'},
+                context,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn('# Image Display', result.content)
+        self.assertEqual(result.metadata.get('action'), 'display_image')
+        self.assertEqual(result.metadata.get('image_count'), 1)
+        images = result.metadata.get('images')
+        self.assertIsInstance(images, list)
+        self.assertEqual(images[0]['path'], 'preview.png')
+        self.assertEqual(images[0]['mime_type'], 'image/png')
+        if importlib.util.find_spec('PIL') is not None:
+            self.assertEqual(images[0].get('width'), 2)
+            self.assertEqual(images[0].get('height'), 2)
+
+    def test_display_image_tool_downloads_online_url_to_display_cache(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            image = workspace / 'remote.png'
+            image.write_bytes(_PNG_2X2)
+
+            class QuietHandler(SimpleHTTPRequestHandler):
+                def log_message(self, format: str, *args) -> None:
+                    return
+
+            def handler(*args, **kwargs):
+                return QuietHandler(*args, directory=str(workspace), **kwargs)
+
+            server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f'http://127.0.0.1:{server.server_port}/remote.png'
+                context = build_tool_context(
+                    AgentRuntimeConfig(cwd=workspace),
+                    tool_registry=registry,
+                )
+                result = execute_tool(
+                    registry,
+                    'display_image',
+                    {'url': url, 'title': 'Remote'},
+                    context,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2.0)
+            self.assertTrue(result.ok)
+            images = result.metadata.get('images')
+            self.assertIsInstance(images, list)
+            self.assertEqual(images[0]['source_type'], 'url')
+            self.assertEqual(images[0]['source_url'], url)
+            self.assertIn('.port_sessions/image_display/', images[0]['path'])
+            self.assertTrue(Path(images[0]['absolute_path']).exists())
+            self.assertIn(url, result.content)
+
+    def test_display_image_tool_rejects_non_http_url(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            result = execute_tool(
+                registry,
+                'display_image',
+                {'url': 'file:///tmp/image.png'},
+                context,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn('HTTP(S) URL', result.content)
+
+    def test_display_image_tool_rejects_non_image_paths(self) -> None:
+        registry = default_tool_registry()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            (workspace / 'notes.txt').write_text('not an image', encoding='utf-8')
+            context = build_tool_context(
+                AgentRuntimeConfig(cwd=workspace),
+                tool_registry=registry,
+            )
+            result = execute_tool(
+                registry,
+                'display_image',
+                {'path': 'notes.txt'},
+                context,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertIn('Unsupported image type', result.content)
 
     def test_notebook_edit_updates_ipynb_cell(self) -> None:
         registry = default_tool_registry()

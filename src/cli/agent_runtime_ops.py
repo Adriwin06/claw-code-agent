@@ -246,6 +246,17 @@ def _preview_value(value: object, *, max_chars: int = 160) -> str:
     return text
 
 
+def _coerce_positive_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 class _AgentLiveRenderer:
     def __init__(self, stream: TextIO | None = None) -> None:
         self.stream = stream or sys.stdout
@@ -365,6 +376,12 @@ class _AgentLiveRenderer:
         if tool_name == 'bash':
             command = _preview_value(arguments.get('command'))
             return f'[command] {command or "(empty command)"}'
+        if tool_name == 'display_image':
+            display_target = _preview_value(
+                arguments.get('path') or arguments.get('paths') or arguments.get('images'),
+                max_chars=160,
+            )
+            return f'[image] display {display_target or "(no path)"}'
         if tool_name in {'write_file', 'edit_file', 'read_file', 'notebook_edit'}:
             path = _preview_value(arguments.get('path'))
             return f'[file] {tool_name} {path or "(unknown path)"}'
@@ -453,6 +470,26 @@ class _AgentLiveRenderer:
                 parts.append('truncated=True')
             if preview:
                 parts.append(f'preview={preview}')
+            return ' '.join(parts)
+        if action == 'display_image':
+            image_count = _coerce_positive_int(metadata.get('image_count'))
+            title = _preview_value(metadata.get('title'), max_chars=80)
+            layout = _preview_value(metadata.get('layout'), max_chars=20)
+            parts = [f'[image] displayed={image_count} ok={ok}']
+            if layout:
+                parts.append(f'layout={layout}')
+            if title:
+                parts.append(f'title={title}')
+            images = metadata.get('images')
+            if isinstance(images, list) and images:
+                first = images[0]
+                if isinstance(first, dict):
+                    first_path = _preview_value(
+                        first.get('source_url') or first.get('path'),
+                        max_chars=120,
+                    )
+                    if first_path:
+                        parts.append(f'first={first_path}')
             return ' '.join(parts)
         if isinstance(path, str) and path:
             file_action = action if isinstance(action, str) and action else tool_name

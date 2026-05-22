@@ -176,7 +176,7 @@ Built on the public porting workspace from [instructkr/claw-code](https://github
 - [x] Plugin session-state persistence and resume restoration
 - [x] Query engine facade driving the real Python runtime
 - [x] Compaction metadata with lineage IDs and revision summaries
-- [x] Extended runtime tools: `web_fetch`, `web_search`, `tool_search`, `sleep`
+- [x] Extended runtime tools: `web_fetch`, `web_search`, `tool_search`, `display_image`, `sleep`
 - [x] Unit tests for the Python runtime
 - [x] `pyproject.toml` packaging with `setuptools`
 
@@ -827,6 +827,7 @@ The runtime currently includes core and extended tools:
 | `web_fetch` | Fetch local or remote text content by URL | 🟢 Always |
 | `search_status` / `search_list_providers` / `search_activate_provider` / `web_search` | Search runtime status and provider-backed web search | 🟢 Always |
 | `tool_search` | Search the current Python tool registry | 🟢 Always |
+| `display_image` | Show workspace image paths or HTTP(S) image URLs in the terminal UI, with ANSI thumbnails or path fallback | 🟢 Always |
 | `sleep` | Bounded local wait tool | 🟢 Always |
 | `config_list` / `config_get` / `config_set` | Inspect and mutate local workspace config | `config_set` is 🟡 `--allow-write` |
 | `account_status` / `account_list_profiles` / `account_login` / `account_logout` | Inspect and mutate local account state | 🟢 Always |

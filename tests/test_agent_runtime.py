@@ -449,7 +449,7 @@ class AgentRuntimeTests(unittest.TestCase):
             if isinstance(spec, dict)
         }
         self.assertLess(len(tool_specs), len(agent.tool_registry))
-        self.assertEqual(len(tool_specs), 14)
+        self.assertEqual(len(tool_specs), 15)
         self.assertIn('Agent', tool_names)
         self.assertIn('delegate_agent', tool_names)
         self.assertIn('Skill', tool_names)
@@ -457,6 +457,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn('list_available_tools', tool_names)
         self.assertIn('tool_search', tool_names)
         self.assertIn('web_fetch', tool_names)
+        self.assertIn('display_image', tool_names)
         self.assertNotIn('mcp_list_tools', tool_names)
         self.assertNotIn('web_search', tool_names)
         self.assertNotIn('account_login', tool_names)

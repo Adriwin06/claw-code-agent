@@ -39,6 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 tui = [
   "textual>=0.58,<1.0",
+  "Pillow>=10,<12",
 ]
 
 [project.urls]
