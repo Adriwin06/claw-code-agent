@@ -932,6 +932,40 @@ def run_agent_tui(
             self._spinner_index = spinner_index
             self._collapsed_sections = dict(collapsed_sections)
 
+        def update_state(
+            self,
+            turn: ConversationTurn,
+            *,
+            turn_index: int,
+            selected: bool,
+            active: bool,
+            busy: bool,
+            phase: str,
+            phase_detail: str,
+            spinner_index: int,
+            collapsed_sections: dict[str, bool],
+        ) -> None:
+            # update in place via recompose to keep the widget mounted
+            # (mount+remove caused the container height to oscillate, which
+            # made the scroll-to-bottom polling bounce up/down)
+            self._turn = turn
+            self._turn_index = turn_index
+            self._selected = selected
+            self._active = active
+            self._busy = busy
+            self._phase = phase
+            self._phase_detail = phase_detail
+            self._spinner_index = spinner_index
+            self._collapsed_sections = dict(collapsed_sections)
+            if selected:
+                self.add_class('selected')
+            else:
+                self.remove_class('selected')
+            try:
+                self.refresh(recompose=True)
+            except TypeError:
+                self.refresh()
+
         def compose(self) -> ComposeResult:
             working_section_count = self._working_section_count()
             working_section_index = 0
@@ -1234,6 +1268,23 @@ def run_agent_tui(
                 if existing is not None and self._card_signatures.get(turn.turn_id) == signature:
                     previous_card = existing
                     continue
+                if existing is not None:
+                    # update existing card in place; avoids the transient
+                    # double-height that causes scroll bouncing during tool streams
+                    existing.update_state(
+                        turn,
+                        turn_index=index,
+                        selected=(turn.turn_id == self._selected_turn_id),
+                        active=(turn.turn_id == last_turn_id),
+                        busy=self._state_busy and turn.turn_id == last_turn_id,
+                        phase=self._state_phase,
+                        phase_detail=self._state_phase_detail,
+                        spinner_index=self._spinner_index,
+                        collapsed_sections=self._collapsed_sections,
+                    )
+                    self._card_signatures[turn.turn_id] = signature
+                    previous_card = existing
+                    continue
                 new_card = TurnCard(
                     turn,
                     conversation_id=self._conversation_id,
@@ -1246,19 +1297,7 @@ def run_agent_tui(
                     spinner_index=self._spinner_index,
                     collapsed_sections=self._collapsed_sections,
                 )
-                if existing is not None:
-                    # mount the replacement before the stale card, then remove
-                    # the stale one. Tracking via self._cards (not self.children)
-                    # avoids races with Textual's async removal
-                    try:
-                        self.mount(new_card, before=existing)
-                    except Exception:
-                        self.mount(new_card)
-                    try:
-                        existing.remove()
-                    except Exception:
-                        pass
-                elif previous_card is not None:
+                if previous_card is not None:
                     self.mount(new_card, after=previous_card)
                 else:
                     self.mount(new_card)
