@@ -357,6 +357,16 @@ class TextualUiTests(unittest.TestCase):
         self.assertEqual(parse_pasted_file_paths(prompt_text), ())
         self.assertEqual(extract_unresolved_prompt_file_path_candidates(prompt_text), ())
 
+    def test_extract_prompt_file_paths_ignores_http_urls(self) -> None:
+        prompt_text = 'Ok so with this? https://adriwin.fr/images/daft-punk-2006.jpg'
+
+        prompt, paths = extract_prompt_file_paths(prompt_text)
+
+        self.assertEqual(prompt, prompt_text)
+        self.assertEqual(paths, ())
+        self.assertEqual(parse_pasted_file_paths(prompt_text), ())
+        self.assertEqual(extract_unresolved_prompt_file_path_candidates(prompt_text), ())
+
     def test_extract_prompt_file_paths_maps_docker_host_attachment_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             container_root = Path(tmp_dir) / 'host-attachments'

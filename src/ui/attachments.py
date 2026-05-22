@@ -572,6 +572,8 @@ def _is_windows_path(value: str) -> bool:
 
 
 def _looks_like_file_path_candidate(value: str) -> bool:
+    if _contains_non_file_url(value):
+        return False
     if '"' in value:
         return False
     if value.lower().startswith('file:'):
@@ -583,6 +585,13 @@ def _looks_like_file_path_candidate(value: str) -> bool:
     if value.startswith('~/'):
         return True
     return any(separator in value for separator in ('/', '\\')) and bool(Path(value).suffix)
+
+
+def _contains_non_file_url(value: str) -> bool:
+    for match in re.finditer(r'\b([A-Za-z][A-Za-z0-9+.-]*):\/\/', value):
+        if match.group(1).casefold() != 'file':
+            return True
+    return False
 
 
 def _safe_path_name(name: str) -> str:
