@@ -160,22 +160,32 @@ def _check_git(cwd: Path) -> DoctorCheck:
 
 
 def _check_textual() -> DoctorCheck:
-    try:
-        textual_available = importlib.util.find_spec('textual.app') is not None
-    except ModuleNotFoundError:
-        textual_available = False
-    if not textual_available:
+    if not _module_available('textual.app'):
         return DoctorCheck(
             name='tui',
             status='warn',
             detail='Textual is not installed; agent-tui will not launch.',
             fix_hint='Install the optional TUI extra with `pip install -e .[tui]`.',
         )
+    if not _module_available('PIL.Image'):
+        return DoctorCheck(
+            name='tui',
+            status='warn',
+            detail='Textual is installed, but Pillow is missing; display_image previews will fall back to paths.',
+            fix_hint='Install the optional TUI extra with `pip install -e .[tui]`, or rebuild the Docker image.',
+        )
     return DoctorCheck(
         name='tui',
         status='ok',
-        detail='Textual is installed.',
+        detail='Textual and Pillow are installed.',
     )
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def _check_backend(model_config: ModelConfig) -> tuple[DoctorCheck, ...]:

@@ -155,7 +155,7 @@ wait_http_url() {
 image_has_runtime_deps() {
   local image_name="$1"
 
-  docker run --rm --entrypoint python "$image_name" -c "import litellm, textual" >/dev/null 2>&1
+  docker run --rm --entrypoint python "$image_name" -c "import litellm, textual; from PIL import Image" >/dev/null 2>&1
 }
 
 image_matches_workspace_venv() {
@@ -328,7 +328,7 @@ else
     echo "Cached Docker image Python version does not match workspace venv-linux. Rebuilding $DOCKER_IMAGE..."
     docker build -t "$DOCKER_IMAGE" -f "$REPO_ROOT/docker/Dockerfile" "$REPO_ROOT"
   elif ! image_has_runtime_deps "$DOCKER_IMAGE"; then
-    echo "Cached Docker image is missing required Python packages. Rebuilding $DOCKER_IMAGE..."
+    echo "Cached Docker image is missing required Python packages for the TUI image preview. Rebuilding $DOCKER_IMAGE..."
     docker build -t "$DOCKER_IMAGE" -f "$REPO_ROOT/docker/Dockerfile" "$REPO_ROOT"
   fi
 fi

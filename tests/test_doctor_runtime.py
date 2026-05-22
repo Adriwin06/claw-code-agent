@@ -73,6 +73,34 @@ class DoctorRuntimeTests(unittest.TestCase):
         self.assertTrue(report.has_failures)
         self.assertIn('[fail] backend:', report.as_text())
 
+    def test_run_doctor_warns_when_pillow_missing_for_tui_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            workspace = Path(tmp_dir)
+            runtime_config = AgentRuntimeConfig(cwd=workspace)
+            model_config = ModelConfig(model='demo-model')
+
+            def fake_find_spec(name: str) -> object | None:
+                if name == 'textual.app':
+                    return object()
+                if name == 'PIL.Image':
+                    return None
+                return None
+
+            with patch(
+                'src.features.system.doctor_runtime.importlib.util.find_spec',
+                side_effect=fake_find_spec,
+            ):
+                report = run_doctor(
+                    model_config=model_config,
+                    runtime_config=runtime_config,
+                    check_backend=False,
+                )
+
+        rendered = report.as_text()
+        self.assertFalse(report.has_failures)
+        self.assertIn('[warn] tui:', rendered)
+        self.assertIn('Pillow is missing', rendered)
+
 
 if __name__ == '__main__':
     unittest.main()

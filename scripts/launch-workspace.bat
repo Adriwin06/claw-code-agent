@@ -155,9 +155,9 @@ if /i "%CLAW_REBUILD%"=="1" (
 if /i "%CLAW_REBUILD%"=="1" goto build_image
 docker image inspect "%DOCKER_IMAGE%" >nul 2>&1
 if errorlevel 1 goto build_image
-docker run --rm --entrypoint python "%DOCKER_IMAGE%" -c "import litellm, textual" >nul 2>&1
+docker run --rm --entrypoint python "%DOCKER_IMAGE%" -c "import litellm, textual; from PIL import Image" >nul 2>&1
 if errorlevel 1 (
-  echo Cached Docker image is missing required Python packages. Rebuilding %DOCKER_IMAGE%...
+  echo Cached Docker image is missing required Python packages for the TUI image preview. Rebuilding %DOCKER_IMAGE%...
   goto build_image
 )
 docker run --rm -e "AGENT_COMMAND=doctor" -e "AGENT_SKIP_BACKEND=true" -e "AGENT_SKIP_TUI=true" "%DOCKER_IMAGE%" >nul 2>&1

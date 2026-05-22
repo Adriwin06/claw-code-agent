@@ -98,6 +98,7 @@ def image_display_fallback(item: dict[str, object]) -> str:
     uri = item.get('uri')
     lines = [
         'Inline thumbnail unavailable in this terminal/runtime.',
+        'Install the TUI extra with Pillow, or rebuild the Docker image if using the launcher.',
         f'path={path}',
     ]
     if isinstance(uri, str) and uri:
