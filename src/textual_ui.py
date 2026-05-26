@@ -868,6 +868,19 @@ def should_follow_conversation_bottom(
     return was_at_end or following_bottom
 
 
+def conversation_follow_after_user_scroll(
+    *,
+    scroll_direction: str,
+    was_following: bool,
+    at_end: bool,
+) -> bool:
+    if scroll_direction == 'up':
+        return False
+    if scroll_direction == 'down':
+        return was_following or at_end
+    return at_end
+
+
 def _utc_log_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='milliseconds')
 
@@ -1771,6 +1784,7 @@ def run_agent_tui(
             self._scroll_to_end_smooth = False
             self._restore_scroll_pending = False
             self._restore_scroll_y: float | None = None
+            self._restore_scroll_token = 0
             self._cancel_requested = Event()
             self._active_worker = None
             self._worker_event_counts: dict[str, int] = {}
@@ -2015,13 +2029,11 @@ def run_agent_tui(
 
         def on_mouse_scroll_up(self, event) -> None:
             if self._event_targets_conversation(event):
-                self._cancel_pending_scroll_to_end()
-                self.call_after_refresh(self._sync_conversation_follow_to_position)
+                self._handle_conversation_user_scroll('up')
 
         def on_mouse_scroll_down(self, event) -> None:
             if self._event_targets_conversation(event):
-                self._cancel_pending_scroll_to_end()
-                self.call_after_refresh(self._sync_conversation_follow_to_position)
+                self._handle_conversation_user_scroll('down')
 
         def _handle_conversation_scroll_key(self, event: events.Key, prompt: PromptInput) -> bool:
             key = event.key
@@ -2032,18 +2044,16 @@ def run_agent_tui(
             event.stop()
             event.prevent_default()
             if key == 'pageup':
-                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_by_pages(-1)
                 return True
             if key == 'pagedown':
-                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_by_pages(1)
                 return True
             if key == 'home':
-                self._cancel_pending_scroll_to_end()
                 self._scroll_conversation_to_y(0.0)
                 return True
-            self._cancel_pending_scroll_to_end()
+            self._stop_pending_scroll_to_end()
+            self._cancel_pending_scroll_restore()
             self._conversation_follow_bottom = True
             self._scroll_conversation_to_current_end(smooth=True)
             return True
@@ -2888,7 +2898,10 @@ def run_agent_tui(
             return self._conversation_turns[-1]
 
         def _refresh_conversation_view(self, *, allow_stick_to_bottom: bool = True) -> None:
-            scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
+            try:
+                scroll_container = self.query_one('#conversation-scroll', VerticalScroll)
+            except Exception:
+                return
             previous_scroll_y = self._conversation_scroll_y(scroll_container)
             was_at_end = self._conversation_at_end()
             last_turn_id = (
@@ -2916,13 +2929,17 @@ def run_agent_tui(
             ):
                 self._schedule_conversation_scroll_to_end(smooth=False)
                 return
-            self._cancel_pending_scroll_to_end()
+            self._stop_pending_scroll_to_end()
+            self._conversation_follow_bottom = False
             if self._conversation_pinned_scroll_y is None:
                 self._conversation_pinned_scroll_y = previous_scroll_y
             self._schedule_conversation_scroll_restore(self._conversation_pinned_scroll_y)
 
         def _refresh_history_list(self) -> None:
-            option_list = self.query_one('#history-list', OptionList)
+            try:
+                option_list = self.query_one('#history-list', OptionList)
+            except Exception:
+                return
             option_list.clear_options()
             self._sidebar_items = self._rebuild_sidebar_items()
             if not self._sidebar_items:
@@ -2945,16 +2962,20 @@ def run_agent_tui(
         def _refresh_details_panel(self) -> None:
             self._state.refresh_from_agent(self._agent)
             turn = self._selected_turn()
-            reuse_button = self.query_one('#reuse-prompt-button', Button)
-            retry_button = self.query_one('#retry-turn-button', Button)
-            stop_button = self.query_one('#stop-run-button', Button)
-            delete_button = self.query_one('#delete-conversation-button', Button)
+            try:
+                reuse_button = self.query_one('#reuse-prompt-button', Button)
+                retry_button = self.query_one('#retry-turn-button', Button)
+                stop_button = self.query_one('#stop-run-button', Button)
+                delete_button = self.query_one('#delete-conversation-button', Button)
+                details = self.query_one('#details', Static)
+            except Exception:
+                return
             can_use_turn = turn is not None and not self._state.busy
             reuse_button.disabled = not can_use_turn
             retry_button.disabled = not can_use_turn
             stop_button.disabled = not self._state.busy
             delete_button.disabled = self._state.busy
-            self.query_one('#details', Static).update(
+            details.update(
                 render_details_panel(
                     self._state,
                     turn,
@@ -3002,17 +3023,59 @@ def run_agent_tui(
                 else self._conversation_scroll_y()
             )
 
-        def _cancel_pending_scroll_to_end(self) -> None:
-            self._conversation_follow_bottom = False
+        def _handle_conversation_user_scroll(self, scroll_direction: str) -> None:
+            was_following = self._conversation_follow_bottom
+            if scroll_direction == 'up':
+                self._stop_pending_scroll_to_end()
+                self._conversation_follow_bottom = False
+            self._cancel_pending_scroll_restore()
+            self.call_after_refresh(
+                lambda: self._sync_conversation_follow_after_user_scroll(
+                    scroll_direction,
+                    was_following=was_following,
+                )
+            )
+
+        def _sync_conversation_follow_after_user_scroll(
+            self,
+            scroll_direction: str,
+            *,
+            was_following: bool,
+        ) -> None:
+            at_end = self._conversation_at_end()
+            self._conversation_follow_bottom = conversation_follow_after_user_scroll(
+                scroll_direction=scroll_direction,
+                was_following=was_following,
+                at_end=at_end,
+            )
+            self._conversation_pinned_scroll_y = (
+                None
+                if self._conversation_follow_bottom
+                else self._conversation_scroll_y()
+            )
+            if self._conversation_follow_bottom:
+                self._schedule_conversation_scroll_to_end(smooth=False)
+            elif self._conversation_pinned_scroll_y is not None:
+                self._schedule_conversation_scroll_restore(
+                    self._conversation_pinned_scroll_y
+                )
+
+        def _stop_pending_scroll_to_end(self) -> None:
             self._scroll_to_end_pending = False
             self._scroll_to_end_token += 1
             self._scroll_to_end_smooth = False
+
+        def _cancel_pending_scroll_restore(self) -> None:
+            self._restore_scroll_pending = False
+            self._restore_scroll_y = None
+            self._restore_scroll_token += 1
 
         def _reset_conversation_scroll_state(self) -> None:
             self._conversation_follow_bottom = True
             self._conversation_pinned_scroll_y = None
             self._restore_scroll_pending = False
             self._restore_scroll_y = None
+            self._restore_scroll_token += 1
             self._scroll_to_end_pending = False
             self._scroll_to_end_token += 1
             self._scroll_to_end_smooth = False
@@ -3027,6 +3090,8 @@ def run_agent_tui(
             self._scroll_conversation_to_y(target_y)
 
         def _scroll_conversation_to_y(self, y: float, *, smooth: bool = False) -> None:
+            self._stop_pending_scroll_to_end()
+            self._cancel_pending_scroll_restore()
             container = self._conversation_scroll_container()
             try:
                 container.scroll_to(y=y, animate=smooth, immediate=not smooth)
@@ -3043,6 +3108,8 @@ def run_agent_tui(
             except Exception:
                 return
             self._sync_conversation_follow_to_position()
+            if self._conversation_follow_bottom:
+                self._schedule_conversation_scroll_to_end(smooth=False)
 
         def _scroll_conversation_to_current_end(self, *, smooth: bool = False) -> None:
             try:
@@ -3075,18 +3142,21 @@ def run_agent_tui(
         def _scroll_conversation_to_end(self, token: int) -> None:
             if not self._scroll_to_end_pending or token != self._scroll_to_end_token:
                 return
-            self.set_timer(
-                0.01,
-                lambda: self._finish_scroll_conversation_to_end(token, 0, -1.0, 0),
-            )
+            self._finish_scroll_conversation_to_end(token, 0, -1.0, 0)
 
         # safety cap and interval for scroll-to-end polling: keep snapping to
         # the bottom as long as content height is still growing (markdown
-        # widgets lay out progressively after a conversation switch), and
-        # stop only when the height stays stable across consecutive checks
+        # widgets lay out progressively after a conversation switch). While a
+        # run is active and follow mode is linked, keep a slower heartbeat so
+        # delayed layout growth cannot leave the viewport above the live tail.
         _SCROLL_TO_END_MAX_ATTEMPTS = 80
-        _SCROLL_TO_END_INTERVAL = 0.05
+        _SCROLL_TO_END_INTERVAL = 0.01
+        _SCROLL_TO_END_FOLLOW_INTERVAL = 0.03
         _SCROLL_TO_END_STABLE_STREAK_REQUIRED = 3
+        _SCROLL_RESTORE_MAX_ATTEMPTS = 80
+        _SCROLL_RESTORE_INTERVAL = 0.01
+        _SCROLL_RESTORE_FOLLOW_INTERVAL = 0.03
+        _SCROLL_RESTORE_STABLE_STREAK_REQUIRED = 3
 
         def _finish_scroll_conversation_to_end(
             self,
@@ -3100,7 +3170,12 @@ def run_agent_tui(
             self._scroll_conversation_to_current_end(
                 smooth=self._scroll_to_end_smooth and attempt == 0
             )
-            container = self._conversation_scroll_container()
+            try:
+                container = self._conversation_scroll_container()
+            except Exception:
+                self._scroll_to_end_pending = False
+                self._scroll_to_end_smooth = False
+                return
             scroll_y = float(getattr(container, 'scroll_y', 0.0))
             max_y = float(getattr(container, 'max_scroll_y', 0.0))
             at_end = max_y > 0 and (max_y - scroll_y) <= 1.0
@@ -3109,11 +3184,24 @@ def run_agent_tui(
             else:
                 stable_streak = 0
             if at_end and stable_streak >= self._SCROLL_TO_END_STABLE_STREAK_REQUIRED:
+                if self._state.busy and self._conversation_follow_bottom:
+                    self.set_timer(
+                        self._SCROLL_TO_END_FOLLOW_INTERVAL,
+                        lambda: self._finish_scroll_conversation_to_end(
+                            token, 0, max_y, stable_streak,
+                        ),
+                    )
+                    return
                 self._scroll_to_end_pending = False
                 self._scroll_to_end_smooth = False
                 return
-            if attempt < self._SCROLL_TO_END_MAX_ATTEMPTS:
-                next_attempt = attempt + 1
+            should_keep_following = self._state.busy and self._conversation_follow_bottom
+            if attempt < self._SCROLL_TO_END_MAX_ATTEMPTS or should_keep_following:
+                next_attempt = (
+                    attempt + 1
+                    if attempt < self._SCROLL_TO_END_MAX_ATTEMPTS
+                    else 0
+                )
                 self.set_timer(
                     self._SCROLL_TO_END_INTERVAL,
                     lambda: self._finish_scroll_conversation_to_end(
@@ -3125,7 +3213,7 @@ def run_agent_tui(
             self._scroll_to_end_smooth = False
 
         def _schedule_conversation_scroll_to_end(self, *, smooth: bool = False) -> None:
-            self._restore_scroll_y = None
+            self._cancel_pending_scroll_restore()
             self._conversation_follow_bottom = True
             self._conversation_pinned_scroll_y = None
             if self._scroll_to_end_pending:
@@ -3144,27 +3232,84 @@ def run_agent_tui(
             if self._restore_scroll_pending:
                 return
             self._restore_scroll_pending = True
-            self.call_after_refresh(self._restore_conversation_scroll)
+            self._restore_scroll_token += 1
+            token = self._restore_scroll_token
+            self.call_after_refresh(
+                lambda: self._restore_conversation_scroll(token, 0, -1.0, 0)
+            )
 
-        def _restore_conversation_scroll(self) -> None:
-            self._restore_scroll_pending = False
-            if self._scroll_to_end_pending:
+        def _restore_conversation_scroll(
+            self,
+            token: int,
+            attempt: int,
+            previous_max_y: float,
+            stable_streak: int,
+        ) -> None:
+            if (
+                not self._restore_scroll_pending
+                or token != self._restore_scroll_token
+                or self._scroll_to_end_pending
+                or self._conversation_follow_bottom
+            ):
                 return
             scroll_y = self._restore_scroll_y
-            self._restore_scroll_y = None
             if scroll_y is None:
+                self._restore_scroll_pending = False
                 return
-            container = self.query_one('#conversation-scroll', VerticalScroll)
             try:
-                container.scroll_to(y=scroll_y, animate=False, immediate=True)
+                container = self.query_one('#conversation-scroll', VerticalScroll)
+            except Exception:
+                self._restore_scroll_pending = False
+                return
+            max_y = float(getattr(container, 'max_scroll_y', 0.0))
+            target_y = max(0.0, min(max_y, scroll_y))
+            try:
+                container.scroll_to(y=target_y, animate=False, immediate=True)
             except TypeError:
                 try:
-                    container.scroll_to(y=scroll_y, animate=False)
+                    container.scroll_to(y=target_y, animate=False)
                 except Exception:
+                    self._restore_scroll_pending = False
                     return
             except Exception:
+                self._restore_scroll_pending = False
                 return
             self._conversation_follow_bottom = False
+            current_y = self._conversation_scroll_y(container)
+            max_y = float(getattr(container, 'max_scroll_y', 0.0))
+            at_target = abs(current_y - target_y) <= 1.0
+            if max_y == previous_max_y:
+                stable_streak += 1
+            else:
+                stable_streak = 0
+            if at_target and stable_streak >= self._SCROLL_RESTORE_STABLE_STREAK_REQUIRED:
+                if self._state.busy and not self._conversation_follow_bottom:
+                    self.set_timer(
+                        self._SCROLL_RESTORE_FOLLOW_INTERVAL,
+                        lambda: self._restore_conversation_scroll(
+                            token, 0, max_y, stable_streak,
+                        ),
+                    )
+                    return
+                self._restore_scroll_pending = False
+                self._restore_scroll_y = None
+                return
+            should_keep_restoring = self._state.busy and not self._conversation_follow_bottom
+            if attempt < self._SCROLL_RESTORE_MAX_ATTEMPTS or should_keep_restoring:
+                next_attempt = (
+                    attempt + 1
+                    if attempt < self._SCROLL_RESTORE_MAX_ATTEMPTS
+                    else 0
+                )
+                self.set_timer(
+                    self._SCROLL_RESTORE_INTERVAL,
+                    lambda: self._restore_conversation_scroll(
+                        token, next_attempt, max_y, stable_streak,
+                    ),
+                )
+                return
+            self._restore_scroll_pending = False
+            self._restore_scroll_y = None
 
         def _tick_spinner(self) -> None:
             if not self._state.busy:

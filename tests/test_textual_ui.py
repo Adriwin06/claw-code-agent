@@ -33,6 +33,7 @@ from src.textual_ui import (
     build_slash_command_suggestions,
     build_workspace_path_suggestions,
     build_conversation_history_items,
+    conversation_follow_after_user_scroll,
     conversation_scroll_is_at_end,
     conversation_turns_render_signature,
     extract_prompt_file_paths,
@@ -135,6 +136,36 @@ class TextualUiTests(unittest.TestCase):
                 selected_latest_turn=False,
                 was_at_end=True,
                 following_bottom=True,
+            )
+        )
+
+    def test_conversation_follow_after_user_scroll_relinks_only_at_bottom(self) -> None:
+        self.assertFalse(
+            conversation_follow_after_user_scroll(
+                scroll_direction='up',
+                was_following=True,
+                at_end=True,
+            )
+        )
+        self.assertFalse(
+            conversation_follow_after_user_scroll(
+                scroll_direction='down',
+                was_following=False,
+                at_end=False,
+            )
+        )
+        self.assertTrue(
+            conversation_follow_after_user_scroll(
+                scroll_direction='down',
+                was_following=False,
+                at_end=True,
+            )
+        )
+        self.assertTrue(
+            conversation_follow_after_user_scroll(
+                scroll_direction='down',
+                was_following=True,
+                at_end=False,
             )
         )
 
@@ -2055,25 +2086,51 @@ class TextualUiTests(unittest.TestCase):
 
         async def exercise() -> None:
             async with app.run_test() as pilot:
+                async def wait_for_conversation_bottom() -> None:
+                    for _ in range(20):
+                        await pilot.pause(0.05)
+                        scroll = app.query_one('#conversation-scroll')
+                        if (
+                            getattr(scroll, 'max_scroll_y', 0) > 0
+                            and app._conversation_at_end()
+                        ):
+                            return
+                    scroll = app.query_one('#conversation-scroll')
+                    self.assertGreater(getattr(scroll, 'max_scroll_y', 0), 0)
+                    self.assertTrue(app._conversation_at_end())
+
+                async def wait_for_scroll_y(target_y: float) -> None:
+                    scroll = app.query_one('#conversation-scroll')
+                    for _ in range(20):
+                        await pilot.pause(0.05)
+                        current_y = float(getattr(scroll, 'scroll_y', 0.0))
+                        if abs(current_y - target_y) <= 1.0:
+                            return
+                    self.assertAlmostEqual(
+                        float(getattr(scroll, 'scroll_y', 0.0)),
+                        target_y,
+                        delta=1.0,
+                    )
+
                 app._bridge.begin_prompt('streaming scroll')
                 app._bridge.handle_event({'type': 'content_delta', 'delta': 'line\n' * 120})
-                await pilot.pause(0.2)
+                await wait_for_conversation_bottom()
 
                 scroll = app.query_one('#conversation-scroll')
                 self.assertGreater(getattr(scroll, 'max_scroll_y', 0), 0)
                 self.assertTrue(app._conversation_at_end())
 
                 app._bridge.handle_event({'type': 'content_delta', 'delta': 'bottom\n' * 40})
-                await pilot.pause(0.2)
+                await wait_for_conversation_bottom()
                 self.assertTrue(app._conversation_at_end())
 
                 app._scroll_conversation_to_y(2.0)
-                await pilot.pause(0.1)
+                await wait_for_scroll_y(2.0)
                 pinned_y = float(getattr(scroll, 'scroll_y', 0.0))
                 self.assertFalse(app._conversation_at_end())
 
                 app._bridge.handle_event({'type': 'content_delta', 'delta': 'preserve\n' * 40})
-                await pilot.pause(0.2)
+                await wait_for_scroll_y(pinned_y)
                 self.assertAlmostEqual(float(getattr(scroll, 'scroll_y', 0.0)), pinned_y, delta=1.0)
 
         asyncio.run(exercise())
