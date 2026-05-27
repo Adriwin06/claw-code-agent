@@ -8,11 +8,21 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+from src.agent.commands.slash import preprocess_slash_command
+from src.agent.models.session import AgentSessionState
 from src.agent.agent_runtime import LocalCodingAgent
 from src.agent.agent_slash_commands import looks_like_command, parse_slash_command
-from src.agent.agent_types import AgentRuntimeConfig, ModelConfig
+from src.agent.agent_types import AgentRuntimeConfig, ModelConfig, UsageStats
+from src.agent.runtime.checkpoint import create_checkpoint, list_checkpoints
 from src.features.orchestration.plan_runtime import PlanRuntime
 from src.features.orchestration.task_runtime import TaskRuntime
+from src.session.session_store import (
+    StoredAgentSession,
+    load_agent_session,
+    save_agent_session,
+    serialize_model_config,
+    serialize_runtime_config,
+)
 from tests.test_helpers import FakeHTTPResponse as _FakeHTTPResponse
 
 
@@ -81,6 +91,150 @@ class AgentSlashCommandTests(unittest.TestCase):
             )
             result = agent.run('/unknown-command')
         self.assertEqual(result.final_output, 'Unknown skill: unknown-command')
+
+    def test_rewind_restores_workspace_and_persists_truncated_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            session_dir = root / '.port_sessions' / 'agent'
+            session_dir.mkdir(parents=True)
+            session_id = 'rewind-session'
+            model_config = ModelConfig(model='test-model')
+            runtime_config = AgentRuntimeConfig(
+                cwd=workspace,
+                session_directory=session_dir,
+            )
+            agent = LocalCodingAgent(
+                model_config=model_config,
+                runtime_config=runtime_config,
+            )
+
+            session = AgentSessionState.create(['system prompt'], None)
+            session.append_user('first prompt')
+            session.append_assistant(
+                '',
+                (
+                    {
+                        'id': 'call_1',
+                        'type': 'function',
+                        'function': {'name': 'write_file', 'arguments': '{}'},
+                    },
+                ),
+                message_id='assistant_2',
+                usage=UsageStats(input_tokens=2, output_tokens=3),
+            )
+            session.append_tool('write_file', 'call_1', 'ok')
+            session.append_assistant(
+                'first response',
+                message_id='assistant_4',
+                usage=UsageStats(input_tokens=3, output_tokens=4),
+            )
+            first_checkpoint_count = len(session.messages)
+            (workspace / 'tracked.txt').write_text('v1', encoding='utf-8')
+            create_checkpoint(workspace, session_id, first_checkpoint_count, session_dir)
+
+            session.append_user('second prompt')
+            session.append_assistant(
+                '',
+                (
+                    {
+                        'id': 'call_2',
+                        'type': 'function',
+                        'function': {'name': 'write_file', 'arguments': '{}'},
+                    },
+                ),
+                message_id='assistant_6',
+                usage=UsageStats(input_tokens=5, output_tokens=7),
+            )
+            session.append_tool('write_file', 'call_2', 'ok')
+            session.append_assistant(
+                'second response',
+                message_id='assistant_8',
+                usage=UsageStats(input_tokens=11, output_tokens=13),
+            )
+            second_checkpoint_count = len(session.messages)
+            (workspace / 'tracked.txt').write_text('v2', encoding='utf-8')
+            (workspace / 'new.txt').write_text('new', encoding='utf-8')
+            create_checkpoint(workspace, session_id, second_checkpoint_count, session_dir)
+
+            save_agent_session(
+                StoredAgentSession(
+                    session_id=session_id,
+                    model_config=serialize_model_config(model_config),
+                    runtime_config=serialize_runtime_config(runtime_config),
+                    system_prompt_parts=session.system_prompt_parts,
+                    user_context=session.user_context,
+                    system_context=session.system_context,
+                    messages=session.transcript(),
+                    turns=20,
+                    tool_calls=30,
+                    usage={'input_tokens': 99, 'output_tokens': 99},
+                    total_cost_usd=123.0,
+                    file_history=(
+                        {
+                            'turn_index': 1,
+                            'tool_call_id': 'call_1',
+                            'action': 'write_file',
+                            'path': 'tracked.txt',
+                        },
+                        {
+                            'turn_index': 1,
+                            'tool_call_id': 'call_2',
+                            'action': 'write_file',
+                            'path': 'new.txt',
+                        },
+                    ),
+                    budget_state={
+                        'model_calls': 20,
+                        'session_turns': 20,
+                        'tool_calls': 30,
+                        'delegated_tasks': 0,
+                    },
+                    plugin_state={},
+                    scratchpad_directory=str(root / 'scratchpad'),
+                ),
+                directory=session_dir,
+            )
+            agent.last_session = session
+            agent.active_session_id = session_id
+
+            result = preprocess_slash_command(
+                agent,
+                f'/rewind {first_checkpoint_count - 1}',
+            )
+
+            self.assertTrue(result.handled)
+            self.assertFalse(result.should_query)
+            self.assertIn('Workspace files restored from checkpoint', result.output)
+            self.assertEqual(len(result.events), 1)
+            self.assertEqual(result.events[0].get('type'), 'conversation_rewound')
+            self.assertEqual(result.events[0].get('message_count'), first_checkpoint_count)
+            self.assertEqual(
+                result.events[0].get('removed_count'),
+                second_checkpoint_count - first_checkpoint_count,
+            )
+            self.assertEqual((workspace / 'tracked.txt').read_text(encoding='utf-8'), 'v1')
+            self.assertFalse((workspace / 'new.txt').exists())
+            self.assertEqual(list_checkpoints(session_id, session_dir), [first_checkpoint_count])
+
+            stored = load_agent_session(session_id, directory=session_dir)
+            self.assertEqual(len(stored.messages), first_checkpoint_count)
+            self.assertEqual(stored.turns, 2)
+            self.assertEqual(stored.tool_calls, 1)
+            self.assertEqual(stored.budget_state['model_calls'], 2)
+            self.assertEqual(stored.budget_state['session_turns'], 2)
+            self.assertEqual(stored.budget_state['tool_calls'], 1)
+            self.assertEqual(stored.usage['input_tokens'], 5)
+            self.assertEqual(stored.usage['output_tokens'], 7)
+            self.assertEqual(stored.file_history, (
+                {
+                    'turn_index': 1,
+                    'tool_call_id': 'call_1',
+                    'action': 'write_file',
+                    'path': 'tracked.txt',
+                },
+            ))
 
     def test_context_command_renders_usage_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -10,6 +10,7 @@ from src.ui.conversation import (
     ConversationHistoryItem,
     ConversationTurn,
     build_conversation_history_items,
+    restore_conversation_turns,
 )
 from src.ui.formatting import (
     _friendly_stop_reason,
@@ -551,6 +552,10 @@ class AgentTuiEventBridge:
 
     def complete(self, result: AgentRunResult) -> None:
         self._close_open_blocks()
+        rewind_event = self._conversation_rewind_event(result)
+        if rewind_event is not None:
+            self._complete_conversation_rewind(result, rewind_event)
+            return
         friendly_stop = _friendly_stop_reason(result.stop_reason)
         completed = friendly_stop == 'completed'
         active_turn = self._active_turn()
@@ -637,6 +642,64 @@ class AgentTuiEventBridge:
             ):
                 self._handle_workspace_change_recap(event)
                 return
+
+    def _conversation_rewind_event(
+        self,
+        result: AgentRunResult,
+    ) -> dict[str, object] | None:
+        for event in reversed(result.events):
+            if (
+                isinstance(event, dict)
+                and event.get('type') == 'conversation_rewound'
+            ):
+                return event
+        return None
+
+    def _complete_conversation_rewind(
+        self,
+        result: AgentRunResult,
+        event: dict[str, object],
+    ) -> None:
+        raw_messages = event.get('messages')
+        messages = (
+            tuple(message for message in raw_messages if isinstance(message, dict))
+            if isinstance(raw_messages, (list, tuple))
+            else ()
+        )
+        turns = restore_conversation_turns(messages)
+        final_output = sanitize_assistant_display_text(result.final_output)
+
+        self.state.busy = False
+        self.state.status = 'Ready'
+        self.state.phase = 'Ready'
+        self.state.phase_detail = 'Waiting for the next prompt'
+        self.state.session_id = (
+            result.session_id
+            or _preview_value(event.get('session_id'))
+            or self.state.session_id
+        )
+        self.state.last_turns = result.turns
+        self.state.last_tool_calls = result.tool_calls
+        self.state.total_tokens = result.usage.total_tokens
+        self.state.input_tokens = result.usage.input_tokens
+        self.state.output_tokens = result.usage.output_tokens
+        self.state.total_cost_usd = result.total_cost_usd
+        self.state.last_stop_reason = result.stop_reason
+
+        self.restore_history(turns, announce_activity=False)
+        self._upsert_activity(
+            'conversation_rewound',
+            label='Conversation rewound',
+            detail=final_output or 'Rewound conversation history',
+            status='ok',
+        )
+        if final_output:
+            self._emit_data(f'[assistant] {final_output}\n')
+        if self.state.session_id:
+            self._emit_data(f'[session] session_id={self.state.session_id}\n')
+        self._publish_activity()
+        self._publish_changes()
+        self._publish_state()
 
     def request_cancel(self, reason: str = 'Stop requested') -> None:
         self.state.status = 'Stopping'

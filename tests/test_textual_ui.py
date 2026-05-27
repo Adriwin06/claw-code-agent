@@ -979,6 +979,67 @@ class TextualUiTests(unittest.TestCase):
         assert changes[-1] is not None
         self.assertEqual(changes[-1].get('file_count'), 1)
 
+    def test_event_bridge_rewind_restores_turns_and_clears_changes_panel(self) -> None:
+        changes: list[dict[str, object] | None] = []
+        state = AgentTuiState(
+            workspace='C:/workspace',
+            model='demo-model',
+            permissions='write',
+        )
+        bridge = AgentTuiEventBridge(
+            state,
+            emit_data=lambda _text: None,
+            on_changes_change=changes.append,
+        )
+
+        bridge.begin_prompt('Create files')
+        bridge.handle_event(
+            {
+                'type': 'workspace_change_summary',
+                'file_count': 1,
+                'added_lines': 2,
+                'removed_lines': 0,
+                'files': [
+                    {
+                        'path': 'index.html',
+                        'status': 'added',
+                        'added_lines': 2,
+                        'removed_lines': 0,
+                    }
+                ],
+            }
+        )
+        bridge.begin_prompt('/rewind 1')
+        bridge.complete(
+            AgentRunResult(
+                final_output='Rewound conversation to message 1.',
+                turns=0,
+                tool_calls=0,
+                transcript=(),
+                session_id='session-1',
+                events=(
+                    {
+                        'type': 'conversation_rewound',
+                        'session_id': 'session-1',
+                        'target_message_index': 1,
+                        'message_count': 2,
+                        'removed_count': 2,
+                        'files_restored': True,
+                        'messages': (
+                            {'role': 'user', 'content': 'Earlier prompt'},
+                            {'role': 'assistant', 'content': 'Earlier answer'},
+                        ),
+                    },
+                ),
+            )
+        )
+
+        self.assertEqual(len(bridge.turns), 1)
+        self.assertEqual(bridge.turns[0].user_prompt, 'Earlier prompt')
+        self.assertEqual(bridge.turns[0].assistant_response, 'Earlier answer')
+        self.assertIsNone(changes[-1])
+        self.assertEqual(bridge.activity_items[-1].label, 'Conversation rewound')
+
     def test_event_bridge_accumulates_change_summaries_across_prompts(self) -> None:
         changes: list[dict[str, object] | None] = []
         state = AgentTuiState(

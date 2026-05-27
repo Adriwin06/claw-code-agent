@@ -54,6 +54,7 @@ from src.agent.runtime.delegation import (
     execute_delegate_agent,
 )
 from src.agent.runtime.change_tracker import WorkspaceChangeTracker
+from src.agent.runtime.checkpoint import create_checkpoint, restore_checkpoint
 from src.agent.runtime.tool_calls import (
     ToolCallExecutionHooks,
     execute_runtime_tool_call,
@@ -457,6 +458,16 @@ class LocalCodingAgent:
             self.plugin_runtime.restore_session_state({})
         session_id = uuid4().hex
         scratchpad_directory = self._ensure_scratchpad_directory(session_id)
+        # Capture initial workspace checkpoint (message_count=0) before any changes.
+        try:
+            create_checkpoint(
+                self.runtime_config.cwd,
+                session_id,
+                0,
+                self.runtime_config.session_directory,
+            )
+        except OSError:
+            pass
         result = self._run_prompt(
             prompt,
             base_session=None,
@@ -486,6 +497,16 @@ class LocalCodingAgent:
             system_context=stored_session.system_context,
             messages=stored_session.messages,
         )
+        # Auto-restore workspace files to the checkpoint matching the stored session.
+        try:
+            restore_checkpoint(
+                self.runtime_config.cwd,
+                stored_session.session_id,
+                len(stored_session.messages),
+                self.runtime_config.session_directory,
+            )
+        except OSError:
+            pass
         self._append_file_history_replay_if_needed(
             session,
             stored_session.file_history,
@@ -534,6 +555,7 @@ class LocalCodingAgent:
                 turns=0,
                 tool_calls=0,
                 transcript=slash_result.transcript,
+                events=slash_result.events,
                 session_id=self.active_session_id,
                 session_path=self.last_session_path,
                 scratchpad_directory=(
@@ -565,6 +587,16 @@ class LocalCodingAgent:
                 scratchpad_directory=scratchpad_directory,
             )
         )
+        if base_session is None and session.messages:
+            try:
+                create_checkpoint(
+                    self.runtime_config.cwd,
+                    session_id,
+                    len(session.messages),
+                    self.runtime_config.session_directory,
+                )
+            except OSError:
+                pass
         session.append_user(
             effective_prompt,
             blocks=self._build_user_prompt_blocks(effective_prompt, prompt_blocks),
@@ -852,6 +884,17 @@ class LocalCodingAgent:
         if workspace_recap is not None:
             result = replace(result, events=(*result.events, workspace_recap))
         result = self._persist_session(state.session, result)
+        # Capture a workspace checkpoint after this turn completes.
+        if result.session_id is not None:
+            try:
+                create_checkpoint(
+                    self.runtime_config.cwd,
+                    result.session_id,
+                    len(state.session.messages),
+                    self.runtime_config.session_directory,
+                )
+            except OSError:
+                pass
         self.last_run_result = result
         return result
 

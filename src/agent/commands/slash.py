@@ -22,6 +22,7 @@ class SlashCommandResult:
     prompt: str | None = None
     output: str = ''
     transcript: tuple[dict[str, Any], ...] = ()
+    events: tuple[dict[str, Any], ...] = ()
 
 
 SlashCommandHandler = Callable[['LocalCodingAgent', str, str], SlashCommandResult]
@@ -1493,24 +1494,35 @@ def _handle_vim(agent: 'LocalCodingAgent', _args: str, input_text: str) -> Slash
 
 
 def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> SlashCommandResult:
-    """Rewind conversation to a previous message."""
+    """Rewind conversation to a previous message and restore workspace files."""
+    from src.agent.runtime.checkpoint import (
+        cleanup_subsequent_checkpoints,
+        list_checkpoints,
+        restore_checkpoint,
+    )
+
     session = agent.last_session
     if session is None:
         return _local_result(input_text, 'No active session.')
 
+    session_id = agent.active_session_id
+    session_dir = agent.runtime_config.session_directory
     n_str = args.strip()
 
     if not n_str:
         msgs = session.messages
+        checkpoints = list_checkpoints(session_id, session_dir) if session_id else []
         lines = ['## Conversation History', '']
         for i, msg in enumerate(msgs):
             role = msg.role.upper()
             preview = msg.content[:60].replace('\n', ' ')
             if len(msg.content) > 60:
                 preview += '...'
-            lines.append(f'  {i}: [{role}] {preview}')
+            has_cp = '✓' if (i + 1) in checkpoints else ' '
+            lines.append(f'  {i}: [{role}] [{has_cp}] {preview}')
         lines.append('')
-        lines.append('Usage: /rewind <message-number> to truncate to that point.')
+        lines.append('✓ = checkpoint available for workspace restore')
+        lines.append('Usage: /rewind <message-number> to truncate to that point and restore files.')
         return _local_result(input_text, '\n'.join(lines))
 
     try:
@@ -1525,11 +1537,214 @@ def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
         )
 
     removed_count = len(session.messages) - target - 1
-    session.messages[:] = session.messages[:target + 1]
+    new_message_count = target + 1
+
+    # 1. Restore workspace files from checkpoint.
+    files_restored = False
+    if session_id:
+        try:
+            files_restored = restore_checkpoint(
+                agent.runtime_config.cwd,
+                session_id,
+                new_message_count,
+                session_dir,
+            )
+        except OSError:
+            pass
+
+    # 2. Truncate conversation history.
+    session.messages[:] = session.messages[:new_message_count]
+
+    # 3. Clean up subsequent checkpoints.
+    cleaned = 0
+    if session_id:
+        try:
+            cleaned = cleanup_subsequent_checkpoints(
+                session_id,
+                new_message_count,
+                session_dir,
+            )
+        except OSError:
+            pass
+
+    # 4. Re-persist the truncated session so the next turn branches correctly.
+    if session_id:
+        try:
+            _persist_rewound_session(agent, session_id)
+        except OSError:
+            pass
+
+    parts = [f'Rewound conversation to message {target}. Removed {removed_count} messages.']
+    if files_restored:
+        parts.append('Workspace files restored from checkpoint.')
+    else:
+        parts.append('No checkpoint found for workspace restore (history-only rewind).')
+    if cleaned > 0:
+        parts.append(f'Cleaned up {cleaned} subsequent checkpoint(s).')
     return _local_result(
         input_text,
-        f'Rewound conversation to message {target}. Removed {removed_count} messages.',
+        ' '.join(parts),
+        events=(
+            {
+                'type': 'conversation_rewound',
+                'session_id': session_id,
+                'target_message_index': target,
+                'message_count': new_message_count,
+                'removed_count': removed_count,
+                'files_restored': files_restored,
+                'messages': list(session.transcript()),
+            },
+        ),
     )
+
+
+def _persist_rewound_session(agent: 'LocalCodingAgent', session_id: str) -> None:
+    from src.session.session_store import (
+        StoredAgentSession,
+        load_agent_session,
+        save_agent_session,
+        serialize_model_config,
+        serialize_runtime_config,
+    )
+
+    session = agent.last_session
+    if session is None:
+        return
+
+    existing = None
+    try:
+        existing = load_agent_session(
+            session_id,
+            directory=agent.runtime_config.session_directory,
+        )
+    except OSError:
+        existing = None
+
+    kept_turns = _count_model_turns(session.messages)
+    kept_tool_calls = _count_tool_calls(session.messages)
+    kept_tool_call_ids = _collect_tool_call_ids(session.messages)
+    kept_file_history = _filter_file_history_after_rewind(
+        (
+            existing.file_history
+            if existing is not None
+            else (
+                agent.last_run_result.file_history
+                if agent.last_run_result is not None
+                else ()
+            )
+        ),
+        max_turn_index=kept_turns,
+        kept_tool_call_ids=kept_tool_call_ids,
+    )
+    usage = _sum_message_usage(session.messages)
+    scratchpad_directory = (
+        existing.scratchpad_directory
+        if existing is not None
+        else (
+            agent.last_run_result.scratchpad_directory
+            if agent.last_run_result is not None
+            else None
+        )
+    )
+    plugin_state = (
+        agent.plugin_runtime.export_session_state()
+        if agent.plugin_runtime is not None
+        else {}
+    )
+    stored = StoredAgentSession(
+        session_id=session_id,
+        model_config=serialize_model_config(agent.model_config),
+        runtime_config=serialize_runtime_config(agent.runtime_config),
+        system_prompt_parts=session.system_prompt_parts,
+        user_context=dict(session.user_context),
+        system_context=dict(session.system_context),
+        messages=session.transcript(),
+        turns=kept_turns,
+        tool_calls=kept_tool_calls,
+        usage=usage.to_dict(),
+        total_cost_usd=agent.model_config.pricing.estimate_cost_usd(usage),
+        file_history=kept_file_history,
+        budget_state={
+            'model_calls': kept_turns,
+            'session_turns': kept_turns,
+            'tool_calls': kept_tool_calls,
+            'delegated_tasks': sum(
+                1
+                for entry in kept_file_history
+                if entry.get('action') in ('delegate_agent', 'Agent')
+            ),
+        },
+        plugin_state=plugin_state,
+        scratchpad_directory=scratchpad_directory,
+    )
+    path = save_agent_session(
+        stored,
+        directory=agent.runtime_config.session_directory,
+    )
+    agent.last_session_path = str(path)
+
+
+def _count_model_turns(messages: list[Any]) -> int:
+    return sum(1 for message in messages if getattr(message, 'role', '') == 'assistant')
+
+
+def _count_tool_calls(messages: list[Any]) -> int:
+    return sum(
+        len(getattr(message, 'tool_calls', ()) or ())
+        for message in messages
+        if getattr(message, 'role', '') == 'assistant'
+    )
+
+
+def _collect_tool_call_ids(messages: list[Any]) -> set[str]:
+    tool_call_ids: set[str] = set()
+    for message in messages:
+        for tool_call in getattr(message, 'tool_calls', ()) or ():
+            if not isinstance(tool_call, dict):
+                continue
+            tool_call_id = tool_call.get('id')
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_call_ids.add(tool_call_id)
+        tool_call_id = getattr(message, 'tool_call_id', None)
+        if isinstance(tool_call_id, str) and tool_call_id:
+            tool_call_ids.add(tool_call_id)
+    return tool_call_ids
+
+
+def _sum_message_usage(messages: list[Any]):
+    from src.agent.models.types import UsageStats
+
+    usage = UsageStats()
+    for message in messages:
+        usage = usage + getattr(message, 'usage', UsageStats())
+    return usage
+
+
+def _filter_file_history_after_rewind(
+    file_history: tuple[dict[str, object], ...],
+    *,
+    max_turn_index: int,
+    kept_tool_call_ids: set[str],
+) -> tuple[dict[str, object], ...]:
+    kept: list[dict[str, object]] = []
+    for entry in file_history:
+        if not isinstance(entry, dict):
+            continue
+        tool_call_id = entry.get('tool_call_id')
+        if isinstance(tool_call_id, str) and tool_call_id:
+            if tool_call_id in kept_tool_call_ids:
+                kept.append(dict(entry))
+            continue
+        turn_index = entry.get('turn_index')
+        if isinstance(turn_index, bool):
+            continue
+        if isinstance(turn_index, int):
+            if turn_index <= max_turn_index:
+                kept.append(dict(entry))
+            continue
+        if max_turn_index > 0:
+            kept.append(dict(entry))
+    return tuple(kept)
 
 
 def _prompt_result(input_text: str, prompt: str) -> SlashCommandResult:
@@ -1542,7 +1757,12 @@ def _prompt_result(input_text: str, prompt: str) -> SlashCommandResult:
     )
 
 
-def _local_result(input_text: str, output: str) -> SlashCommandResult:
+def _local_result(
+    input_text: str,
+    output: str,
+    *,
+    events: tuple[dict[str, Any], ...] = (),
+) -> SlashCommandResult:
     transcript = (
         {'role': 'user', 'content': input_text},
         {'role': 'assistant', 'content': output},
@@ -1552,6 +1772,7 @@ def _local_result(input_text: str, output: str) -> SlashCommandResult:
         should_query=False,
         output=output,
         transcript=transcript,
+        events=events,
     )
 
 
