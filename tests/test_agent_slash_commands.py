@@ -236,6 +236,70 @@ class AgentSlashCommandTests(unittest.TestCase):
                 },
             ))
 
+    def test_rewind_accepts_message_id_and_deletes_later_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            session_dir = root / '.port_sessions' / 'agent'
+            session_dir.mkdir(parents=True)
+            session_id = 'rewind-by-id-session'
+            model_config = ModelConfig(model='test-model')
+            runtime_config = AgentRuntimeConfig(
+                cwd=workspace,
+                session_directory=session_dir,
+            )
+            agent = LocalCodingAgent(
+                model_config=model_config,
+                runtime_config=runtime_config,
+            )
+            session = AgentSessionState.create(['system prompt'], None)
+            session.append_user('keep prompt', message_id='user_keep')
+            session.append_assistant('keep response', message_id='assistant_keep')
+            session.append_user('drop prompt', message_id='user_drop')
+            session.append_assistant('drop response', message_id='assistant_drop')
+            save_agent_session(
+                StoredAgentSession(
+                    session_id=session_id,
+                    model_config=serialize_model_config(model_config),
+                    runtime_config=serialize_runtime_config(runtime_config),
+                    system_prompt_parts=session.system_prompt_parts,
+                    user_context=session.user_context,
+                    system_context=session.system_context,
+                    messages=session.transcript(),
+                    turns=2,
+                    tool_calls=0,
+                    usage={'input_tokens': 0, 'output_tokens': 0},
+                    total_cost_usd=0.0,
+                    file_history=(),
+                    budget_state={
+                        'model_calls': 2,
+                        'session_turns': 2,
+                        'tool_calls': 0,
+                        'delegated_tasks': 0,
+                    },
+                    plugin_state={},
+                ),
+                directory=session_dir,
+            )
+            agent.last_session = session
+            agent.active_session_id = session_id
+
+            result = preprocess_slash_command(agent, '/rewind assistant_keep')
+
+            self.assertTrue(result.handled)
+            self.assertFalse(result.should_query)
+            self.assertEqual(len(session.messages), 3)
+            self.assertIn('assistant_keep (index 2)', result.output)
+            self.assertEqual(result.events[0].get('target_message_id'), 'assistant_keep')
+            self.assertEqual(result.events[0].get('message_count'), 3)
+            self.assertEqual(result.events[0].get('removed_count'), 2)
+            stored = load_agent_session(session_id, directory=session_dir)
+            self.assertEqual(
+                [message.get('message_id') for message in stored.messages],
+                [None, 'user_keep', 'assistant_keep'],
+            )
+
     def test_context_command_renders_usage_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             workspace = Path(tmp_dir)

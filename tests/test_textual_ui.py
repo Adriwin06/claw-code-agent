@@ -23,6 +23,7 @@ from src.textual_ui import (
     build_display_prompt_with_attachments,
     build_prompt_image_blocks,
     build_prompt_with_references,
+    build_rewind_message_suggestions,
     copy_external_attachment,
     build_working_section_id,
     build_working_section_instance_id,
@@ -37,6 +38,7 @@ from src.textual_ui import (
     conversation_scroll_is_at_end,
     conversation_turns_render_signature,
     extract_prompt_file_paths,
+    extract_rewind_message_query,
     extract_slash_command_query,
     extract_unresolved_prompt_file_path_candidates,
     extract_workspace_path_references,
@@ -217,6 +219,14 @@ class TextualUiTests(unittest.TestCase):
         self.assertIsNone(extract_slash_command_query('/context now'))
         self.assertIsNone(extract_slash_command_query('/context '))
 
+    def test_extract_rewind_message_query_matches_rewind_arguments(self) -> None:
+        self.assertEqual(extract_rewind_message_query('/rewind '), '')
+        self.assertEqual(extract_rewind_message_query('/rewind assistant_4'), 'assistant_4')
+        self.assertEqual(extract_rewind_message_query('  /checkpoint user_1'), 'user_1')
+        self.assertIsNone(extract_rewind_message_query('/rew'))
+        self.assertIsNone(extract_rewind_message_query('/context user_1'))
+        self.assertIsNone(extract_rewind_message_query('/rewind assistant_4 extra'))
+
     def test_filter_slash_command_suggestions_matches_prefix_and_alias(self) -> None:
         suggestions = build_slash_command_suggestions()
 
@@ -226,6 +236,33 @@ class TextualUiTests(unittest.TestCase):
         self.assertTrue(any(item.primary_name == 'context' for item in prefix_matches))
         self.assertTrue(any(item.primary_name == 'config' for item in prefix_matches))
         self.assertEqual(alias_matches[0].primary_name, 'context')
+
+    def test_filter_slash_command_suggestions_completes_rewind_message_ids(self) -> None:
+        messages = (
+            {'role': 'system', 'content': 'system prompt', 'metadata': {'lineage_id': 'system_0'}},
+            {'role': 'user', 'content': 'First request', 'message_id': 'user_1'},
+            {'role': 'assistant', 'content': 'First answer', 'message_id': 'assistant_2'},
+        )
+
+        suggestions = filter_slash_command_suggestions('/rewind assistant', messages=messages)
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].kind, 'rewind_message')
+        self.assertEqual(suggestions[0].insertion_text, '/rewind assistant_2')
+        self.assertIn('assistant_2 [ASSISTANT]', suggestions[0].label)
+
+    def test_build_rewind_message_suggestions_uses_metadata_lineage_ids(self) -> None:
+        suggestions = build_rewind_message_suggestions(
+            (
+                {
+                    'role': 'user',
+                    'content': 'Metadata-only id',
+                    'metadata': {'lineage_id': 'user_0'},
+                },
+            )
+        )
+
+        self.assertEqual(suggestions[0].insertion_text, '/rewind user_0')
 
     def test_render_slash_command_suggestion_detail_includes_description_and_aliases(self) -> None:
         suggestion = next(

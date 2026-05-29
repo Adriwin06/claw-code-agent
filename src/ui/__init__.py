@@ -34,7 +34,9 @@ from .ids import (
 from .state import AgentTuiState, hydrate_state_from_stored_session
 from .slash_commands import (
     SlashCommandSuggestion,
+    build_rewind_message_suggestions,
     build_slash_command_suggestions,
+    extract_rewind_message_query,
     extract_slash_command_query,
     filter_slash_command_suggestions,
     render_slash_command_suggestion_detail,
@@ -65,6 +67,7 @@ __all__ = [
     'build_display_prompt_with_attachments',
     'build_prompt_image_blocks',
     'build_prompt_with_references',
+    'build_rewind_message_suggestions',
     'build_slash_command_suggestions',
     'build_workspace_path_suggestions',
     'build_working_section_id',
@@ -72,6 +75,7 @@ __all__ = [
     'copy_clipboard_image_attachment',
     'copy_external_attachment',
     'extract_prompt_file_paths',
+    'extract_rewind_message_query',
     'extract_slash_command_query',
     'extract_unresolved_prompt_file_path_candidates',
     'extract_workspace_path_references',

@@ -1518,17 +1518,17 @@ def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
             preview = msg.content[:60].replace('\n', ' ')
             if len(msg.content) > 60:
                 preview += '...'
+            message_id = _rewind_message_identifier(msg) or f'#{i}'
             has_cp = '✓' if (i + 1) in checkpoints else ' '
-            lines.append(f'  {i}: [{role}] [{has_cp}] {preview}')
+            lines.append(f'  {i}: `{message_id}` [{role}] [{has_cp}] {preview}')
         lines.append('')
         lines.append('✓ = checkpoint available for workspace restore')
-        lines.append('Usage: /rewind <message-number> to truncate to that point and restore files.')
+        lines.append('Usage: /rewind <message-id-or-number> to truncate to that point and restore files.')
         return _local_result(input_text, '\n'.join(lines))
 
-    try:
-        target = int(n_str)
-    except ValueError:
-        return _local_result(input_text, 'Usage: /rewind <message-number>')
+    target = _resolve_rewind_target_index(session.messages, n_str)
+    if target is None:
+        return _local_result(input_text, f'Unknown message id or number: {n_str}')
 
     if target < 0 or target >= len(session.messages):
         return _local_result(
@@ -1574,7 +1574,13 @@ def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
         except OSError:
             pass
 
-    parts = [f'Rewound conversation to message {target}. Removed {removed_count} messages.']
+    target_message_id = _rewind_message_identifier(session.messages[target])
+    target_label = (
+        f'{target_message_id} (index {target})'
+        if target_message_id
+        else f'index {target}'
+    )
+    parts = [f'Rewound conversation to message {target_label}. Removed {removed_count} messages.']
     if files_restored:
         parts.append('Workspace files restored from checkpoint.')
     else:
@@ -1589,6 +1595,7 @@ def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
                 'type': 'conversation_rewound',
                 'session_id': session_id,
                 'target_message_index': target,
+                'target_message_id': target_message_id,
                 'message_count': new_message_count,
                 'removed_count': removed_count,
                 'files_restored': files_restored,
@@ -1596,6 +1603,43 @@ def _handle_rewind(agent: 'LocalCodingAgent', args: str, input_text: str) -> Sla
             },
         ),
     )
+
+
+def _resolve_rewind_target_index(messages: list[Any], target: str) -> int | None:
+    normalized_target = target.strip()
+    if not normalized_target:
+        return None
+
+    for index in range(len(messages) - 1, -1, -1):
+        if _rewind_message_identifier(messages[index]) == normalized_target:
+            return index
+
+    try:
+        numeric_target = int(normalized_target)
+    except ValueError:
+        return None
+    return numeric_target
+
+
+def _rewind_message_identifier(message: Any) -> str | None:
+    message_id = getattr(message, 'message_id', None)
+    if isinstance(message_id, str) and message_id:
+        return message_id
+    metadata = getattr(message, 'metadata', None)
+    if isinstance(metadata, dict):
+        lineage_id = metadata.get('lineage_id')
+        if isinstance(lineage_id, str) and lineage_id:
+            return lineage_id
+    if isinstance(message, dict):
+        message_id = message.get('message_id')
+        if isinstance(message_id, str) and message_id:
+            return message_id
+        metadata = message.get('metadata')
+        if isinstance(metadata, dict):
+            lineage_id = metadata.get('lineage_id')
+            if isinstance(lineage_id, str) and lineage_id:
+                return lineage_id
+    return None
 
 
 def _persist_rewound_session(agent: 'LocalCodingAgent', session_id: str) -> None:

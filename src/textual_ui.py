@@ -60,7 +60,9 @@ from .ui.image_display import (
 from .ui.state import AgentTuiState, hydrate_state_from_stored_session
 from .ui.slash_commands import (
     SlashCommandSuggestion,
+    build_rewind_message_suggestions,
     build_slash_command_suggestions,
+    extract_rewind_message_query,
     extract_slash_command_query,
     filter_slash_command_suggestions,
     render_slash_command_suggestion_detail,
@@ -2848,6 +2850,7 @@ def run_agent_tui(
             slash_suggestions = filter_slash_command_suggestions(
                 value,
                 suggestions=self._command_suggestions,
+                messages=self._rewind_message_suggestion_source(value),
             )
             if slash_suggestions:
                 self._visible_command_suggestions = slash_suggestions
@@ -2906,6 +2909,15 @@ def run_agent_tui(
                 return bool(self._visible_workspace_path_suggestions)
             if not self._visible_command_suggestions:
                 return False
+            rewind_query = extract_rewind_message_query(value)
+            if rewind_query is not None:
+                if not rewind_query:
+                    return True
+                return not any(
+                    suggestion.kind == 'rewind_message'
+                    and any(alias.lower() == rewind_query for alias in suggestion.aliases)
+                    for suggestion in self._visible_command_suggestions
+                )
             query = extract_slash_command_query(value)
             if query is None:
                 return False
@@ -2969,6 +2981,36 @@ def run_agent_tui(
                 if suggestion.primary_name == option_id:
                     return suggestion
             return None
+
+        def _rewind_message_suggestion_source(self, value: str) -> tuple[object, ...]:
+            if extract_rewind_message_query(value) is None:
+                return ()
+            active_session_id = self._active_session_id or self._state.session_id
+            session = self._agent.last_session
+            if session is not None and (
+                active_session_id is None
+                or self._agent.active_session_id is None
+                or self._agent.active_session_id == active_session_id
+            ):
+                return tuple(session.messages)
+            if (
+                self._restored_session is not None
+                and (
+                    active_session_id is None
+                    or self._restored_session.session_id == active_session_id
+                )
+            ):
+                return tuple(self._restored_session.messages)
+            if active_session_id:
+                try:
+                    stored = load_agent_session(
+                        active_session_id,
+                        directory=self._agent.runtime_config.session_directory,
+                    )
+                except (FileNotFoundError, OSError):
+                    return ()
+                return tuple(stored.messages)
+            return ()
 
         def _workspace_suggestion_for_option_id(
             self,
